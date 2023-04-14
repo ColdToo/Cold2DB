@@ -1,14 +1,16 @@
 package raft
 
+import "Cold2DB/raft/raftproto"
+
 type Storage interface {
 	// InitialState returns the saved HardState and ConfState information.
-	InitialState() (pb.HardState, pb.ConfState, error)
+	InitialState() (raftproto.HardState, raftproto.ConfState, error)
 
 	// Entries returns a slice of log entries in the range [lo,hi).
 	// MaxSize limits the total size of the log entries returned, but
 	// Entries returns at least one entry if any.
 
-	Entries(lo, hi, maxSize uint64) ([]pb.Entry, error)
+	Entries(lo, hi, maxSize uint64) ([]raftproto.Entry, error)
 
 	// Term returns the term of entry i, which must be in the range
 	// [FirstIndex()-1, LastIndex()]. The term of the entry before
