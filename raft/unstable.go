@@ -1,9 +1,4 @@
-package raftlog
-
-import (
-	"Cold2DB/raft"
-	"Cold2DB/raft/raftproto"
-)
+package raft
 
 type unstable struct {
 	// storage contains all stable entries since the last snapshot.
