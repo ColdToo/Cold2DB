@@ -1,9 +1,8 @@
 package raft
 
 import (
-	"Cold2DB/raft/raftlog"
-	"Cold2DB/raft/raftproto"
 	"errors"
+	"github.com/ColdToo/Cold2DB/raftproto"
 )
 
 type RoleType uint8
@@ -76,7 +75,7 @@ type Raft struct {
 	VoteFor uint64
 
 	// the log
-	RaftLog *raftlog.RaftLog
+	RaftLog *RaftLog
 
 	// log replication progress of each peers
 	Prs map[uint64]*Progress
@@ -128,9 +127,9 @@ func NewRaft(c *Config) (raft *Raft, err error) {
 	}
 	raft = new(Raft)
 	raft.id = c.ID
-	raft.electionTimeout =c.ElectionTick
+	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatTimeout = c.HeartbeatTick
-	raft.RaftLog =
+	return
 }
 
 // sendAppend sends an append RPC with new entries (if any) and the

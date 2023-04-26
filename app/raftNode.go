@@ -1,8 +1,8 @@
 package main
 
 import (
-	"Cold2DB/raft"
-	"Cold2DB/raft/raftproto"
+	"github.com/ColdToo/Cold2DB/raft"
+	"github.com/ColdToo/Cold2DB/raftproto"
 	"go.uber.org/zap"
 )
 
@@ -24,7 +24,7 @@ type raftNode struct {
 	snapdir     string   // path to snapshot directory
 	getSnapshot func() ([]byte, error)
 
-	confState     raftpb.ConfState
+	confState     raftproto.ConfState
 	snapshotIndex uint64
 	appliedIndex  uint64
 

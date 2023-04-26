@@ -4,7 +4,7 @@
 // 	protoc        v3.20.1
 // source: raftpb.proto
 
-package __
+package raftproto
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"

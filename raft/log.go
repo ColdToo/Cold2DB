@@ -1,10 +1,6 @@
 package raft
 
-import (
-	"Cold2DB/raft"
-	"github.com/ColdToo/Cold2DB/raft/raftlog"
-	"go.uber.org/zap"
-)
+import "go.uber.org/zap"
 
 // RaftLog manage the log entries, its struct look like:
 //
@@ -15,9 +11,9 @@ import (
 // for simplify the RaftLog implement should manage all log entries
 // that not truncated
 type RaftLog struct {
-	storage raft.Storage
+	storage Storage
 
-	unstable raftlog.unstable
+	unstable unstable
 
 	committed uint64
 
