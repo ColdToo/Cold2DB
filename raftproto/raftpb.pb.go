@@ -71,14 +71,14 @@ func (EntryType) EnumDescriptor() ([]byte, []int) {
 type MessageType int32
 
 const (
-	// 'MessageType_MsgHup' is a local message used for election. If an election timeout happened,
-	// the node should pass 'MessageType_MsgHup' to its Step method and start a new election.
+	// 本地消息，用于请求节点开始选举
 	MessageType_MsgHup MessageType = 0
 	// 'MessageType_MsgBeat' is a local message that signals the leader to send a heartbeat
 	// of the 'MessageType_MsgHeartbeat' type to its followers.
 	MessageType_MsgBeat MessageType = 1
 	// 'MessageType_MsgPropose' is a local message that proposes to append data to the leader's log entries.
 	MessageType_MsgPropose MessageType = 2
+
 	// 'MessageType_MsgAppend' contains log entries to replicate.
 	MessageType_MsgAppend MessageType = 3
 	// 'MessageType_MsgAppendResponse' is response to log replication request('MessageType_MsgAppend').

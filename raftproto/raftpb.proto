@@ -4,8 +4,8 @@ package raftproto;
 option go_package = "./";
 
 enum EntryType {
-  EntryNormal = 0;
-  EntryConfChange = 1;
+  EntryNormal = 0;       //普通Entry
+  EntryConfChange = 1;   //配置文件
 }
 
 
@@ -63,15 +63,15 @@ enum MessageType {
 
 message Message {
   MessageType msg_type = 1;
-  uint64 to = 2;
-  uint64 from = 3;
-  uint64 term = 4;
-  uint64 log_term = 5;
-  uint64 index = 6;
+  uint64 to = 2;       //发给哪个节点
+  uint64 from = 3;     //来自哪个节点
+  uint64 term = 4;     //发送节点的term
+  uint64 log_term = 5; //最新日志前一条日志索引的term
+  uint64 index = 6;    //最新日志的前一条日志索引
   repeated Entry entries = 7;
-  uint64 commit = 8;
-  Snapshot snapshot = 9;
-  bool reject = 10;
+  uint64 commit = 8;   //leader所提交的最高日志索引
+  Snapshot snapshot = 9;  //快照
+  bool reject = 10;     //是否拒绝同步
 }
 
 // HardState contains the state of a node need to be peristed, including the current term, commit index

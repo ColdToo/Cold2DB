@@ -1,6 +1,9 @@
 package main
 
-import "flag"
+import (
+	"flag"
+	"go.etcd.io/etcd/raft/raftpb"
+)
 
 func main() {
 	cluster := flag.String("cluster", "http://127.0.0.1:9021", "存储集群")
@@ -10,5 +13,12 @@ func main() {
 	flag.Parse()
 	print(cluster)
 
-	//创建一个raft节点
+	//用于接收客户端发送的消息
+	proposeC := make(chan string)
+	defer close(proposeC)
+	//用于接收客户端发送的配置消息
+	confChangeC := make(chan raftpb.ConfChange)
+	defer close(confChangeC)
+
+	NewAppNode()
 }
