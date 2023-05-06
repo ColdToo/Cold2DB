@@ -1,21 +1,22 @@
 package main
 
 import (
-	"go.etcd.io/etcd/raft/raftpb"
+	"github.com/ColdToo/Cold2DB/raftproto"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"strconv"
 )
 
-type httpKVAPI struct {
+type HttpKVAPI struct {
 	store       *kvstore
-	confChangeC chan<- raftpb.ConfChange
+	confChangeC chan<- raftproto.ConfChange
 }
 
-func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := r.RequestURI
 	defer r.Body.Close()
+
 	switch {
 	case r.Method == "PUT":
 		v, err := ioutil.ReadAll(r.Body)
@@ -25,17 +26,16 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		h.store.Propose(key, string(v))
+		h.store.Propose(kv{Key: []byte(key), Val: v})
 
-		// Optimistic-- no waiting for ack from raft. Value is not yet
-		// committed so a subsequent GET on the key may return old value
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == "GET":
-		if v, ok := h.store.Lookup(key); ok {
-			w.Write([]byte(v))
+		if v, ok := h.store.Lookup([]byte(key)); ok {
+			w.Write(v)
 		} else {
 			http.Error(w, "Failed to GET", http.StatusNotFound)
 		}
+
 	case r.Method == "POST":
 		url, err := ioutil.ReadAll(r.Body)
 		if err != nil {
@@ -51,10 +51,10 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		cc := raftpb.ConfChange{
-			Type:    raftpb.ConfChangeAddNode,
-			NodeID:  nodeId,
-			Context: url,
+		cc := raftproto.ConfChange{
+			ChangeType: raftproto.ConfChangeType_AddNode,
+			NodeId:     nodeId,
+			Context:    url,
 		}
 		h.confChangeC <- cc
 
@@ -68,14 +68,15 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		cc := raftpb.ConfChange{
-			Type:   raftpb.ConfChangeRemoveNode,
-			NodeID: nodeId,
+		cc := raftproto.ConfChange{
+			ChangeType: raftproto.ConfChangeType_RemoveNode,
+			NodeId:     nodeId,
 		}
 		h.confChangeC <- cc
 
 		// As above, optimistic that raft will apply the conf change
 		w.WriteHeader(http.StatusNoContent)
+
 	default:
 		w.Header().Set("Allow", "PUT")
 		w.Header().Add("Allow", "GET")
@@ -85,15 +86,15 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// serveHttpKVAPI starts a key-value server with a GET/PUT API and listens.
-func serveHttpKVAPI(kv *kvstore, port int, confChangeC chan<- raftpb.ConfChange, errorC <-chan error) {
+func ServeHttpKVAPI(kvStore *kvstore, port int, confChangeC chan<- raftproto.ConfChange, errorC <-chan error) {
 	srv := http.Server{
 		Addr: ":" + strconv.Itoa(port),
-		Handler: &httpKVAPI{
-			store:       kv,
+		Handler: &HttpKVAPI{
+			store:       kvStore,
 			confChangeC: confChangeC,
 		},
 	}
+
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {
 			log.Fatal(err)
