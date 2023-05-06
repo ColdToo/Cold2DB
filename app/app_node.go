@@ -8,11 +8,11 @@ import (
 	"github.com/ColdToo/Cold2DB/wal"
 	stats "go.etcd.io/etcd/etcdserver/api/v2stats"
 	"go.etcd.io/etcd/pkg/types"
-	"go.etcd.io/etcd/raft/raftpb"
 	"go.uber.org/zap"
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -48,11 +48,6 @@ type AppNode struct {
 	logger *zap.Logger
 }
 
-// StartAppNode initiates a raft instance and returns a committed log entry
-// channel and error channel. Proposals for log updates are sent over the
-// provided the proposal channel. All log entries are replayed over the
-// commit channel, followed by a nil message (to indicate the channel is
-// current), then new log entries. To shutdown, close proposeC and read erroan.
 func StartAppNode(id int, peers []string, join bool, proposeC <-chan kv, confChangeC <-chan raftproto.ConfChange, commitC chan<- *commit, errorC chan<- error) {
 	an := &AppNode{
 		proposeC:    proposeC,
@@ -113,8 +108,8 @@ func (an *AppNode) servePeerRaft() {
 		ClusterID:   0x1000,
 		Raft:        an,
 		ServerStats: stats.NewServerStats("", ""),
-		LeaderStats: stats.NewLeaderStats(zap.NewExample(), stanonv.Itoa(an.id)),
-		Erroan:      make(chan error),
+		LeaderStats: stats.NewLeaderStats(zap.NewExample(), strconv.Itoa(an.id)),
+		ErrorC:      make(chan error),
 	}
 
 	an.transport.Start()
@@ -241,25 +236,26 @@ func (an *AppNode) commitEntries(ents []raftproto.Entry) (<-chan struct{}, bool)
 
 	data := make([]string, 0, len(ents))
 	for i := range ents {
-		switch ents[i].Type {
-		case raftpb.EntryNormal:
+		switch ents[i].EntryType {
+		case raftproto.EntryType_EntryNormal:
 			if len(ents[i].Data) == 0 {
 				// ignore empty messages
 				break
 			}
 			s := string(ents[i].Data)
 			data = append(data, s)
-		case raftpb.EntryConfChange:
-			var cc raftpb.ConfChange
+
+		case raftproto.EntryType_EntryConfChange:
+			var cc raftproto.ConfChange
 			cc.Unmarshal(ents[i].Data)
 			//通过算法层应用配置更新请求
 			an.confState = *an.raftNode.ApplyConfChange(cc)
 			switch cc.Type {
-			case raftpb.ConfChangeAddNode:
+			case raftproto.ConfChangeType_AddNode:
 				if len(cc.Context) > 0 {
 					an.transport.AddPeer(types.ID(cc.NodeID), []string{string(cc.Context)})
 				}
-			case raftpb.ConfChangeRemoveNode:
+			case raftproto.ConfChangeType_RemoveNode:
 				if cc.NodeID == uint64(an.id) {
 					log.Println("I've been removed from the cluster! Shutting down.")
 					return nil, false
@@ -287,12 +283,10 @@ func (an *AppNode) commitEntries(ents []raftproto.Entry) (<-chan struct{}, bool)
 	return applyDoneC, true
 }
 
-// openWAL returns a WAL ready for reading.
 func (an *AppNode) openWAL() (w *wal.WAL) {
 	return w
 }
 
-// replayWAL replays WAL entries into the raft instance.
 func (an *AppNode) replayWAL() *wal.WAL {
 	log.Printf("replaying WAL of member %d", an.id)
 	return nil
@@ -302,13 +296,14 @@ func (an *AppNode) Process(ctx context.Context, m *raftproto.Message) error {
 	return an.raftNode.Step(m)
 }
 
+// close
+
 func (an *AppNode) stopHTTP() {
 	an.transport.Stop()
 	close(an.httpstopc)
 	<-an.httpdonec
 }
 
-// stop closes http, closes all channels, and stops raft.
 func (an *AppNode) stop() {
 	an.stopHTTP()
 	close(an.commitC)
