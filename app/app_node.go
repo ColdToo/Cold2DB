@@ -22,20 +22,18 @@ type commit struct {
 
 // A key-value stream backed by raft
 type AppNode struct {
-	id    int      // client ID for raft session
-	peers []string // raft peer URLs
-	join  bool     // node is joining an existing cluster
+	id    int
+	peers []string
+	join  bool
 
 	confState     *raftproto.ConfState
 	snapshotIndex uint64
 	appliedIndex  uint64
 
-	// raft backing for the commit/error channel
 	raftNode    *raft.RaftNode
 	raftStorage *raft.MemoryStorage
 	wal         *wal.WAL
-
-	transport *rafthttp.Transport
+	transport   *rafthttp.Transport
 
 	proposeC    <-chan kv                   // 提议 (k,v)
 	confChangeC <-chan raftproto.ConfChange // 提议更改配置文件
@@ -156,7 +154,7 @@ func (an *AppNode) serveRaftNode() {
 	an.snapshotIndex = snap.Metadata.Index
 	an.appliedIndex = snap.Metadata.Index
 
-	// send proposals over raft
+	//处理配置变更以及日志提议
 	go func() {
 		confChangeCount := uint64(0)
 
@@ -180,7 +178,7 @@ func (an *AppNode) serveRaftNode() {
 				}
 			}
 		}
-		// client closed channel; shutdown raft if not already
+
 		close(an.stopc)
 	}()
 
@@ -197,11 +195,12 @@ func (an *AppNode) serveRaftNode() {
 		//当应用层通过 Node.Ready 方法接收到来自算法层的处理结果后，AppNode 需要将待持久化的预写日志（Ready.Entries）进行持久化，
 		//需要调用通信模块为算法层执行消息发送动作（Ready.Messages），需要与数据状态机应用算法层已确认提交的预写日志.
 		//当以上步骤处理完成时，AppNode 会调用 Node.Advance 方法对算法层进行响应.
+		//处理Ready，应该是个channel,看能否获取到ready如果能获取到ready那么应用层根据该ready进行
 		case rd := <-an.raftNode.Ready():
 			an.wal.Save(&rd.HardState, rd.Entries)
 			an.raftStorage.Append(rd.Entries)
 			an.transport.Send(rd.Messages)
-			applyDoneC, ok := an.commitEntries(an.CheckEntrys(rd.CommittedEntries))
+			applyDoneC, ok := an.commitEntries(an.checkEntrys(rd.CommittedEntries))
 			if !ok {
 				an.stop()
 				return
@@ -303,14 +302,6 @@ func (an *AppNode) Process(ctx context.Context, m *raftproto.Message) error {
 	return an.raftNode.Step(m)
 }
 
-/*
-func (an *AppNode) ReportUnreachable(id uint64) { an.raftNode.ReportUnreachable(id) }  用于报告哪个节点不可达，此时算法层可以做一些相应的操作
-
-func (an *AppNode) ReportSnapshot(id uint64, status raft.SnapshotStatus) {
-	an.raftNode.ReportSnapshot(id, status)
-}
-*/
-
 func (an *AppNode) stopHTTP() {
 	an.transport.Stop()
 	close(an.httpstopc)
@@ -321,14 +312,14 @@ func (an *AppNode) stopHTTP() {
 func (an *AppNode) stop() {
 	an.stopHTTP()
 	close(an.commitC)
-	close(an.erroan)
+	close(an.errorC)
 	an.raftNode.Stop()
 }
 
 func (an *AppNode) writeError(err error) {
 	an.stopHTTP()
 	close(an.commitC)
-	an.erroan <- err
-	close(an.erroan)
+	an.errorC <- err
+	close(an.errorC)
 	an.raftNode.Stop()
 }
