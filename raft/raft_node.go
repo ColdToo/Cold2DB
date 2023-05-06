@@ -17,10 +17,27 @@ type SoftState struct {
 	RaftState RoleType
 }
 
+type msgWithResult struct {
+	m      raftproto.Message
+	result chan error
+}
+
 // RaftNode is a wrapper of Raft.
 type RaftNode struct {
 	Raft *Raft
-	// Your Data Here (2A).
+
+	propc      chan msgWithResult
+	recvc      chan raftproto.Message
+	confc      chan raftproto.ConfChange
+	confstatec chan raftproto.ConfState
+	readyc     chan Ready
+	advancec   chan struct{}
+	tickc      chan struct{}
+	done       chan struct{}
+	stop       chan struct{}
+
+	prevSoftSt *SoftState
+	prevHardSt raftproto.HardState
 }
 
 // NewRaftNode returns a new RaftNode given configuration and a list of raft peers.
@@ -191,7 +208,7 @@ type Peer struct {
 // It appends a ConfChangeAddNode entry for each given peer to the initial log.
 //
 // Peers must not be zero length; call RestartNode in that case.
-func StartRaftNode(c *Config, peers []Peer) RaftNode {
+func StartRaftNode(c *Config, peers []Peer) *RaftNode {
 	if len(peers) == 0 {
 		panic("no peers given; use RestartNode instead")
 	}
@@ -201,29 +218,22 @@ func StartRaftNode(c *Config, peers []Peer) RaftNode {
 	}
 	rn.Bootstrap(peers)
 	go rn.run()
-	return &rn
+	return rn
 }
 
 // RestartNode is similar to StartNode but does not take a list of peers.
 // The current membership of the cluster will be restored from the Storage.
 // If the caller has an existing state machine, pass in the last log index that
 // has been applied to it; otherwise use zero.
-func RestartRaftNode(c *Config) RaftNode {
+func RestartRaftNode(c *Config) *RaftNode {
 	rn, err := NewRaftNode(c)
 	if err != nil {
 		panic(err)
 	}
 	go rn.run()
-	return &rn
+	return rn
 }
 
-// Bootstrap initializes the RawNode for first use by appending configuration
-// changes for the supplied peers. This method returns an error if the Storage
-// is nonempty.
-//
-// It is recommended that instead of calling this method, applications bootstrap
-// their state manually by setting up a Storage that has a first index > 1 and
-// which stores the desired ConfState as its InitialState.
 func (rn *RaftNode) Bootstrap(peers []Peer) error {
 	if len(peers) == 0 {
 		return errors.New("must provide at least one peer to Bootstrap")
@@ -301,8 +311,8 @@ func (rn *RaftNode) run() {
 			// handled first, but it's generally good to emit larger Readys plus
 			// it simplifies testing (by emitting less frequently and more
 			// predictably).
-			rd = n.rn.readyWithoutAccept()
-			readyc = n.readyc
+			rd = rn.readyWithoutAccept()
+			readyc = rn.readyc
 		}
 
 		if lead != r.LeaderID {
@@ -332,7 +342,7 @@ func (rn *RaftNode) run() {
 				pm.result <- err
 				close(pm.result)
 			}
-		case m := <-n.recvc:
+		case m := <-rn.recvc:
 			// 处理其他节点发送过来的提交值
 			// filter out response message from unknown From.
 			if pr := r.prs.Progress[m.From]; pr != nil || !IsResponseMsg(m.Type) {

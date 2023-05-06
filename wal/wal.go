@@ -73,7 +73,7 @@ var (
 type WAL struct {
 	lg *zap.Logger
 
-	dir string // the living directory of the underlay files
+	Dir string // the living directory of the underlay files
 
 	// dirFile is a fd for the wal directory for syncing on Rename
 	dirFile *os.File
