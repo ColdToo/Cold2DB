@@ -686,7 +686,7 @@ func stepFollower(r *Raft, m raftproto.Message) error {
 func (r *Raft) tickElection() {
 	r.electionElapsed++
 
-	if  r.pastElectionTimeout() {
+	if  r.electionElapsed > r.electionTimeout {
 		r.electionElapsed = 0
 		r.Step(&raftproto.Message{From: r.id, MsgType: raftproto.MessageType_MsgHup})
 	}
@@ -717,14 +717,6 @@ func (r *Raft) tickHeartbeat() {
 		r.heartbeatElapsed = 0
 		r.Step(&raftproto.Message{From: r.id, MsgType: raftproto.MessageType_MsgBeat})
 	}
-}
-
-func (r *Raft) pastElectionTimeout() bool{
-	return r.electionElapsed > r.electionTimeout
-}
-
-func (r *Raft) abortLeaderTransfer() {
-	r.leadTransferee = None
 }
 
 
@@ -759,10 +751,14 @@ func (r *Raft) becomeLeader() {
 
 // addNode add a new node to raft group
 func (r *Raft) addNode(id uint64) {
-	// Your Code Here (3A).
+
 }
 
 // removeNode remove a node from raft group
 func (r *Raft) removeNode(id uint64) {
-	// Your Code Here (3A).
+
+}
+
+func (r *Raft) abortLeaderTransfer() {
+	r.leadTransferee = None
 }
