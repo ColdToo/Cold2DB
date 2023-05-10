@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rafthttp
+package raftTransport
 
 import (
 	"context"
@@ -239,8 +239,6 @@ func (cw *streamWriter) run() {
 			closed := cw.closeUnlocked()
 			t = conn.t
 			switch conn.t {
-			case streamTypeMsgAppV2:
-				enc = newMsgAppV2Encoder(conn.Writer, cw.fs)
 			case streamTypeMessage:
 				enc = &messageEncoder{w: conn.Writer}
 			default:

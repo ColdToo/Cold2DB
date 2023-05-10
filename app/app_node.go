@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"github.com/ColdToo/Cold2DB/raft"
-	"github.com/ColdToo/Cold2DB/rafthttp"
+	"github.com/ColdToo/Cold2DB/raftTransport"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"github.com/ColdToo/Cold2DB/wal"
 	stats "go.etcd.io/etcd/etcdserver/api/v2stats"
@@ -33,7 +33,7 @@ type AppNode struct {
 	raftNode    *raft.RaftNode
 	raftStorage *raft.MemoryStorage
 	wal         *wal.WAL
-	transport   *rafthttp.Transport
+	transport   *raftTransport.Transport
 
 	proposeC    <-chan kv                   // 提议 (k,v)
 	confChangeC <-chan raftproto.ConfChange // 提议更改配置文件
@@ -100,9 +100,18 @@ func (an *AppNode) startRaft() {
 	go an.serveRaftNode()
 }
 
+func (an *AppNode) openWAL() (w *wal.WAL) {
+	return w
+}
+
+func (an *AppNode) replayWAL() *wal.WAL {
+	log.Printf("replaying WAL of member %d", an.id)
+	return nil
+}
+
 func (an *AppNode) servePeerRaft() {
 	//Transport 实例，负责raft节点之间的网络通信服务
-	an.transport = &rafthttp.Transport{
+	an.transport = &raftTransport.Transport{
 		Logger:      an.logger,
 		ID:          types.ID(an.id),
 		ClusterID:   0x1000,
@@ -125,16 +134,16 @@ func (an *AppNode) servePeerRaft() {
 		log.Fatalf("raftexample: Failed parsing URL (%v)", err)
 	}
 
-	ln, err := newStoppableListener(url.Host, an.httpstopc)
+	ln, err := raftTransport.NewStoppableListener(url.Host, an.httpstopc)
 	if err != nil {
-		log.Fatalf("raftexample: Failed to listen rafthttp (%v)", err)
+		log.Fatalf("raftexample: Failed to listen raftTransport (%v)", err)
 	}
 
 	err = (&http.Server{Handler: an.transport.Handler()}).Serve(ln)
 	select {
 	case <-an.httpstopc:
 	default:
-		log.Fatalf("raftexample: Failed to serve rafthttp (%v)", err)
+		log.Fatalf("raftexample: Failed to serve raftTransport (%v)", err)
 	}
 	close(an.httpdonec)
 }
@@ -283,21 +292,20 @@ func (an *AppNode) commitEntries(ents []raftproto.Entry) (<-chan struct{}, bool)
 	return applyDoneC, true
 }
 
-func (an *AppNode) openWAL() (w *wal.WAL) {
-	return w
-}
-
-func (an *AppNode) replayWAL() *wal.WAL {
-	log.Printf("replaying WAL of member %d", an.id)
-	return nil
-}
-
+//	当transport模块接收到其他节点的信息时调用如下方法让raft算法层进行处理
 func (an *AppNode) Process(ctx context.Context, m *raftproto.Message) error {
 	return an.raftNode.Step(m)
 }
 
-// close
+func (an *AppNode) IsIDRemoved(id uint64) bool { return false }
 
+func (an *AppNode) ReportUnreachable(id uint64) { an.node.ReportUnreachable(id) }
+
+func (an *AppNode) ReportSnapshot(id uint64, status raft.SnapshotStatus) {
+	an.node.ReportSnapshot(id, status)
+}
+
+// close app node
 func (an *AppNode) stopHTTP() {
 	an.transport.Stop()
 	close(an.httpstopc)

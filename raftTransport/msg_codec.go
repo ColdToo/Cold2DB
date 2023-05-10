@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rafthttp
+package raftTransport
 
 import (
 	"encoding/binary"
@@ -44,7 +44,7 @@ type messageDecoder struct {
 
 var (
 	readBytesLimit     uint64 = 512 * 1024 * 1024 // 512 MB
-	ErrExceedSizeLimit        = errors.New("rafthttp: error limit exceeded")
+	ErrExceedSizeLimit        = errors.New("raftTransport: error limit exceeded")
 )
 
 func (dec *messageDecoder) decode() (raftpb.Message, error) {

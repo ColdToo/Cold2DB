@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rafthttp
+package raftTransport
 
 import (
 	"context"
@@ -35,12 +35,7 @@ import (
 )
 
 const (
-	// connReadLimitByte limits the number of bytes
-	// a single read can read out.
-	//
-	// 64KB should be large enough for not causing
-	// throughput bottleneck as well as small enough
-	// for not causing a read timeout.
+	// 限制单次读取的字节数，64KB的限制既不会导致吞吐量瓶颈，也不会导致读取超时。
 	connReadLimitByte = 64 * 1024
 )
 
@@ -70,11 +65,6 @@ type pipelineHandler struct {
 	cid     types.ID
 }
 
-// newPipelineHandler returns a handler for handling raft messages
-// from pipeline for RaftPrefix.
-//
-// The handler reads out the raft message from request body,
-// and forwards it to the given raft state machine for processing.
 func newPipelineHandler(t *Transport, r Raft, cid types.ID) http.Handler {
 	return &pipelineHandler{
 		lg:      t.Logger,
@@ -101,8 +91,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	addRemoteFromRequest(h.tr, r)
 
-	// Limit the data size that could be read from the request body, which ensures that read from
-	// connection will not time out accidentally due to possible blocking in underlying implementation.
+	//这段代码的注释是在限制从请求体中读取的数据大小，这可以确保由于底层实现中可能的阻塞而导致的连接读取不会意外超时。
 	limitedr := pioutil.NewLimitedBufferReader(r.Body, connReadLimitByte)
 	b, err := ioutil.ReadAll(limitedr)
 	if err != nil {
@@ -122,15 +111,11 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var m raftpb.Message
 	if err := m.Unmarshal(b); err != nil {
-		if h.lg != nil {
-			h.lg.Warn(
-				"failed to unmarshal Raft message",
-				zap.String("local-member-id", h.localID.String()),
-				zap.Error(err),
-			)
-		} else {
-			plog.Errorf("failed to unmarshal raft message (%v)", err)
-		}
+		h.lg.Warn(
+			"failed to unmarshal Raft message",
+			zap.String("local-member-id", h.localID.String()),
+			zap.Error(err),
+		)
 		http.Error(w, "error unmarshalling raft message", http.StatusBadRequest)
 		recvFailures.WithLabelValues(r.RemoteAddr).Inc()
 		return
@@ -143,15 +128,11 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case writerToResponse:
 			v.WriteTo(w)
 		default:
-			if h.lg != nil {
-				h.lg.Warn(
-					"failed to process Raft message",
-					zap.String("local-member-id", h.localID.String()),
-					zap.Error(err),
-				)
-			} else {
-				plog.Warningf("failed to process raft message (%v)", err)
-			}
+			h.lg.Warn(
+				"failed to process Raft message",
+				zap.String("local-member-id", h.localID.String()),
+				zap.Error(err),
+			)
 			http.Error(w, "error processing raft message", http.StatusInternalServerError)
 			w.(http.Flusher).Flush()
 			// disconnect the http stream
@@ -188,15 +169,6 @@ func newSnapshotHandler(t *Transport, r Raft, snapshotter *snap.Snapshotter, cid
 
 const unknownSnapshotSender = "UNKNOWN_SNAPSHOT_SENDER"
 
-// ServeHTTP serves HTTP request to receive and process snapshot message.
-//
-// If request sender dies without closing underlying TCP connection,
-// the handler will keep waiting for the request body until TCP keepalive
-// finds out that the connection is broken after several minutes.
-// This is acceptable because
-// 1. snapshot messages sent through other TCP connections could still be
-// received and processed.
-// 2. this case should happen rarely, so no further optimization is done.
 func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 

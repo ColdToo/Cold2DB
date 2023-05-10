@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rafthttp
+package raftTransport
 
 import (
 	"context"
@@ -30,10 +30,10 @@ import (
 )
 
 const (
-	// ConnReadTimeout and ConnWriteTimeout are the i/o timeout set on each connection rafthttp pkg creates.
+	// ConnReadTimeout and ConnWriteTimeout are the i/o timeout set on each connection raftTransport pkg creates.
 	// A 5 seconds timeout is good enough for recycling bad connections. Or we have to wait for
 	// tcp keepalive failing to detect a bad connection, which is at minutes level.
-	// For long term streaming connections, rafthttp pkg sends application level linkHeartbeatMessage
+	// For long term streaming connections, raftTransport pkg sends application level linkHeartbeatMessage
 	// to keep the connection alive.
 	// For short term pipeline connections, the connection MUST be killed to avoid it being
 	// put back to http pkg connection pool.

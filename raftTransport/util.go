@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rafthttp
+package raftTransport
 
 import (
 	"fmt"
@@ -42,7 +42,7 @@ func NewListener(u url.URL, tlsinfo *transport.TLSInfo) (net.Listener, error) {
 }
 
 // NewRoundTripper returns a roundTripper used to send requests
-// to rafthttp listener of remote peers.
+// to raftTransport listener of remote peers.
 func NewRoundTripper(tlsInfo transport.TLSInfo, dialTimeout time.Duration) (http.RoundTripper, error) {
 	// It uses timeout transport to pair with remote timeout listeners.
 	// It sets no read/write timeout, because message in requests may
@@ -51,7 +51,7 @@ func NewRoundTripper(tlsInfo transport.TLSInfo, dialTimeout time.Duration) (http
 }
 
 // newStreamRoundTripper returns a roundTripper used to send stream requests
-// to rafthttp listener of remote peers.
+// to raftTransport listener of remote peers.
 // Read/write timeout is set for stream roundTripper to promptly
 // find out broken status, which minimizes the number of messages
 // sent on broken connection.

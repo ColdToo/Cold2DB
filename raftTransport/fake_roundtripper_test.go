@@ -12,5 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package rafthttp implements HTTP transportation layer for etcd/raft pkg.
-package rafthttp
+package raftTransport
+
+import (
+	"errors"
+	"net/http"
+)
+
+func (t *roundTripperBlocker) RoundTrip(req *http.Request) (*http.Response, error) {
+	c := make(chan struct{}, 1)
+	t.mu.Lock()
+	t.cancel[req] = c
+	t.mu.Unlock()
+	ctx := req.Context()
+	select {
+	case <-t.unblockc:
+		return &http.Response{StatusCode: http.StatusNoContent, Body: &nopReadCloser{}}, nil
+	case <-ctx.Done():
+		return nil, errors.New("request canceled")
+	case <-c:
+		return nil, errors.New("request canceled")
+	}
+}

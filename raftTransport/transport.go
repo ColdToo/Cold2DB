@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rafthttp
+package raftTransport
 
 import (
 	"context"
@@ -35,8 +35,9 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var plog = logutil.NewMergeLogger(capnslog.NewPackageLogger("go.etcd.io/etcd", "rafthttp"))
+var plog = logutil.NewMergeLogger(capnslog.NewPackageLogger("go.etcd.io/etcd", "raftTransport"))
 
+// Raft app_node实现该接口
 type Raft interface {
 	Process(ctx context.Context, m raftpb.Message) error
 	IsIDRemoved(id uint64) bool
@@ -127,10 +128,25 @@ type Transport struct {
 	streamRt   http.RoundTripper // roundTripper used by streams
 	pipelineRt http.RoundTripper // roundTripper used by pipelines
 
-	mu      sync.RWMutex         // protect the remote and peer map
-	remotes map[types.ID]*remote // remotes map that helps newly joined member to catch up
-	peers   map[types.ID]Peer    // peers map
+	mu sync.RWMutex // protect the remote and peer map
 
+	//emotes是一个map，用于帮助新加入的成员追赶集群的进度，而peers也是一个map，用于存储所有的远程节点。
+	//在Transport中，通过这两个map来管理所有的远程节点，包括添加、删除、更新等操作。
+	remotes map[types.ID]*remote
+	peers   map[types.ID]Peer
+
+	/*
+	   ID  (types.ID类型）： 当前节点自己的ID。
+	   URLs ( types.URLs类型）： 当前节点与集群中其他节点交互时使用的Url地址。
+	   ClusterlD ( types.ID类型）：当前节点所在的集群的ID。
+	   Raft ( Raft类型）： Raft是一个接口，其实现的底层封装了前面介绍的etcd-raft模块，当rafthttp.Transport收到消息之后，会将其交给Raft实例进行处理。
+	   Snapshotter ( *snap. Snapshotter类型）：Snapshotter负责管理快照文件，后面会介绍其实现。
+	   streamRt ( http.RoundTripper类型）： Stream消息通道中使用的http. RoundTripper实例。
+	   pipelineRt ( http.RoundTripper 类型）：Pipeline 消息通道中使用的http.RoundTripper实例
+	   peers( map[types. ID]Peer类型）：Peer接口是当前节点对集群中其他节点的抽象表示。对于当前节点来说，集群中其他节点在本地都会有一个Peer 实例与之对应，peers 字段维护了节点ID到对应Peer实例之间的映射关系。
+	   remotes ( map[types.ID]*remote类型）： remote 中只封装了pipeline 实例，remote主要负责发送快照数据，帮助新加入的节点快速追赶上其他节点的数据。
+	   prober ( probing.Prober类型）：用于探测Pipeline消息通道是否可用。
+	*/
 	pipelineProber probing.Prober
 	streamProber   probing.Prober
 }
@@ -141,6 +157,7 @@ func (t *Transport) Start() error {
 	if err != nil {
 		return err
 	}
+	//创建Pipeline消息通道用的http.RoundTripper实例与streamRt不同的是，读写请求的起时时间设置成了永不过期
 	t.pipelineRt, err = NewRoundTripper(t.TLSInfo, t.DialTimeout)
 	if err != nil {
 		return err
