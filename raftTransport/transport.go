@@ -162,8 +162,10 @@ func (t *Transport) Start() error {
 	if err != nil {
 		return err
 	}
+
 	t.remotes = make(map[types.ID]*remote)
 	t.peers = make(map[types.ID]Peer)
+
 	t.pipelineProber = probing.NewProber(t.pipelineRt)
 	t.streamProber = probing.NewProber(t.streamRt)
 
@@ -325,6 +327,7 @@ func (t *Transport) AddPeer(id types.ID, us []string) {
 	if t.peers == nil {
 		panic("transport stopped")
 	}
+
 	if _, ok := t.peers[id]; ok {
 		return
 	}
@@ -336,21 +339,17 @@ func (t *Transport) AddPeer(id types.ID, us []string) {
 			plog.Panicf("newURLs %+v should never fail: %+v", us, err)
 		}
 	}
-	fs := t.LeaderStats.Follower(id.String())
+
 	t.peers[id] = startPeer(t, urls, id, fs)
 	addPeerToProber(t.Logger, t.pipelineProber, id.String(), us, RoundTripperNameSnapshot, rttSec)
 	addPeerToProber(t.Logger, t.streamProber, id.String(), us, RoundTripperNameRaftMessage, rttSec)
 
-	if t.Logger != nil {
-		t.Logger.Info(
-			"added remote peer",
-			zap.String("local-member-id", t.ID.String()),
-			zap.String("remote-peer-id", id.String()),
-			zap.Strings("remote-peer-urls", us),
-		)
-	} else {
-		plog.Infof("added peer %s", id)
-	}
+	t.Logger.Info(
+		"added remote peer",
+		zap.String("local-member-id", t.ID.String()),
+		zap.String("remote-peer-id", id.String()),
+		zap.Strings("remote-peer-urls", us))
+
 }
 
 func (t *Transport) RemovePeer(id types.ID) {

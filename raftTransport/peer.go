@@ -124,19 +124,6 @@ type peer struct {
 }
 
 func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.FollowerStats) *peer {
-	if t.Logger != nil {
-		t.Logger.Info("starting remote peer", zap.String("remote-peer-id", peerID.String()))
-	} else {
-		plog.Infof("starting peer %s...", peerID)
-	}
-	defer func() {
-		if t.Logger != nil {
-			t.Logger.Info("started remote peer", zap.String("remote-peer-id", peerID.String()))
-		} else {
-			plog.Infof("started peer %s", peerID)
-		}
-	}()
-
 	status := newPeerStatus(t.Logger, t.ID, peerID)
 	picker := newURLPicker(urls)
 	errorc := t.ErrorC
@@ -203,17 +190,6 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.Followe
 		}
 	}()
 
-	p.msgAppV2Reader = &streamReader{
-		lg:     t.Logger,
-		peerID: peerID,
-		typ:    streamTypeMsgAppV2,
-		tr:     t,
-		picker: picker,
-		status: status,
-		recvc:  p.recvc,
-		propc:  p.propc,
-		rl:     rate.NewLimiter(t.DialRetryFrequency, 1),
-	}
 	p.msgAppReader = &streamReader{
 		lg:     t.Logger,
 		peerID: peerID,
@@ -226,7 +202,6 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.Followe
 		rl:     rate.NewLimiter(t.DialRetryFrequency, 1),
 	}
 
-	p.msgAppV2Reader.start()
 	p.msgAppReader.start()
 
 	return p
