@@ -18,19 +18,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ColdToo/Cold2DB/db"
+	types "github.com/ColdToo/Cold2DB/raftTransport/types"
+	"github.com/dustin/go-humanize"
+	pioutil "go.etcd.io/etcd/pkg/ioutil"
+	"go.etcd.io/etcd/raft/raftpb"
+	"go.etcd.io/etcd/version"
 	"io/ioutil"
 	"net/http"
 	"path"
 	"strings"
-	"time"
 
-	"go.etcd.io/etcd/etcdserver/api/snap"
-	pioutil "go.etcd.io/etcd/pkg/ioutil"
-	"go.etcd.io/etcd/pkg/types"
-	"go.etcd.io/etcd/raft/raftpb"
-	"go.etcd.io/etcd/version"
-
-	humanize "github.com/dustin/go-humanize"
 	"go.uber.org/zap"
 )
 
@@ -57,21 +55,22 @@ type writerToResponse interface {
 	WriteTo(w http.ResponseWriter)
 }
 
+// pipeline
 type pipelineHandler struct {
-	lg      *zap.Logger
-	localID types.ID
-	tr      Transporter
-	r       Raft
-	cid     types.ID
+	lg        *zap.Logger
+	localID   types.ID
+	tr        Transporter
+	r         Raft
+	clusterId types.ID
 }
 
-func newPipelineHandler(t *Transport, r Raft, cid types.ID) http.Handler {
+func newPipelineHandler(t *Transport, r Raft, clusterId types.ID) http.Handler {
 	return &pipelineHandler{
-		lg:      t.Logger,
-		localID: t.ID,
-		tr:      t,
-		r:       r,
-		cid:     cid,
+		lg:        t.Logger,
+		localID:   t.ID,
+		tr:        t,
+		r:         r,
+		clusterId: clusterId,
 	}
 }
 
@@ -82,9 +81,9 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("X-Etcd-Cluster-ID", h.cid.String())
+	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.String())
 
-	if err := checkClusterCompatibilityFromHeader(h.lg, h.localID, r.Header, h.cid); err != nil {
+	if err := checkClusterCompatibilityFromHeader(h.lg, h.localID, r.Header, h.clusterId); err != nil {
 		http.Error(w, err.Error(), http.StatusPreconditionFailed)
 		return
 	}
@@ -146,46 +145,38 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// snapshot
 type snapshotHandler struct {
 	lg          *zap.Logger
 	tr          Transporter
 	r           Raft
-	snapshotter *snap.Snapshotter
+	snapshotter *db.SnapShotter
 
-	localID types.ID
-	cid     types.ID
+	localID   types.ID
+	clusterId types.ID
 }
 
-func newSnapshotHandler(t *Transport, r Raft, snapshotter *snap.Snapshotter, cid types.ID) http.Handler {
+func newSnapshotHandler(t *Transport, r Raft, snapshotter *db.SnapShotter, clusterId types.ID) http.Handler {
 	return &snapshotHandler{
 		lg:          t.Logger,
 		tr:          t,
 		r:           r,
 		snapshotter: snapshotter,
 		localID:     t.ID,
-		cid:         cid,
+		clusterId:   clusterId,
 	}
 }
 
 const unknownSnapshotSender = "UNKNOWN_SNAPSHOT_SENDER"
 
 func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-
 	if r.Method != "POST" {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		snapshotReceiveFailures.WithLabelValues(unknownSnapshotSender).Inc()
 		return
 	}
 
-	w.Header().Set("X-Etcd-Cluster-ID", h.cid.String())
-
-	if err := checkClusterCompatibilityFromHeader(h.lg, h.localID, r.Header, h.cid); err != nil {
-		http.Error(w, err.Error(), http.StatusPreconditionFailed)
-		snapshotReceiveFailures.WithLabelValues(unknownSnapshotSender).Inc()
-		return
-	}
+	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.String())
 
 	addRemoteFromRequest(h.tr, r)
 
@@ -264,11 +255,8 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			plog.Error(msg)
 		}
 		http.Error(w, msg, http.StatusInternalServerError)
-		snapshotReceiveFailures.WithLabelValues(from).Inc()
 		return
 	}
-
-	receivedBytes.WithLabelValues(from).Add(float64(n))
 
 	if h.lg != nil {
 		h.lg.Info(
@@ -302,7 +290,6 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				plog.Error(msg)
 			}
 			http.Error(w, msg, http.StatusInternalServerError)
-			snapshotReceiveFailures.WithLabelValues(from).Inc()
 		}
 		return
 	}
@@ -311,27 +298,26 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// raft, which facilitates the client to report MsgSnap status.
 	w.WriteHeader(http.StatusNoContent)
 
-	snapshotReceive.WithLabelValues(from).Inc()
-	snapshotReceiveSeconds.WithLabelValues(from).Observe(time.Since(start).Seconds())
 }
 
+//stream
 type streamHandler struct {
 	lg         *zap.Logger
 	tr         *Transport
 	peerGetter peerGetter
 	r          Raft
 	id         types.ID
-	cid        types.ID
+	clusterId  types.ID
 }
 
-func newStreamHandler(t *Transport, pg peerGetter, r Raft, id, cid types.ID) http.Handler {
+func newStreamHandler(t *Transport, pg peerGetter, r Raft, id, clusterId types.ID) http.Handler {
 	return &streamHandler{
 		lg:         t.Logger,
 		tr:         t,
 		peerGetter: pg,
 		r:          r,
 		id:         id,
-		cid:        cid,
+		clusterId:  clusterId,
 	}
 }
 
@@ -343,9 +329,9 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("X-Server-Version", version.Version)
-	w.Header().Set("X-Etcd-Cluster-ID", h.cid.String())
+	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.String())
 
-	if err := checkClusterCompatibilityFromHeader(h.lg, h.tr.ID, r.Header, h.cid); err != nil {
+	if err := checkClusterCompatibilityFromHeader(h.lg, h.tr.ID, r.Header, h.clusterId); err != nil {
 		http.Error(w, err.Error(), http.StatusPreconditionFailed)
 		return
 	}
@@ -418,10 +404,10 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				zap.String("local-member-id", h.tr.ID.String()),
 				zap.String("remote-peer-id-stream-handler", h.id.String()),
 				zap.String("remote-peer-id-from", from.String()),
-				zap.String("cluster-id", h.cid.String()),
+				zap.String("cluster-id", h.clusterId.String()),
 			)
 		} else {
-			plog.Errorf("failed to find member %s in cluster %s", from, h.cid)
+			plog.Errorf("failed to find member %s in cluster %s", from, h.clusterId)
 		}
 		http.Error(w, "error sender not found", http.StatusNotFound)
 		return
@@ -436,7 +422,7 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				zap.String("remote-peer-id-stream-handler", h.id.String()),
 				zap.String("remote-peer-id-header", gto),
 				zap.String("remote-peer-id-from", from.String()),
-				zap.String("cluster-id", h.cid.String()),
+				zap.String("cluster-id", h.clusterId.String()),
 			)
 		} else {
 			plog.Errorf("streaming request ignored (ID mismatch got %s want %s)", gto, wto)
@@ -459,76 +445,6 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	p.attachOutgoingConn(conn)
 	<-c.closeNotify()
-}
-
-// checkClusterCompatibilityFromHeader checks the cluster compatibility of
-// the local member from the given header.
-// It checks whether the version of local member is compatible with
-// the versions in the header, and whether the cluster ID of local member
-// matches the one in the header.
-func checkClusterCompatibilityFromHeader(lg *zap.Logger, localID types.ID, header http.Header, cid types.ID) error {
-	remoteName := header.Get("X-Server-From")
-
-	remoteServer := serverVersion(header)
-	remoteVs := ""
-	if remoteServer != nil {
-		remoteVs = remoteServer.String()
-	}
-
-	remoteMinClusterVer := minClusterVersion(header)
-	remoteMinClusterVs := ""
-	if remoteMinClusterVer != nil {
-		remoteMinClusterVs = remoteMinClusterVer.String()
-	}
-
-	localServer, localMinCluster, err := checkVersionCompatibility(remoteName, remoteServer, remoteMinClusterVer)
-
-	localVs := ""
-	if localServer != nil {
-		localVs = localServer.String()
-	}
-	localMinClusterVs := ""
-	if localMinCluster != nil {
-		localMinClusterVs = localMinCluster.String()
-	}
-
-	if err != nil {
-		if lg != nil {
-			lg.Warn(
-				"failed to check version compatibility",
-				zap.String("local-member-id", localID.String()),
-				zap.String("local-member-cluster-id", cid.String()),
-				zap.String("local-member-server-version", localVs),
-				zap.String("local-member-server-minimum-cluster-version", localMinClusterVs),
-				zap.String("remote-peer-server-name", remoteName),
-				zap.String("remote-peer-server-version", remoteVs),
-				zap.String("remote-peer-server-minimum-cluster-version", remoteMinClusterVs),
-				zap.Error(err),
-			)
-		} else {
-			plog.Errorf("request version incompatibility (%v)", err)
-		}
-		return errIncompatibleVersion
-	}
-	if gcid := header.Get("X-Etcd-Cluster-ID"); gcid != cid.String() {
-		if lg != nil {
-			lg.Warn(
-				"request cluster ID mismatch",
-				zap.String("local-member-id", localID.String()),
-				zap.String("local-member-cluster-id", cid.String()),
-				zap.String("local-member-server-version", localVs),
-				zap.String("local-member-server-minimum-cluster-version", localMinClusterVs),
-				zap.String("remote-peer-server-name", remoteName),
-				zap.String("remote-peer-server-version", remoteVs),
-				zap.String("remote-peer-server-minimum-cluster-version", remoteMinClusterVs),
-				zap.String("remote-peer-cluster-id", gcid),
-			)
-		} else {
-			plog.Errorf("request cluster ID mismatch (got %s want %s)", gcid, cid)
-		}
-		return errClusterIDMismatch
-	}
-	return nil
 }
 
 type closeNotifier struct {

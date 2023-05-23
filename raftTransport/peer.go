@@ -16,17 +16,15 @@ package raftTransport
 
 import (
 	"context"
+	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
+	types "github.com/ColdToo/Cold2DB/raftTransport/types"
+	"github.com/ColdToo/Cold2DB/raftproto"
 	"sync"
 	"time"
 
 	"go.etcd.io/etcd/etcdserver/api/snap"
-	stats "go.etcd.io/etcd/etcdserver/api/v2stats"
-	"go.etcd.io/etcd/pkg/types"
 	"go.etcd.io/etcd/raft"
-	"go.etcd.io/etcd/raft/raftpb"
-
 	"go.uber.org/zap"
-	"golang.org/x/time/rate"
 )
 
 const (
@@ -49,7 +47,6 @@ const (
 	// to hold all proposals.
 	maxPendingProposals = 4096
 
-	streamAppV2 = "streamMsgAppV2"
 	streamMsg   = "streamMsg"
 	pipelineMsg = "pipeline"
 	sendSnap    = "sendMsgSnap"
@@ -60,7 +57,7 @@ type Peer interface {
 	// and has no promise that the message will be received by the remote.
 	// When it fails to send message out, it will report the status to underlying
 	// raft.
-	send(m raftpb.Message)
+	send(m raftproto.Message)
 
 	// sendSnap sends the merged snapshot message to the remote peer. Its behavior
 	// is similar to send.
@@ -106,15 +103,14 @@ type peer struct {
 
 	picker *urlPicker
 
-	msgAppV2Writer *streamWriter
-	writer         *streamWriter
-	pipeline       *pipeline
-	snapSender     *snapshotSender // snapshot sender to send v3 snapshot messages
-	msgAppV2Reader *streamReader
-	msgAppReader   *streamReader
+	writer       *streamWriter
+	msgAppReader *streamReader
 
-	recvc chan raftpb.Message
-	propc chan raftpb.Message
+	pipeline   *pipeline
+	snapSender *snapshotSender // snapshot sender to send v3 snapshot messages
+
+	recvc chan *raftproto.Message
+	propc chan *raftproto.Message
 
 	mu     sync.Mutex
 	paused bool
@@ -128,6 +124,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.Followe
 	picker := newURLPicker(urls)
 	errorc := t.ErrorC
 	r := t.Raft
+
 	pipeline := &pipeline{
 		peerID:        peerID,
 		tr:            t,
@@ -140,33 +137,31 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.Followe
 	pipeline.start()
 
 	p := &peer{
-		lg:             t.Logger,
-		localID:        t.ID,
-		id:             peerID,
-		r:              r,
-		status:         status,
-		picker:         picker,
-		msgAppV2Writer: startStreamWriter(t.Logger, t.ID, peerID, status, fs, r),
-		writer:         startStreamWriter(t.Logger, t.ID, peerID, status, fs, r),
-		pipeline:       pipeline,
-		snapSender:     newSnapshotSender(t, picker, peerID, status),
-		recvc:          make(chan raftpb.Message, recvBufSize),
-		propc:          make(chan raftpb.Message, maxPendingProposals),
-		stopc:          make(chan struct{}),
+		lg:         t.Logger,
+		localID:    t.ID,
+		id:         peerID,
+		r:          r,
+		status:     status,
+		picker:     picker,
+		writer:     startStreamWriter(t.Logger, t.ID, peerID, status, fs, r),
+		pipeline:   pipeline,
+		snapSender: newSnapshotSender(t, picker, peerID, status),
+
+		recvc: make(chan *raftproto.Message, recvBufSize),
+		propc: make(chan *raftproto.Message, maxPendingProposals),
+		stopc: make(chan struct{}),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
+
+	//处理别的节点发送的Message
 	go func() {
 		for {
 			select {
 			case mm := <-p.recvc:
 				if err := r.Process(ctx, mm); err != nil {
-					if t.Logger != nil {
-						t.Logger.Warn("failed to process Raft message", zap.Error(err))
-					} else {
-						plog.Warningf("failed to process raft message (%v)", err)
-					}
+					t.Logger.Warn("failed to process Raft message", zap.Error(err))
 				}
 			case <-p.stopc:
 				return
@@ -199,7 +194,6 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.Followe
 		status: status,
 		recvc:  p.recvc,
 		propc:  p.propc,
-		rl:     rate.NewLimiter(t.DialRetryFrequency, 1),
 	}
 
 	p.msgAppReader.start()
@@ -207,7 +201,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.Followe
 	return p
 }
 
-func (p *peer) send(m raftpb.Message) {
+func (p *peer) send(m raftproto.Message) {
 	p.mu.Lock()
 	paused := p.paused
 	p.mu.Unlock()
@@ -330,7 +324,7 @@ func (p *peer) stop() {
 
 // pick picks a chan for sending the given message. The picked chan and the picked chan
 // string name are returned.
-func (p *peer) pick(m raftpb.Message) (writec chan<- raftpb.Message, picked string) {
+func (p *peer) pick(m *raftproto.Message) (writec chan<- *raftproto.Message, picked string) {
 	var ok bool
 	// Considering MsgSnap may have a big size, e.g., 1G, and will block
 	// stream for a long time, only use one of the N pipelines to send MsgSnap.
@@ -344,6 +338,6 @@ func (p *peer) pick(m raftpb.Message) (writec chan<- raftpb.Message, picked stri
 	return p.pipeline.msgc, pipelineMsg
 }
 
-func isMsgApp(m raftpb.Message) bool { return m.Type == raftpb.MsgApp }
+func isMsgApp(m *raftproto.Message) bool { return m.MsgType == raftproto.MessageType_MsgAppend }
 
-func isMsgSnap(m raftpb.Message) bool { return m.Type == raftpb.MsgSnap }
+func isMsgSnap(m *raftproto.Message) bool { return m.MsgType == raftproto.MessageType_MsgSnapshot }

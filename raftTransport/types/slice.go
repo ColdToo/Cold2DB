@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package types
+package raftTransport
 
 // Uint64Slice implements sort interface
 type Uint64Slice []uint64

@@ -18,15 +18,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
+	types "github.com/ColdToo/Cold2DB/raftTransport/types"
+	"github.com/ColdToo/Cold2DB/raftproto"
 	"io/ioutil"
 	"sync"
 	"time"
 
-	stats "go.etcd.io/etcd/etcdserver/api/v2stats"
 	"go.etcd.io/etcd/pkg/pbutil"
-	"go.etcd.io/etcd/pkg/types"
+
 	"go.etcd.io/etcd/raft"
-	"go.etcd.io/etcd/raft/raftproto"
 
 	"go.uber.org/zap"
 )
@@ -43,25 +44,21 @@ const (
 var errStopped = errors.New("stopped")
 
 type pipeline struct {
-	peerID types.ID
-
-	tr     *Transport
-	picker *urlPicker
-	status *peerStatus
-	raft   Raft
-	errorc chan error
-	// deprecate when we depercate v2 API
+	peerID        types.ID
+	tr            *Transport
+	picker        *urlPicker
+	status        *peerStatus
+	raft          Raft
+	errorc        chan error
 	followerStats *stats.FollowerStats
-
-	msgc chan raftproto.Message
-	// wait for the handling routines
-	wg    sync.WaitGroup
-	stopc chan struct{}
+	msgc          chan *raftproto.Message
+	wg            sync.WaitGroup
+	stopc         chan struct{}
 }
 
 func (p *pipeline) start() {
 	p.stopc = make(chan struct{})
-	p.msgc = make(chan raftproto.Message, pipelineBufSize)
+	p.msgc = make(chan *raftproto.Message, pipelineBufSize)
 	p.wg.Add(connPerPipeline)
 	for i := 0; i < connPerPipeline; i++ {
 		go p.handle()
@@ -100,13 +97,13 @@ func (p *pipeline) handle() {
 		select {
 		case m := <-p.msgc:
 			start := time.Now()
-			err := p.post(pbutil.MustMarshal(&m))
+			err := p.post(pbutil.MustMarshal(m))
 			end := time.Now()
 
 			if err != nil {
 				p.status.deactivate(failureType{source: pipelineMsg, action: "write"}, err.Error())
 
-				if m.Type == raftproto.MsgApp && p.followerStats != nil {
+				if m.MsgType == raftproto.MessageType_MsgAppend && p.followerStats != nil {
 					p.followerStats.Fail()
 				}
 				p.raft.ReportUnreachable(m.To)
@@ -131,8 +128,7 @@ func (p *pipeline) handle() {
 	}
 }
 
-// post POSTs a data payload to a url. Returns nil if the POST succeeds,
-// error on any failure.
+// post POSTs a data payload to a url. Returns nil if the POST succeeds, error on any failure.
 func (p *pipeline) post(data []byte) (err error) {
 	u := p.picker.pick()
 	req := createPostRequest(u, RaftPrefix, bytes.NewBuffer(data), "application/protobuf", p.tr.URLs, p.tr.ID, p.tr.ClusterID)
@@ -140,6 +136,7 @@ func (p *pipeline) post(data []byte) (err error) {
 	done := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	req = req.WithContext(ctx)
+
 	go func() {
 		select {
 		case <-done:
@@ -156,6 +153,7 @@ func (p *pipeline) post(data []byte) (err error) {
 		return err
 	}
 	defer resp.Body.Close()
+
 	b, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		p.picker.unreachable(u)

@@ -12,6 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package types declares various data types and implements type-checking
-// functions.
-package types
+// Package stats defines a standard interface for etcd cluster statistics.
+package raftTransport
+
+import "github.com/coreos/pkg/capnslog"
+
+var plog = capnslog.NewPackageLogger("go.etcd.io/etcd", "etcdserver/stats")
+
+type Stats interface {
+	// SelfStats returns the struct representing statistics of this server
+	SelfStats() []byte
+	// LeaderStats returns the statistics of all followers in the cluster
+	// if this server is leader. Otherwise, nil is returned.
+	LeaderStats() []byte
+	// StoreStats returns statistics of the store backing this EtcdServer
+	StoreStats() []byte
+}

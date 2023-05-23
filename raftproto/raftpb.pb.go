@@ -413,6 +413,11 @@ type Message struct {
 	Reject   bool        `protobuf:"varint,10,opt,name=reject,proto3" json:"reject,omitempty"`
 }
 
+func (x *Message) Marshal() (data []byte, err error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (x *Message) Reset() {
 	*x = Message{}
 	if protoimpl.UnsafeEnabled {

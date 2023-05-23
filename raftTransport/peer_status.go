@@ -3,12 +3,10 @@ package raftTransport
 import (
 	"errors"
 	"fmt"
+	types "github.com/ColdToo/Cold2DB/raftTransport/types"
+	"go.uber.org/zap"
 	"sync"
 	"time"
-
-	"go.etcd.io/etcd/pkg/types"
-
-	"go.uber.org/zap"
 )
 
 type failureType struct {

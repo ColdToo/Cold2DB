@@ -4,10 +4,10 @@ import (
 	"context"
 	"github.com/ColdToo/Cold2DB/raft"
 	"github.com/ColdToo/Cold2DB/raftTransport"
+	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
+	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"github.com/ColdToo/Cold2DB/wal"
-	stats "go.etcd.io/etcd/etcdserver/api/v2stats"
-	"go.etcd.io/etcd/pkg/types"
 	"go.uber.org/zap"
 	"log"
 	"net/http"
@@ -22,9 +22,9 @@ type commit struct {
 
 // A key-value stream backed by raft
 type AppNode struct {
-	id    int
-	peers []string
-	join  bool
+	localId  int
+	peersUrl []string
+	join     bool
 
 	confState     *raftproto.ConfState
 	snapshotIndex uint64
@@ -48,14 +48,14 @@ type AppNode struct {
 	logger *zap.Logger
 }
 
-func StartAppNode(id int, peers []string, join bool, proposeC <-chan kv, confChangeC <-chan raftproto.ConfChange, commitC chan<- *commit, errorC chan<- error) {
+func StartAppLayer(localId int, peersUrl []string, join bool, proposeC <-chan kv, confChangeC <-chan raftproto.ConfChange, commitC chan<- *commit, errorC chan<- error) {
 	an := &AppNode{
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
 		commitC:     commitC,
 		errorC:      errorC,
-		id:          id,
-		peers:       peers,
+		localId:     localId,
+		peersUrl:    peersUrl,
 		join:        join,
 		stopc:       make(chan struct{}),
 		httpstopc:   make(chan struct{}),
@@ -73,14 +73,14 @@ func (an *AppNode) startRaft() {
 	//如果wal文件存在那么先回放wal中的文件到内存中
 	an.wal = an.replayWAL()
 
-	rpeers := make([]raft.Peer, len(an.peers))
+	rpeers := make([]raft.Peer, len(an.peersUrl))
 	for i := range rpeers {
 		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
 	}
 
 	//初始化raft配置
 	c := &raft.Config{
-		ID:            uint64(an.id),
+		ID:            uint64(an.localId),
 		ElectionTick:  10,
 		HeartbeatTick: 1,
 		Storage:       an.raftStorage,
@@ -96,8 +96,8 @@ func (an *AppNode) startRaft() {
 
 	// 启动一个goroutine,监听当前节点与集群中其他节点之间的网络连接
 	go an.servePeerRaft()
-	// 启动一个goroutine,处理appNode与raftNode的交互
-	go an.serveRaftNode()
+	// 启动一个goroutine,处理appLayer与raftLayer的交互
+	go an.serveRaftLayer()
 }
 
 func (an *AppNode) openWAL() (w *wal.WAL) {
@@ -113,33 +113,34 @@ func (an *AppNode) servePeerRaft() {
 	//Transport 实例，负责raft节点之间的网络通信服务
 	an.transport = &raftTransport.Transport{
 		Logger:      an.logger,
-		ID:          types.ID(an.id),
+		ID:          types.ID(an.localId),
 		ClusterID:   0x1000,
 		Raft:        an,
 		ServerStats: stats.NewServerStats("", ""),
-		LeaderStats: stats.NewLeaderStats(zap.NewExample(), strconv.Itoa(an.id)),
+		LeaderStats: stats.NewLeaderStats(strconv.Itoa(an.localId)),
 		ErrorC:      make(chan error),
 	}
 
 	an.transport.Start()
 
-	for i := range an.peers {
-		if i+1 != an.id {
-			an.transport.AddPeer(types.ID(i+1), []string{an.peers[i]})
+	for i := range an.peersUrl {
+		if i+1 != an.localId { //id 从1开始
+			an.transport.AddPeer(types.ID(i+1), []string{an.peersUrl[i]})
 		}
 	}
 
-	url, err := url.Parse(an.peers[an.id-1])
+	peerUrl, err := url.Parse(an.peersUrl[an.localId-1])
 	if err != nil {
 		log.Fatalf("raftexample: Failed parsing URL (%v)", err)
 	}
 
-	ln, err := raftTransport.NewStoppableListener(url.Host, an.httpstopc)
+	ln, err := raftTransport.NewStoppableListener(peerUrl.Host, an.httpstopc)
 	if err != nil {
 		log.Fatalf("raftexample: Failed to listen raftTransport (%v)", err)
 	}
 
 	err = (&http.Server{Handler: an.transport.Handler()}).Serve(ln)
+
 	select {
 	case <-an.httpstopc:
 	default:
@@ -148,7 +149,7 @@ func (an *AppNode) servePeerRaft() {
 	close(an.httpdonec)
 }
 
-func (an *AppNode) serveRaftNode() {
+func (an *AppNode) serveRaftLayer() {
 	// 获取快照的一些信息
 	snap, err := an.raftStorage.Snapshot()
 	if err != nil {

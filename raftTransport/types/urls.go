@@ -1,18 +1,4 @@
-// Copyright 2015 The etcd Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-package types
+package raftTransport
 
 import (
 	"errors"
@@ -30,27 +16,40 @@ func NewURLs(strs []string) (URLs, error) {
 	if len(all) == 0 {
 		return nil, errors.New("no valid URLs given")
 	}
-	for i, in := range strs {
-		in = strings.TrimSpace(in)
-		u, err := url.Parse(in)
+
+	for i, v := range strs {
+		v = strings.TrimSpace(v)
+		u, err := url.Parse(v)
 		if err != nil {
 			return nil, err
 		}
-		if u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "unix" && u.Scheme != "unixs" {
-			return nil, fmt.Errorf("URL scheme must be http, https, unix, or unixs: %s", in)
+
+		err = checkUrl(u)
+		if err != nil {
+			return nil, err
 		}
-		if _, _, err := net.SplitHostPort(u.Host); err != nil {
-			return nil, fmt.Errorf(`URL address does not have the form "host:port": %s`, in)
-		}
-		if u.Path != "" {
-			return nil, fmt.Errorf("URL must not contain a path: %s", in)
-		}
+
 		all[i] = *u
 	}
 	us := URLs(all)
 	us.Sort()
 
 	return us, nil
+}
+
+func checkUrl(u *url.URL) (err error) {
+	// check url
+	if u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "unix" && u.Scheme != "unixs" {
+		return fmt.Errorf("URL scheme must be http, https, unix, or unixs: %s", u)
+	}
+
+	if _, _, err := net.SplitHostPort(u.Host); err != nil {
+		return fmt.Errorf(`URL address does not have the form "host:port": %s`, u)
+	}
+	if u.Path != "" {
+		return fmt.Errorf("URL must not contain a path: %s", u)
+	}
+	return
 }
 
 func MustNewURLs(strs []string) URLs {

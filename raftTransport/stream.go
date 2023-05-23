@@ -1,22 +1,11 @@
-// Copyright 2015 The etcd Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package raftTransport
 
 import (
 	"context"
 	"fmt"
+	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
+	types "github.com/ColdToo/Cold2DB/raftTransport/types"
+	"github.com/ColdToo/Cold2DB/raftproto"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -25,16 +14,12 @@ import (
 	"sync"
 	"time"
 
-	stats "go.etcd.io/etcd/etcdserver/api/v2stats"
 	"go.etcd.io/etcd/pkg/httputil"
 	"go.etcd.io/etcd/pkg/transport"
-	"go.etcd.io/etcd/pkg/types"
-	"go.etcd.io/etcd/raft/raftpb"
 	"go.etcd.io/etcd/version"
 
 	"github.com/coreos/go-semver/semver"
 	"go.uber.org/zap"
-	"golang.org/x/time/rate"
 )
 
 const (
@@ -90,11 +75,11 @@ var (
 	// linkHeartbeatMessage is a special message used as heartbeat message in
 	// link layer. It never conflicts with messages from raft because raft
 	// doesn't send out messages without From and To fields.
-	linkHeartbeatMessage = raftpb.Message{Type: raftpb.MsgHeartbeat}
+	linkHeartbeatMessage = raftproto.Message{MsgType: raftproto.MessageType_MsgHeartbeat}
 )
 
-func isLinkHeartbeatMessage(m *raftpb.Message) bool {
-	return m.Type == raftpb.MsgHeartbeat && m.From == 0 && m.To == 0
+func isLinkHeartbeatMessage(m *raftproto.Message) bool {
+	return m.MsgType == raftproto.MessageType_MsgHeartbeat && m.From == 0 && m.To == 0
 }
 
 type outgoingConn struct {
@@ -122,7 +107,7 @@ type streamWriter struct {
 	closer  io.Closer
 	working bool
 
-	msgc  chan raftpb.Message
+	msgc  chan raftproto.Message
 	connc chan *outgoingConn
 	stopc chan struct{}
 	done  chan struct{}
@@ -140,7 +125,7 @@ func startStreamWriter(lg *zap.Logger, local, id types.ID, status *peerStatus, f
 		status: status,
 		fs:     fs,
 		r:      r,
-		msgc:   make(chan raftpb.Message, streamBufSize),
+		msgc:   make(chan raftproto.Message, streamBufSize),
 		connc:  make(chan *outgoingConn),
 		stopc:  make(chan struct{}),
 		done:   make(chan struct{}),
@@ -151,7 +136,7 @@ func startStreamWriter(lg *zap.Logger, local, id types.ID, status *peerStatus, f
 
 func (cw *streamWriter) run() {
 	var (
-		msgc       chan raftpb.Message
+		msgc       chan raftproto.Message
 		heartbeatc <-chan time.Time
 		t          streamType
 		enc        encoder
@@ -310,7 +295,7 @@ func (cw *streamWriter) run() {
 	}
 }
 
-func (cw *streamWriter) writec() (chan<- raftpb.Message, bool) {
+func (cw *streamWriter) writec() (chan<- raftproto.Message, bool) {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
 	return cw.msgc, cw.working
@@ -340,7 +325,7 @@ func (cw *streamWriter) closeUnlocked() bool {
 	if len(cw.msgc) > 0 {
 		cw.r.ReportUnreachable(uint64(cw.peerID))
 	}
-	cw.msgc = make(chan raftpb.Message, streamBufSize)
+	cw.msgc = make(chan raftproto.Message, streamBufSize)
 	cw.working = false
 	return true
 }
@@ -364,16 +349,14 @@ func (cw *streamWriter) stop() {
 type streamReader struct {
 	lg *zap.Logger
 
-	peerID types.ID
-	typ    streamType
+	peerID     types.ID
+	streamType streamType
 
 	tr     *Transport
 	picker *urlPicker
 	status *peerStatus
-	recvc  chan<- raftpb.Message
-	propc  chan<- raftpb.Message
-
-	rl *rate.Limiter // alters the frequency of dial retrial attempts
+	recvc  chan<- *raftproto.Message
+	propc  chan<- *raftproto.Message
 
 	errorc chan<- error
 
@@ -398,18 +381,14 @@ func (cr *streamReader) start() {
 }
 
 func (cr *streamReader) run() {
-	t := cr.typ
+	t := cr.streamType
 
-	if cr.lg != nil {
-		cr.lg.Info(
-			"started stream reader with remote peer",
-			zap.String("stream-reader-type", t.String()),
-			zap.String("local-member-id", cr.tr.ID.String()),
-			zap.String("remote-peer-id", cr.peerID.String()),
-		)
-	} else {
-		plog.Infof("started streaming with peer %s (%s reader)", cr.peerID, t)
-	}
+	cr.lg.Info(
+		"started stream reader with remote peer",
+		zap.String("stream-reader-type", t.String()),
+		zap.String("local-member-id", cr.tr.ID.String()),
+		zap.String("remote-peer-id", cr.peerID.String()),
+	)
 
 	for {
 		rc, err := cr.dial(t)
@@ -539,7 +518,7 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser, t streamType) error {
 		}
 
 		recvc := cr.recvc
-		if m.Type == raftpb.MsgProp {
+		if m.Type == raftproto.MsgProp {
 			recvc = cr.propc
 		}
 
@@ -591,14 +570,13 @@ func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 	uu := u
 	uu.Path = path.Join(t.endpoint(), cr.tr.ID.String())
 
-	if cr.lg != nil {
-		cr.lg.Debug(
-			"dial stream reader",
-			zap.String("from", cr.tr.ID.String()),
-			zap.String("to", cr.peerID.String()),
-			zap.String("address", uu.String()),
-		)
-	}
+	cr.lg.Debug(
+		"dial stream reader",
+		zap.String("from", cr.tr.ID.String()),
+		zap.String("to", cr.peerID.String()),
+		zap.String("address", uu.String()),
+	)
+
 	req, err := http.NewRequest("GET", uu.String(), nil)
 	if err != nil {
 		cr.picker.unreachable(u)
@@ -631,7 +609,7 @@ func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 
 	rv := serverVersion(resp.Header)
 	lv := semver.Must(semver.NewVersion(version.Version))
-	if compareMajorMinorVersion(rv, lv) == -1 && !checkStreamSupport(rv, t) {
+	if compareMajorMinorVersion(rv, lv) == -1 {
 		httputil.GracefulClose(resp)
 		cr.picker.unreachable(u)
 		return nil, errUnsupportedStreamType
@@ -730,16 +708,4 @@ func (cr *streamReader) resume() {
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
 	cr.paused = false
-}
-
-// checkStreamSupport checks whether the stream type is supported in the
-// given version.
-func checkStreamSupport(v *semver.Version, t streamType) bool {
-	nv := &semver.Version{Major: v.Major, Minor: v.Minor}
-	for _, s := range supportedStream[nv.String()] {
-		if s == t {
-			return true
-		}
-	}
-	return false
 }

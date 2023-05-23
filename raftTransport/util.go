@@ -16,6 +16,7 @@ package raftTransport
 
 import (
 	"fmt"
+	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"io"
 	"net"
 	"net/http"
@@ -24,7 +25,7 @@ import (
 	"time"
 
 	"go.etcd.io/etcd/pkg/transport"
-	"go.etcd.io/etcd/pkg/types"
+
 	"go.etcd.io/etcd/version"
 
 	"github.com/coreos/go-semver/semver"
@@ -60,18 +61,17 @@ func newStreamRoundTripper(tlsInfo transport.TLSInfo, dialTimeout time.Duration)
 }
 
 // createPostRequest creates a HTTP POST request that sends raft message.
-func createPostRequest(u url.URL, path string, body io.Reader, ct string, urls types.URLs, from, cid types.ID) *http.Request {
+func createPostRequest(u url.URL, path string, body io.Reader, contentType string, urls types.URLs, from, clusterId types.ID) *http.Request {
 	uu := u
 	uu.Path = path
 	req, err := http.NewRequest("POST", uu.String(), body)
 	if err != nil {
 		plog.Panicf("unexpected new request error (%v)", err)
 	}
-	req.Header.Set("Content-Type", ct)
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("X-Server-From", from.String())
-	req.Header.Set("X-Server-Version", version.Version)
-	req.Header.Set("X-Min-Cluster-Version", version.MinClusterVersion)
-	req.Header.Set("X-Etcd-Cluster-ID", cid.String())
+	req.Header.Set("X-Etcd-Cluster-ID", clusterId.String())
+
 	setPeerURLsHeader(req, urls)
 
 	return req
@@ -169,10 +169,6 @@ func checkVersionCompatibility(name string, server, minCluster *semver.Version) 
 
 // setPeerURLsHeader reports local urls for peer discovery
 func setPeerURLsHeader(req *http.Request, urls types.URLs) {
-	if urls == nil {
-		// often not set in unit tests
-		return
-	}
 	peerURLs := make([]string, urls.Len())
 	for i := range urls {
 		peerURLs[i] = urls[i].String()

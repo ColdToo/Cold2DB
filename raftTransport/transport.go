@@ -16,30 +16,31 @@ package raftTransport
 
 import (
 	"context"
+	"github.com/ColdToo/Cold2DB/db"
+	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
+	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
+
 	"net/http"
 	"sync"
 	"time"
 
 	"go.etcd.io/etcd/etcdserver/api/snap"
-	stats "go.etcd.io/etcd/etcdserver/api/v2stats"
 	"go.etcd.io/etcd/pkg/logutil"
 	"go.etcd.io/etcd/pkg/transport"
-	"go.etcd.io/etcd/pkg/types"
 	"go.etcd.io/etcd/raft"
 	"go.etcd.io/etcd/raft/raftpb"
 
 	"github.com/coreos/pkg/capnslog"
 	"github.com/xiang90/probing"
 	"go.uber.org/zap"
-	"golang.org/x/time/rate"
 )
 
 var plog = logutil.NewMergeLogger(capnslog.NewPackageLogger("go.etcd.io/etcd", "raftTransport"))
 
 // Raft app_node实现该接口
 type Raft interface {
-	Process(ctx context.Context, m raftpb.Message) error
+	Process(ctx context.Context, m *raftproto.Message) error
 	IsIDRemoved(id uint64) bool
 	ReportUnreachable(id uint64)
 	ReportSnapshot(id uint64, status raft.SnapshotStatus)
@@ -60,7 +61,7 @@ type Transporter interface {
 	// to an existing peer in the transport.
 	// If the id cannot be found in the transport, the message
 	// will be ignored.
-	Send(m []raftpb.Message)
+	Send(m []raftproto.Message)
 	// SendSnapshot sends out the given snapshot message to a remote peer.
 	// The behavior of SendSnapshot is similar to Send.
 	SendSnapshot(m snap.Message)
@@ -103,26 +104,23 @@ type Transporter interface {
 type Transport struct {
 	Logger *zap.Logger
 
-	DialTimeout time.Duration // maximum duration before timing out dial of the request
-	// DialRetryFrequency defines the frequency of streamReader dial retrial attempts;
-	// a distinct rate limiter is created per every peer (default value: 10 events/sec)
-	DialRetryFrequency rate.Limit
+	DialTimeout time.Duration
+
+	DialRetryFrequency time.Duration
 
 	TLSInfo transport.TLSInfo // TLS information used when creating connection
 
-	ID          types.ID   // local member ID
-	URLs        types.URLs // local peer URLs
-	ClusterID   types.ID   // raft cluster ID for request validation
-	Raft        Raft       // raft state machine, to which the Transport forwards received messages and reports status
-	Snapshotter *snap.Snapshotter
-	ServerStats *stats.ServerStats // used to record general transportation statistics
-	// used to record transportation statistics with followers when
-	// performing as leader in raft protocol
+	ID        types.ID   // local member ID
+	URLs      types.URLs // local peer URLs
+	ClusterID types.ID   // raft cluster ID for request validation
+	Raft      Raft       // raft state machine, to which the Transport forwards received messages and reports status
+
+	//todo 实现一个快照管理器 方便传输快照
+	Snapshotter *db.SnapShotter
+
+	ServerStats *stats.ServerStats
 	LeaderStats *stats.LeaderStats
-	// ErrorC is used to report detected critical errors, e.g.,
-	// the member has been permanently removed from the cluster
-	// When an error is received from ErrorC, user should stop raft state
-	// machine and thus stop the Transport.
+
 	ErrorC chan error
 
 	streamRt   http.RoundTripper // roundTripper used by streams
@@ -130,25 +128,10 @@ type Transport struct {
 
 	mu sync.RWMutex // protect the remote and peer map
 
-	//emotes是一个map，用于帮助新加入的成员追赶集群的进度，而peers也是一个map，用于存储所有的远程节点。
+	//remotes是一个map，用于帮助新加入的成员追赶集群的进度，而peers也是一个map，用于存储所有的远程节点。
 	//在Transport中，通过这两个map来管理所有的远程节点，包括添加、删除、更新等操作。
 	remotes map[types.ID]*remote
 	peers   map[types.ID]Peer
-
-	/*
-	   ID  (types.ID类型）： 当前节点自己的ID。
-	   URLs ( types.URLs类型）： 当前节点与集群中其他节点交互时使用的Url地址。
-	   ClusterlD ( types.ID类型）：当前节点所在的集群的ID。
-	   Raft ( Raft类型）： Raft是一个接口，其实现的底层封装了前面介绍的etcd-raft模块，当rafthttp.Transport收到消息之后，会将其交给Raft实例进行处理。
-	   Snapshotter ( *snap. Snapshotter类型）：Snapshotter负责管理快照文件，后面会介绍其实现。
-	   streamRt ( http.RoundTripper类型）： Stream消息通道中使用的http. RoundTripper实例。
-	   pipelineRt ( http.RoundTripper 类型）：Pipeline 消息通道中使用的http.RoundTripper实例
-	   peers( map[types. ID]Peer类型）：Peer接口是当前节点对集群中其他节点的抽象表示。对于当前节点来说，集群中其他节点在本地都会有一个Peer 实例与之对应，peers 字段维护了节点ID到对应Peer实例之间的映射关系。
-	   remotes ( map[types.ID]*remote类型）： remote 中只封装了pipeline 实例，remote主要负责发送快照数据，帮助新加入的节点快速追赶上其他节点的数据。
-	   prober ( probing.Prober类型）：用于探测Pipeline消息通道是否可用。
-	*/
-	pipelineProber probing.Prober
-	streamProber   probing.Prober
 }
 
 func (t *Transport) Start() error {
@@ -166,14 +149,8 @@ func (t *Transport) Start() error {
 	t.remotes = make(map[types.ID]*remote)
 	t.peers = make(map[types.ID]Peer)
 
-	t.pipelineProber = probing.NewProber(t.pipelineRt)
-	t.streamProber = probing.NewProber(t.streamRt)
-
-	// If client didn't provide dial retry frequency, use the default
-	// (100ms backoff between attempts to create a new stream),
-	// so it doesn't bring too much overhead when retry.
 	if t.DialRetryFrequency == 0 {
-		t.DialRetryFrequency = rate.Every(100 * time.Millisecond)
+		t.DialRetryFrequency = 100 * time.Millisecond
 	}
 	return nil
 }
@@ -321,9 +298,6 @@ func (t *Transport) AddRemote(id types.ID, us []string) {
 }
 
 func (t *Transport) AddPeer(id types.ID, us []string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
 	if t.peers == nil {
 		panic("transport stopped")
 	}
@@ -332,17 +306,13 @@ func (t *Transport) AddPeer(id types.ID, us []string) {
 		return
 	}
 	urls, err := types.NewURLs(us)
+
 	if err != nil {
-		if t.Logger != nil {
-			t.Logger.Panic("failed NewURLs", zap.Strings("urls", us), zap.Error(err))
-		} else {
-			plog.Panicf("newURLs %+v should never fail: %+v", us, err)
-		}
+		t.Logger.Panic("failed NewURLs", zap.Strings("urls", us), zap.Error(err))
 	}
 
+	fs := t.LeaderStats.Follower(id.String())
 	t.peers[id] = startPeer(t, urls, id, fs)
-	addPeerToProber(t.Logger, t.pipelineProber, id.String(), us, RoundTripperNameSnapshot, rttSec)
-	addPeerToProber(t.Logger, t.streamProber, id.String(), us, RoundTripperNameRaftMessage, rttSec)
 
 	t.Logger.Info(
 		"added remote peer",
