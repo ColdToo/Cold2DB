@@ -1,23 +1,10 @@
-// Copyright 2015 The etcd Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package raftTransport
 
 import (
 	"context"
 	"github.com/ColdToo/Cold2DB/db"
 	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
+	"github.com/ColdToo/Cold2DB/raftTransport/transport"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 
@@ -27,7 +14,6 @@ import (
 
 	"go.etcd.io/etcd/etcdserver/api/snap"
 	"go.etcd.io/etcd/pkg/logutil"
-	"go.etcd.io/etcd/pkg/transport"
 	"go.etcd.io/etcd/raft"
 	"go.etcd.io/etcd/raft/raftpb"
 
@@ -95,7 +81,7 @@ type Transporter interface {
 	Stop()
 }
 
-// Transport implements Transporter interface. It provides the functionality
+// RaftTransport implements Transporter interface. It provides the functionality
 // to send raft messages to peers, and receive raft messages from peers.
 // User should call Handler method to get a handler to serve requests
 // received from peerURLs.
@@ -141,7 +127,7 @@ func (t *Transport) Start() error {
 		return err
 	}
 	//创建Pipeline消息通道用的http.RoundTripper实例与streamRt不同的是，读写请求的起时时间设置成了永不过期
-	t.pipelineRt, err = NewRoundTripper(t.TLSInfo, t.DialTimeout)
+	t.pipelineRt, err = NewPipeLineRoundTripper(t.TLSInfo, t.DialTimeout)
 	if err != nil {
 		return err
 	}
@@ -220,8 +206,7 @@ func (t *Transport) Stop() {
 	for _, p := range t.peers {
 		p.stop()
 	}
-	t.pipelineProber.RemoveAll()
-	t.streamProber.RemoveAll()
+
 	if tr, ok := t.streamRt.(*http.Transport); ok {
 		tr.CloseIdleConnections()
 	}

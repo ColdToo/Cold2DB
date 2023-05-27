@@ -1,35 +1,29 @@
-// Copyright 2015 The etcd Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package raftTransport
 
 import (
 	"encoding/binary"
 	"errors"
+	"github.com/ColdToo/Cold2DB/raftproto"
 	"io"
 
 	"go.etcd.io/etcd/pkg/pbutil"
-	"go.etcd.io/etcd/raft/raftpb"
 )
 
-// messageEncoder is a encoder that can encode all kinds of messages.
-// It MUST be used with a paired messageDecoder.
+type encoder interface {
+	// encode encodes the given message to an output stream.
+	encode(m *raftproto.Message) error
+}
+
+type decoder interface {
+	// decode decodes the message from an input stream.
+	decode() (raftproto.Message, error)
+}
+
 type messageEncoder struct {
 	w io.Writer
 }
 
-func (enc *messageEncoder) encode(m *raftpb.Message) error {
+func (enc *messageEncoder) encode(m *raftproto.Message) error {
 	if err := binary.Write(enc.w, binary.BigEndian, uint64(m.Size())); err != nil {
 		return err
 	}
@@ -37,7 +31,6 @@ func (enc *messageEncoder) encode(m *raftpb.Message) error {
 	return err
 }
 
-// messageDecoder is a decoder that can decode all kinds of messages.
 type messageDecoder struct {
 	r io.Reader
 }
@@ -47,12 +40,12 @@ var (
 	ErrExceedSizeLimit        = errors.New("raftTransport: error limit exceeded")
 )
 
-func (dec *messageDecoder) decode() (raftpb.Message, error) {
+func (dec *messageDecoder) decode() (raftproto.Message, error) {
 	return dec.decodeLimit(readBytesLimit)
 }
 
-func (dec *messageDecoder) decodeLimit(numBytes uint64) (raftpb.Message, error) {
-	var m raftpb.Message
+func (dec *messageDecoder) decodeLimit(numBytes uint64) (raftproto.Message, error) {
+	var m raftproto.Message
 	var l uint64
 	if err := binary.Read(dec.r, binary.BigEndian, &l); err != nil {
 		return m, err

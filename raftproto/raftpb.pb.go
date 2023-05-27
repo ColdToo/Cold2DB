@@ -520,6 +520,14 @@ func (x *Message) GetReject() bool {
 	return false
 }
 
+func (x *Message) Unmarshal(b []byte) (err error) {
+	return nil
+}
+
+func (x *Message) Size() uint64 {
+	return uint64(len(x.Entries))
+}
+
 // HardState contains the state of a node need to be peristed, including the current term, commit index
 // and the vote record
 type HardState struct {

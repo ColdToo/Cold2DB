@@ -1,26 +1,11 @@
-// Copyright 2015 The etcd Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package raftTransport
 
 import (
 	"encoding/json"
+	"github.com/ColdToo/Cold2DB/raft"
 	"log"
 	"sync"
 	"time"
-
-	"go.etcd.io/etcd/raft"
 )
 
 // ServerStats encapsulates various statistics about an EtcdServer and its
@@ -46,12 +31,10 @@ func NewServerStats(name, id string) *ServerStats {
 }
 
 type serverStats struct {
-	Name string `json:"name"`
-	// ID is the raft ID of the node.
-	// TODO(jonboulle): use ID instead of name?
-	ID        string         `json:"id"`
-	State     raft.StateType `json:"state"`
-	StartTime time.Time      `json:"startTime"`
+	Name      string        `json:"name"`
+	ID        string        `json:"id"`
+	State     raft.RoleType `json:"state"`
+	StartTime time.Time     `json:"startTime"`
 
 	LeaderInfo struct {
 		Name      string    `json:"leader"`
@@ -79,7 +62,6 @@ func (ss *ServerStats) JSON() []byte {
 	stats.LeaderInfo.Uptime = time.Since(stats.LeaderInfo.StartTime).String()
 	ss.Unlock()
 	b, err := json.Marshal(stats)
-	// TODO(jonboulle): appropriate error handling?
 	if err != nil {
 		log.Printf("stats: error marshalling server stats: %v", err)
 	}
@@ -94,7 +76,7 @@ func (ss *ServerStats) RecvAppendReq(leader string, reqSize int) {
 
 	now := time.Now()
 
-	ss.State = raft.StateFollower
+	ss.State = raft.Follower
 	if leader != ss.LeaderInfo.Name {
 		ss.LeaderInfo.Name = leader
 		ss.LeaderInfo.StartTime = now
@@ -134,8 +116,8 @@ func (ss *ServerStats) BecomeLeader() {
 }
 
 func (ss *ServerStats) becomeLeader() {
-	if ss.State != raft.StateLeader {
-		ss.State = raft.StateLeader
+	if ss.State != raft.Leader {
+		ss.State = raft.Leader
 		ss.LeaderInfo.Name = ss.ID
 		ss.LeaderInfo.StartTime = time.Now()
 	}
