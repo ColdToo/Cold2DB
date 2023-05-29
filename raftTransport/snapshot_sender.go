@@ -3,6 +3,7 @@ package raftTransport
 import (
 	"bytes"
 	"context"
+	"github.com/ColdToo/Cold2DB/raftTransport/peer"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"io"
 	"io/ioutil"
@@ -29,14 +30,14 @@ type snapshotSender struct {
 
 	tr     *Transport
 	picker *urlPicker
-	status *peerStatus
+	status *peer.peerStatus
 	r      Raft
 	errorc chan error
 
 	stopc chan struct{}
 }
 
-func newSnapshotSender(tr *Transport, picker *urlPicker, to types.ID, status *peerStatus) *snapshotSender {
+func newSnapshotSender(tr *Transport, picker *urlPicker, to types.ID, status *peer.peerStatus) *snapshotSender {
 	return &snapshotSender{
 		from:   tr.ID,
 		to:     to,
@@ -104,7 +105,7 @@ func (s *snapshotSender) send(merged snap.Message) {
 		}
 
 		s.picker.unreachable(u)
-		s.status.deactivate(failureType{source: sendSnap, action: "post"}, err.Error())
+		s.status.deactivate(peer.failureType{source: peer.sendSnap, action: "post"}, err.Error())
 		s.r.ReportUnreachable(m.To)
 		// report SnapshotFailure to raft state machine. After raft state
 		// machine knows about it, it would pause a while and retry sending

@@ -48,7 +48,7 @@ var (
 )
 
 type peerGetter interface {
-	Get(id types.ID) Peer
+	Get(id types.ID) peer.Peer
 }
 
 type writerToResponse interface {

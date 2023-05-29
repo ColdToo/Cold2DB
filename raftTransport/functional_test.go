@@ -16,6 +16,7 @@ package raftTransport
 
 import (
 	"context"
+	"github.com/ColdToo/Cold2DB/raftTransport/peer"
 	"net/http/httptest"
 	"reflect"
 	"testing"
@@ -58,7 +59,7 @@ func TestSendMessage(t *testing.T) {
 	defer tr.Stop()
 	tr2.AddPeer(types.ID(1), []string{srv.URL})
 	defer tr2.Stop()
-	if !waitStreamWorking(tr.Get(types.ID(2)).(*peer)) {
+	if !waitStreamWorking(tr.Get(types.ID(2)).(*peer.peer)) {
 		t.Fatalf("stream from 1 to 2 is not in work as expected")
 	}
 
@@ -116,7 +117,7 @@ func TestSendMessageWhenStreamIsBroken(t *testing.T) {
 	defer tr.Stop()
 	tr2.AddPeer(types.ID(1), []string{srv.URL})
 	defer tr2.Stop()
-	if !waitStreamWorking(tr.Get(types.ID(2)).(*peer)) {
+	if !waitStreamWorking(tr.Get(types.ID(2)).(*peer.peer)) {
 		t.Fatalf("stream from 1 to 2 is not in work as expected")
 	}
 
@@ -143,7 +144,7 @@ func newServerStats() *stats.ServerStats {
 	return stats.NewServerStats("", "")
 }
 
-func waitStreamWorking(p *peer) bool {
+func waitStreamWorking(p *peer.peer) bool {
 	for i := 0; i < 1000; i++ {
 		time.Sleep(time.Millisecond)
 		if _, ok := p.msgAppV2Writer.writec(); !ok {

@@ -17,6 +17,7 @@ package raftTransport
 import (
 	"errors"
 	"fmt"
+	"github.com/ColdToo/Cold2DB/raftTransport/peer"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -303,7 +304,7 @@ func startTestPipeline(tr *Transport, picker *urlPicker) *pipeline {
 		peerID:        types.ID(1),
 		tr:            tr,
 		picker:        picker,
-		status:        newPeerStatus(zap.NewExample(), tr.ID, types.ID(1)),
+		status:        peer.newPeerStatus(zap.NewExample(), tr.ID, types.ID(1)),
 		raft:          &fakeRaft{},
 		followerStats: &stats.FollowerStats{},
 		errorc:        make(chan error, 1),

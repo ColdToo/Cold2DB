@@ -99,7 +99,7 @@ type streamWriter struct {
 	localID types.ID
 	peerID  types.ID
 
-	status *peerStatus
+	status *peer.peerStatus
 	fs     *stats.FollowerStats
 	r      Raft
 
@@ -115,7 +115,7 @@ type streamWriter struct {
 
 // startStreamWriter creates a streamWrite and starts a long running go-routine that accepts
 // messages and writes to the attached outgoing connection.
-func startStreamWriter(lg *zap.Logger, local, id types.ID, status *peerStatus, fs *stats.FollowerStats, r Raft) *streamWriter {
+func startStreamWriter(lg *zap.Logger, local, id types.ID, status *peer.peerStatus, fs *stats.FollowerStats, r Raft) *streamWriter {
 	w := &streamWriter{
 		lg: lg,
 
@@ -170,7 +170,7 @@ func (cw *streamWriter) run() {
 				continue
 			}
 
-			cw.status.deactivate(failureType{source: t.String(), action: "heartbeat"}, err.Error())
+			cw.status.deactivate(peer.failureType{source: t.String(), action: "heartbeat"}, err.Error())
 
 			sentFailures.WithLabelValues(cw.peerID.String()).Inc()
 			cw.close()
@@ -203,7 +203,7 @@ func (cw *streamWriter) run() {
 				continue
 			}
 
-			cw.status.deactivate(failureType{source: t.String(), action: "write"}, err.Error())
+			cw.status.deactivate(peer.failureType{source: t.String(), action: "write"}, err.Error())
 			cw.close()
 			if cw.lg != nil {
 				cw.lg.Warn(
@@ -354,7 +354,7 @@ type streamReader struct {
 
 	tr     *Transport
 	picker *urlPicker
-	status *peerStatus
+	status *peer.peerStatus
 	recvc  chan<- *raftproto.Message
 	propc  chan<- *raftproto.Message
 
@@ -394,7 +394,7 @@ func (cr *streamReader) run() {
 		rc, err := cr.dial(t)
 		if err != nil {
 			if err != errUnsupportedStreamType {
-				cr.status.deactivate(failureType{source: t.String(), action: "dial"}, err.Error())
+				cr.status.deactivate(peer.failureType{source: t.String(), action: "dial"}, err.Error())
 			}
 		} else {
 			cr.status.activate()
@@ -426,7 +426,7 @@ func (cr *streamReader) run() {
 			// connection is closed by the remote
 			case transport.IsClosedConnError(err):
 			default:
-				cr.status.deactivate(failureType{source: t.String(), action: "read"}, err.Error())
+				cr.status.deactivate(peer.failureType{source: t.String(), action: "read"}, err.Error())
 			}
 		}
 		// Wait for a while before new dial attempt

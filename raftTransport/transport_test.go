@@ -35,7 +35,7 @@ func TestTransportSend(t *testing.T) {
 	peer2 := newFakePeer()
 	tr := &Transport{
 		ServerStats: stats.NewServerStats("", ""),
-		peers:       map[types.ID]Peer{types.ID(1): peer1, types.ID(2): peer2},
+		peers:       map[types.ID]peer.Peer{types.ID(1): peer1, types.ID(2): peer2},
 	}
 	wmsgsIgnored := []raftpb.Message{
 		// bad local message
@@ -70,7 +70,7 @@ func TestTransportCutMend(t *testing.T) {
 	peer2 := newFakePeer()
 	tr := &Transport{
 		ServerStats: stats.NewServerStats("", ""),
-		peers:       map[types.ID]Peer{types.ID(1): peer1, types.ID(2): peer2},
+		peers:       map[types.ID]peer.Peer{types.ID(1): peer1, types.ID(2): peer2},
 	}
 
 	tr.CutPeer(types.ID(1))
@@ -99,7 +99,7 @@ func TestTransportAdd(t *testing.T) {
 	tr := &Transport{
 		LeaderStats:    ls,
 		streamRt:       &roundTripperRecorder{},
-		peers:          make(map[types.ID]Peer),
+		peers:          make(map[types.ID]peer.Peer),
 		pipelineProber: probing.NewProber(nil),
 		streamProber:   probing.NewProber(nil),
 	}
@@ -128,7 +128,7 @@ func TestTransportRemove(t *testing.T) {
 	tr := &Transport{
 		LeaderStats:    stats.NewLeaderStats(""),
 		streamRt:       &roundTripperRecorder{},
-		peers:          make(map[types.ID]Peer),
+		peers:          make(map[types.ID]peer.Peer),
 		pipelineProber: probing.NewProber(nil),
 		streamProber:   probing.NewProber(nil),
 	}
@@ -144,7 +144,7 @@ func TestTransportRemove(t *testing.T) {
 func TestTransportUpdate(t *testing.T) {
 	peer := newFakePeer()
 	tr := &Transport{
-		peers:          map[types.ID]Peer{types.ID(1): peer},
+		peers:          map[types.ID]peer.Peer{types.ID(1): peer},
 		pipelineProber: probing.NewProber(nil),
 		streamProber:   probing.NewProber(nil),
 	}
@@ -164,7 +164,7 @@ func TestTransportErrorc(t *testing.T) {
 		ErrorC:         errorc,
 		streamRt:       newRespRoundTripper(http.StatusForbidden, nil),
 		pipelineRt:     newRespRoundTripper(http.StatusForbidden, nil),
-		peers:          make(map[types.ID]Peer),
+		peers:          make(map[types.ID]peer.Peer),
 		pipelineProber: probing.NewProber(nil),
 		streamProber:   probing.NewProber(nil),
 	}

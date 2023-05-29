@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/ColdToo/Cold2DB/raftTransport/peer"
 	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
@@ -33,7 +34,7 @@ type pipeline struct {
 	peerID        types.ID
 	tr            *Transport
 	picker        *urlPicker
-	status        *peerStatus
+	status        *peer.peerStatus
 	raft          Raft
 	errorc        chan error
 	followerStats *stats.FollowerStats
@@ -87,13 +88,13 @@ func (p *pipeline) handle() {
 			end := time.Now()
 
 			if err != nil {
-				p.status.deactivate(failureType{source: pipelineMsg, action: "write"}, err.Error())
+				p.status.deactivate(peer.failureType{source: peer.pipelineMsg, action: "write"}, err.Error())
 
 				if m.MsgType == raftproto.MessageType_MsgAppend && p.followerStats != nil {
 					p.followerStats.Fail()
 				}
 				p.raft.ReportUnreachable(m.To)
-				if isMsgSnap(m) {
+				if peer.isMsgSnap(m) {
 					p.raft.ReportSnapshot(m.To, raft.SnapshotFailure)
 				}
 				sentFailures.WithLabelValues(types.ID(m.To).String()).Inc()
@@ -104,7 +105,7 @@ func (p *pipeline) handle() {
 			if m.Type == raftproto.MsgApp && p.followerStats != nil {
 				p.followerStats.Succ(end.Sub(start))
 			}
-			if isMsgSnap(m) {
+			if peer.isMsgSnap(m) {
 				p.raft.ReportSnapshot(m.To, raft.SnapshotFinish)
 			}
 			sentBytes.WithLabelValues(types.ID(m.To).String()).Add(float64(m.Size()))

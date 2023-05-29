@@ -13,16 +13,12 @@ import (
 	"time"
 
 	"go.etcd.io/etcd/etcdserver/api/snap"
-	"go.etcd.io/etcd/pkg/logutil"
 	"go.etcd.io/etcd/raft"
 	"go.etcd.io/etcd/raft/raftpb"
 
-	"github.com/coreos/pkg/capnslog"
 	"github.com/xiang90/probing"
 	"go.uber.org/zap"
 )
-
-var plog = logutil.NewMergeLogger(capnslog.NewPackageLogger("go.etcd.io/etcd", "raftTransport"))
 
 // Raft app_node实现该接口
 type Raft interface {
@@ -92,6 +88,7 @@ type Transport struct {
 
 	DialTimeout time.Duration
 
+	//DialTimeout是请求超时时间，而DialRetryFrequency定义了每个对等节点的重试频率限制，即每秒最多重试10次。
 	DialRetryFrequency time.Duration
 
 	TLSInfo transport.TLSInfo // TLS information used when creating connection
@@ -114,8 +111,8 @@ type Transport struct {
 
 	mu sync.RWMutex // protect the remote and peer map
 
-	//remotes是一个map，用于帮助新加入的成员追赶集群的进度，而peers也是一个map，用于存储所有的远程节点。
-	//在Transport中，通过这两个map来管理所有的远程节点，包括添加、删除、更新等操作。
+	//帮助其追赶集群的进度，但在追赶完成后就不再使用。而t.peers是一个map[types.ID]Peer类型的变量，用于维护集群中的所有节点。
+	//其中，Peer是一个接口类型，定义了send、stop等方法，用于发送消息和停止节点
 	remotes map[types.ID]*remote
 	peers   map[types.ID]Peer
 }
@@ -153,7 +150,7 @@ func (t *Transport) Handler() http.Handler {
 	return mux
 }
 
-func (t *Transport) Get(id types.ID) Peer {
+func (t *Transport) Get(id types.ID) peer.Peer {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.peers[id]
@@ -297,7 +294,7 @@ func (t *Transport) AddPeer(id types.ID, us []string) {
 	}
 
 	fs := t.LeaderStats.Follower(id.String())
-	t.peers[id] = startPeer(t, urls, id, fs)
+	t.peers[id] = peer.startPeer(t, urls, id, fs)
 
 	t.Logger.Info(
 		"added remote peer",

@@ -15,6 +15,7 @@
 package raftTransport
 
 import (
+	"github.com/ColdToo/Cold2DB/raftTransport/peer"
 	"go.etcd.io/etcd/pkg/types"
 	"go.etcd.io/etcd/raft/raftpb"
 
@@ -25,13 +26,13 @@ type remote struct {
 	lg       *zap.Logger
 	localID  types.ID
 	id       types.ID
-	status   *peerStatus
+	status   *peer.peerStatus
 	pipeline *pipeline
 }
 
 func startRemote(tr *Transport, urls types.URLs, id types.ID) *remote {
 	picker := newURLPicker(urls)
-	status := newPeerStatus(tr.Logger, tr.ID, id)
+	status := peer.newPeerStatus(tr.Logger, tr.ID, id)
 	pipeline := &pipeline{
 		peerID: id,
 		tr:     tr,

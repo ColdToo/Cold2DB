@@ -16,6 +16,7 @@ package raftTransport
 
 import (
 	"context"
+	"github.com/ColdToo/Cold2DB/raftTransport/peer"
 	"net/http/httptest"
 	"sync"
 	"testing"
@@ -57,7 +58,7 @@ func BenchmarkSendingMsgApp(b *testing.B) {
 	defer tr.Stop()
 	tr2.AddPeer(types.ID(1), []string{srv.URL})
 	defer tr2.Stop()
-	if !waitStreamWorking(tr.Get(types.ID(2)).(*peer)) {
+	if !waitStreamWorking(tr.Get(types.ID(2)).(*peer.peer)) {
 		b.Fatalf("stream from 1 to 2 is not in work as expected")
 	}
 
