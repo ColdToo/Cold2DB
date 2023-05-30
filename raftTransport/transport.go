@@ -16,7 +16,6 @@ import (
 	"go.etcd.io/etcd/raft"
 	"go.etcd.io/etcd/raft/raftpb"
 
-	"github.com/xiang90/probing"
 	"go.uber.org/zap"
 )
 
@@ -142,11 +141,11 @@ func (t *Transport) Handler() http.Handler {
 	pipelineHandler := newPipelineHandler(t, t.Raft, t.ClusterID)
 	streamHandler := newStreamHandler(t, t, t.Raft, t.ID, t.ClusterID)
 	snapHandler := newSnapshotHandler(t, t.Raft, t.Snapshotter, t.ClusterID)
+
 	mux := http.NewServeMux()
 	mux.Handle(RaftPrefix, pipelineHandler)
 	mux.Handle(RaftStreamPrefix+"/", streamHandler)
 	mux.Handle(RaftSnapshotPrefix, snapHandler)
-	mux.Handle(ProbingPrefix, probing.NewHandler())
 	return mux
 }
 
@@ -280,13 +279,6 @@ func (t *Transport) AddRemote(id types.ID, us []string) {
 }
 
 func (t *Transport) AddPeer(id types.ID, us []string) {
-	if t.peers == nil {
-		panic("transport stopped")
-	}
-
-	if _, ok := t.peers[id]; ok {
-		return
-	}
 	urls, err := types.NewURLs(us)
 
 	if err != nil {

@@ -48,7 +48,7 @@ type AppNode struct {
 	logger *zap.Logger
 }
 
-func StartAppLayer(localId int, peersUrl []string, join bool, proposeC <-chan kv, confChangeC <-chan raftproto.ConfChange, commitC chan<- *commit, errorC chan<- error) {
+func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan kv, confChangeC <-chan raftproto.ConfChange, commitC chan<- *commit, errorC chan<- error) {
 	an := &AppNode{
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
@@ -124,17 +124,17 @@ func (an *AppNode) servePeerRaft() {
 	an.transport.Start()
 
 	for i := range an.peersUrl {
-		if i+1 != an.localId { //id 从1开始
+		if i+1 != an.localId { //加入其他节点
 			an.transport.AddPeer(types.ID(i+1), []string{an.peersUrl[i]})
 		}
 	}
 
-	peerUrl, err := url.Parse(an.peersUrl[an.localId-1])
+	localUrl, err := url.Parse(an.peersUrl[an.localId-1])
 	if err != nil {
 		log.Fatalf("raftexample: Failed parsing URL (%v)", err)
 	}
 
-	ln, err := raftTransport.NewStoppableListener(peerUrl.Host, an.httpstopc)
+	ln, err := raftTransport.NewStoppableListener(localUrl.Host, an.httpstopc)
 	if err != nil {
 		log.Fatalf("raftexample: Failed to listen raftTransport (%v)", err)
 	}
