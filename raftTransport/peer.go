@@ -2,6 +2,7 @@ package raftTransport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
@@ -15,16 +16,7 @@ import (
 )
 
 const (
-	// ConnReadTimeout and ConnWriteTimeout are the i/o timeout set on each connection raftTransport pkg creates.
-	// A 5 seconds timeout is good enough for recycling bad connections. Or we have to wait for
-	// tcp keepalive failing to detect a bad connection, which is at minutes level.
-	// For long term streaming connections, raftTransport pkg sends application level linkHeartbeatMessage
-	// to keep the connection alive.
-	// For short term pipeline connections, the connection MUST be killed to avoid it being
-	// put back to http pkg connection pool.
-	/*这段代码定义了两个常量，DefaultConnReadTimeout 和 DefaultConnWriteTimeout，它们分别表示每个连接的读取和写入超时时间。在 rafthttp 包中创建连接时，会设置这两个超时时间。
-	对于长期的流式连接，rafthttp 包会发送应用程序级别的 linkHeartbeatMessage 来保持连接活动状态。对于短期的管道连接，连接必须被关闭，以避免将其放回到 http 包的连接池中。
-	这里设置的 5 秒超时时间足以回收坏连接，否则我们就必须等待 tcp keepalive 失败来检测坏连接，这需要几分钟的时间。*/
+	// ConnReadTimeout 这段代码定义了两个常量，DefaultConnReadTimeout 和 DefaultConnWriteTimeout，它们分别表示每个连接的读取和写入超时时间。在 rafthttp 包中创建连接时，会设置这两个超时时间。
 	ConnReadTimeout  = 5 * time.Second
 	ConnWriteTimeout = 5 * time.Second
 
@@ -85,7 +77,7 @@ type peer struct {
 
 	localID types.ID
 	// id of the remote raft peer node
-	id types.ID
+	remoteID types.ID
 
 	r Raft
 
@@ -129,7 +121,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.Followe
 	p := &peer{
 		lg:         t.Logger,
 		localID:    t.ID,
-		id:         peerID,
+		remoteID:   peerID,
 		r:          r,
 		status:     status,
 		picker:     picker,
@@ -167,7 +159,6 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.Followe
 			select {
 			case mm := <-p.propc:
 				if err := r.Process(ctx, mm); err != nil {
-					plog.Warningf("failed to process raft message (%v)", err)
 				}
 			case <-p.stopc:
 				return
@@ -191,7 +182,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.Followe
 	return p
 }
 
-func (p *peer) send(m raftproto.Message) {
+func (p *peer) send(m *raftproto.Message) {
 	p.mu.Lock()
 	paused := p.paused
 	p.mu.Unlock()
@@ -200,6 +191,7 @@ func (p *peer) send(m raftproto.Message) {
 		return
 	}
 
+	//获取
 	writec, name := p.pick(m)
 	select {
 	case writec <- m:
@@ -219,10 +211,6 @@ func (p *peer) send(m raftproto.Message) {
 					zap.Bool("remote-peer-active", p.status.isActive()),
 				)
 			} else {
-				plog.MergeWarningf("dropped internal raft message to %s since %s's sending buffer is full (bad/overloaded network)", p.id, name)
-			}
-		} else {
-			if p.lg != nil {
 				p.lg.Warn(
 					"dropped internal Raft message since sending buffer is full (overloaded network)",
 					zap.String("message-type", m.Type.String()),
@@ -231,11 +219,8 @@ func (p *peer) send(m raftproto.Message) {
 					zap.String("remote-peer-id", p.id.String()),
 					zap.Bool("remote-peer-active", p.status.isActive()),
 				)
-			} else {
-				plog.Debugf("dropped %s to %s since %s's sending buffer is full", m.Type, p.id, name)
 			}
 		}
-		sentFailures.WithLabelValues(types.ID(m.To).String()).Inc()
 	}
 }
 
@@ -275,7 +260,6 @@ func (p *peer) Pause() {
 	defer p.mu.Unlock()
 	p.paused = true
 	p.msgAppReader.pause()
-	p.msgAppV2Reader.pause()
 }
 
 // Resume resumes a paused peer.
@@ -284,44 +268,30 @@ func (p *peer) Resume() {
 	defer p.mu.Unlock()
 	p.paused = false
 	p.msgAppReader.resume()
-	p.msgAppV2Reader.resume()
 }
 
 func (p *peer) stop() {
-	if p.lg != nil {
-		p.lg.Info("stopping remote peer", zap.String("remote-peer-id", p.id.String()))
-	} else {
-		plog.Infof("stopping peer %s...", p.id)
-	}
-
 	defer func() {
-		if p.lg != nil {
-			p.lg.Info("stopped remote peer", zap.String("remote-peer-id", p.id.String()))
-		} else {
-			plog.Infof("stopped peer %s", p.id)
-		}
+		p.lg.Info("stopped remote peer", zap.String("remote-peer-id", p.id.String()))
 	}()
 
 	close(p.stopc)
 	p.cancel()
-	p.msgAppV2Writer.stop()
 	p.writer.stop()
 	p.pipeline.stop()
 	p.snapSender.stop()
-	p.msgAppV2Reader.stop()
 	p.msgAppReader.stop()
 }
 
 // pick picks a chan for sending the given message. The picked chan and the picked chan
 // string name are returned.
+// 根据消息类型选取可以发送的
 func (p *peer) pick(m *raftproto.Message) (writec chan<- *raftproto.Message, picked string) {
 	var ok bool
 	// Considering MsgSnap may have a big size, e.g., 1G, and will block
 	// stream for a long time, only use one of the N pipelines to send MsgSnap.
 	if isMsgSnap(m) {
 		return p.pipeline.msgc, pipelineMsg
-	} else if writec, ok = p.msgAppV2Writer.writec(); ok && isMsgApp(m) {
-		return writec, streamAppV2
 	} else if writec, ok = p.writer.writec(); ok {
 		return writec, streamMsg
 	}
@@ -350,31 +320,26 @@ func newPeerStatus(lg *zap.Logger, local, id types.ID) *peerStatus {
 	return &peerStatus{lg: lg, local: local, id: id}
 }
 
+// 变更为在线状态
 func (s *peerStatus) activate() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.active {
-		if s.lg != nil {
-			s.lg.Info("peer became active", zap.String("peer-id", s.id.String()))
-		} else {
-			plog.Infof("peer %s became active", s.id)
-		}
+		s.lg.Info("peer became active", zap.String("peer-id", s.id.String()))
 		s.active = true
 		s.since = time.Now()
 	}
 }
 
+// 变更为离线状态
 func (s *peerStatus) deactivate(failure failureType, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	msg := fmt.Sprintf("failed to %s %s on %s (%s)", failure.action, s.id, failure.source, reason)
 	if s.active {
-		if s.lg != nil {
-			s.lg.Warn("peer became inactive (message send to peer failed)", zap.String("peer-id", s.id.String()), zap.Error(errors.New(msg)))
-		} else {
-			plog.Errorf(msg)
-			plog.Infof("peer %s became inactive (message send to peer failed)", s.id)
-		}
+
+		s.lg.Warn("peer became inactive (message send to peer failed)", zap.String("peer-id", s.id.String()), zap.Error(errors.New(msg)))
+
 		s.active = false
 		s.since = time.Time{}
 

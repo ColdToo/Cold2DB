@@ -14,8 +14,6 @@ import (
 
 	"go.etcd.io/etcd/etcdserver/api/snap"
 	"go.etcd.io/etcd/raft"
-	"go.etcd.io/etcd/raft/raftpb"
-
 	"go.uber.org/zap"
 )
 
@@ -28,21 +26,13 @@ type Raft interface {
 }
 
 type Transporter interface {
-	// Start starts the given Transporter.
-	// Start MUST be called before calling other functions in the interface.
 	Start() error
-	// Handler returns the HTTP handler of the transporter.
-	// A transporter HTTP handler handles the HTTP requests
-	// from remote peers.
-	// The handler MUST be used to handle RaftPrefix(/raft)
-	// endpoint.
+
 	Handler() http.Handler
-	// Send sends out the given messages to the remote peers.
-	// Each message has a To field, which is an id that maps
-	// to an existing peer in the transport.
-	// If the id cannot be found in the transport, the message
-	// will be ignored.
+
+	// Send 应用层通过该接口发送消息给peer,如果在transport中没有找到该peer那么忽略该消息
 	Send(m []raftproto.Message)
+
 	// SendSnapshot sends out the given snapshot message to a remote peer.
 	// The behavior of SendSnapshot is similar to Send.
 	SendSnapshot(m snap.Message)
@@ -85,9 +75,9 @@ type Transporter interface {
 type Transport struct {
 	Logger *zap.Logger
 
+	//DialTimeout是请求超时时间，而DialRetryFrequency定义了每个对等节点的重试频率限制，即每秒最多重试10次。
 	DialTimeout time.Duration
 
-	//DialTimeout是请求超时时间，而DialRetryFrequency定义了每个对等节点的重试频率限制，即每秒最多重试10次。
 	DialRetryFrequency time.Duration
 
 	TLSInfo transport.TLSInfo // TLS information used when creating connection
@@ -149,7 +139,7 @@ func (t *Transport) Handler() http.Handler {
 	return mux
 }
 
-func (t *Transport) Get(id types.ID) peer.Peer {
+func (t *Transport) Get(id types.ID) Peer {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.peers[id]
@@ -158,7 +148,6 @@ func (t *Transport) Get(id types.ID) peer.Peer {
 func (t *Transport) Send(msgs []raftproto.Message) {
 	for _, m := range msgs {
 		if m.To == 0 {
-			// ignore intentionally dropped message
 			continue
 		}
 		to := types.ID(m.To)
@@ -169,8 +158,8 @@ func (t *Transport) Send(msgs []raftproto.Message) {
 		t.mu.RUnlock()
 
 		if pok {
-			if m.Type == raftpb.MsgApp {
-				t.ServerStats.SendAppendReq(m.Size())
+			if m.MsgType == raftproto.MessageType_MsgAppend {
+				t.ServerStats.SendAppendReq(int(m.Size()))
 			}
 			p.send(m)
 			continue
@@ -323,8 +312,6 @@ func (t *Transport) removePeer(id types.ID) {
 	}
 	delete(t.peers, id)
 	delete(t.LeaderStats.Followers, id.String())
-	t.pipelineProber.Remove(id.String())
-	t.streamProber.Remove(id.String())
 
 	if t.Logger != nil {
 		t.Logger.Info(

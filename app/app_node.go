@@ -62,7 +62,7 @@ func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan kv,
 		httpdonec:   make(chan struct{}),
 		logger:      zap.NewExample(),
 	}
-	go an.startRaft()
+	an.startRaft()
 	return
 }
 
@@ -105,7 +105,7 @@ func (an *AppNode) openWAL() (w *wal.WAL) {
 }
 
 func (an *AppNode) replayWAL() *wal.WAL {
-	log.Printf("replaying WAL of member %d", an.id)
+	log.Printf("replaying WAL of member %d", an.localId)
 	return nil
 }
 
@@ -293,19 +293,6 @@ func (an *AppNode) commitEntries(ents []raftproto.Entry) (<-chan struct{}, bool)
 	return applyDoneC, true
 }
 
-//	当transport模块接收到其他节点的信息时调用如下方法让raft算法层进行处理
-func (an *AppNode) Process(ctx context.Context, m *raftproto.Message) error {
-	return an.raftNode.Step(m)
-}
-
-func (an *AppNode) IsIDRemoved(id uint64) bool { return false }
-
-func (an *AppNode) ReportUnreachable(id uint64) { an.node.ReportUnreachable(id) }
-
-func (an *AppNode) ReportSnapshot(id uint64, status raft.SnapshotStatus) {
-	an.node.ReportSnapshot(id, status)
-}
-
 // close app node
 func (an *AppNode) stopHTTP() {
 	an.transport.Stop()
@@ -326,4 +313,19 @@ func (an *AppNode) writeError(err error) {
 	an.errorC <- err
 	close(an.errorC)
 	an.raftNode.Stop()
+}
+
+//  实现Rat接口,网络层通过该接口与RaftNode交互
+//	当transport模块接收到其他节点的信息时调用如下方法让raft算法层进行处理
+
+func (an *AppNode) Process(ctx context.Context, m *raftproto.Message) error {
+	return an.raftNode.Step(m)
+}
+
+func (an *AppNode) IsIDRemoved(id uint64) bool { return false }
+
+func (an *AppNode) ReportUnreachable(id uint64) { an.node.ReportUnreachable(id) }
+
+func (an *AppNode) ReportSnapshot(id uint64, status raft.SnapshotStatus) {
+	an.node.ReportSnapshot(id, status)
 }

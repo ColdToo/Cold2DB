@@ -99,7 +99,7 @@ type streamWriter struct {
 	localID types.ID
 	peerID  types.ID
 
-	status *peer.peerStatus
+	status *peerStatus
 	fs     *stats.FollowerStats
 	r      Raft
 
@@ -107,7 +107,7 @@ type streamWriter struct {
 	closer  io.Closer
 	working bool
 
-	msgc  chan raftproto.Message
+	msgc  chan *raftproto.Message
 	connc chan *outgoingConn
 	stopc chan struct{}
 	done  chan struct{}
@@ -147,15 +147,11 @@ func (cw *streamWriter) run() {
 	defer tickc.Stop()
 	unflushed := 0
 
-	if cw.lg != nil {
-		cw.lg.Info(
-			"started stream writer with remote peer",
-			zap.String("local-member-id", cw.localID.String()),
-			zap.String("remote-peer-id", cw.peerID.String()),
-		)
-	} else {
-		plog.Infof("started streaming with peer %s (writer)", cw.peerID)
-	}
+	cw.lg.Info(
+		"started stream writer with remote peer",
+		zap.String("local-member-id", cw.localID.String()),
+		zap.String("remote-peer-id", cw.peerID.String()),
+	)
 
 	for {
 		select {
@@ -295,7 +291,7 @@ func (cw *streamWriter) run() {
 	}
 }
 
-func (cw *streamWriter) writec() (chan<- raftproto.Message, bool) {
+func (cw *streamWriter) writec() (chan<- *raftproto.Message, bool) {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
 	return cw.msgc, cw.working

@@ -57,33 +57,25 @@ func (g *remote) send(m raftpb.Message) {
 	case g.pipeline.msgc <- m:
 	default:
 		if g.status.isActive() {
-			if g.lg != nil {
-				g.lg.Warn(
-					"dropped internal Raft message since sending buffer is full (overloaded network)",
-					zap.String("message-type", m.Type.String()),
-					zap.String("local-member-id", g.localID.String()),
-					zap.String("from", types.ID(m.From).String()),
-					zap.String("remote-peer-id", g.id.String()),
-					zap.Bool("remote-peer-active", g.status.isActive()),
-				)
-			} else {
-				plog.MergeWarningf("dropped internal raft message to %s since sending buffer is full (bad/overloaded network)", g.id)
-			}
+			g.lg.Warn(
+				"dropped internal Raft message since sending buffer is full (overloaded network)",
+				zap.String("message-type", m.Type.String()),
+				zap.String("local-member-id", g.localID.String()),
+				zap.String("from", types.ID(m.From).String()),
+				zap.String("remote-peer-id", g.id.String()),
+				zap.Bool("remote-peer-active", g.status.isActive()),
+			)
+
 		} else {
-			if g.lg != nil {
-				g.lg.Warn(
-					"dropped Raft message since sending buffer is full (overloaded network)",
-					zap.String("message-type", m.Type.String()),
-					zap.String("local-member-id", g.localID.String()),
-					zap.String("from", types.ID(m.From).String()),
-					zap.String("remote-peer-id", g.id.String()),
-					zap.Bool("remote-peer-active", g.status.isActive()),
-				)
-			} else {
-				plog.Debugf("dropped %s to %s since sending buffer is full", m.Type, g.id)
-			}
+			g.lg.Warn(
+				"dropped Raft message since sending buffer is full (overloaded network)",
+				zap.String("message-type", m.Type.String()),
+				zap.String("local-member-id", g.localID.String()),
+				zap.String("from", types.ID(m.From).String()),
+				zap.String("remote-peer-id", g.id.String()),
+				zap.Bool("remote-peer-active", g.status.isActive()),
+			)
 		}
-		sentFailures.WithLabelValues(types.ID(m.To).String()).Inc()
 	}
 }
 

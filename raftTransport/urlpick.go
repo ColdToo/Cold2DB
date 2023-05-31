@@ -6,8 +6,6 @@ import (
 	"sync"
 )
 
-// why
-
 type urlPicker struct {
 	mu     sync.Mutex // guards urls and picked
 	urls   types.URLs
