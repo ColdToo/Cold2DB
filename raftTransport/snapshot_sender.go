@@ -3,7 +3,6 @@ package raftTransport
 import (
 	"bytes"
 	"context"
-	"github.com/ColdToo/Cold2DB/raftTransport/peer"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"io"
 	"io/ioutil"
@@ -30,14 +29,14 @@ type snapshotSender struct {
 
 	tr     *Transport
 	picker *urlPicker
-	status *peer.peerStatus
+	status *peerStatus
 	r      Raft
 	errorc chan error
 
 	stopc chan struct{}
 }
 
-func newSnapshotSender(tr *Transport, picker *urlPicker, to types.ID, status *peer.peerStatus) *snapshotSender {
+func newSnapshotSender(tr *Transport, picker *urlPicker, to types.ID, status *peerStatus) *snapshotSender {
 	return &snapshotSender{
 		from:   tr.ID,
 		to:     to,
@@ -65,38 +64,25 @@ func (s *snapshotSender) send(merged snap.Message) {
 	u := s.picker.pick()
 	req := createPostRequest(u, RaftSnapshotPrefix, body, "application/octet-stream", s.tr.URLs, s.from, s.cid)
 
-	if s.tr.Logger != nil {
-		s.tr.Logger.Info(
-			"sending database snapshot",
-			zap.Uint64("snapshot-index", m.Snapshot.Metadata.Index),
-			zap.String("remote-peer-id", to),
-			zap.Int64("bytes", merged.TotalSize),
-			zap.String("size", humanize.Bytes(uint64(merged.TotalSize))),
-		)
-	} else {
-		plog.Infof("start to send database snapshot [index: %d, to %s]...", m.Snapshot.Metadata.Index, types.ID(m.To))
-	}
-
-	snapshotSendInflights.WithLabelValues(to).Inc()
-	defer func() {
-		snapshotSendInflights.WithLabelValues(to).Dec()
-	}()
+	s.tr.Logger.Info(
+		"sending database snapshot",
+		zap.Uint64("snapshot-index", m.Snapshot.Metadata.Index),
+		zap.String("remote-peer-id", to),
+		zap.Int64("bytes", merged.TotalSize),
+		zap.String("size", humanize.Bytes(uint64(merged.TotalSize))),
+	)
 
 	err := s.post(req)
 	defer merged.CloseWithError(err)
 	if err != nil {
-		if s.tr.Logger != nil {
-			s.tr.Logger.Warn(
-				"failed to send database snapshot",
-				zap.Uint64("snapshot-index", m.Snapshot.Metadata.Index),
-				zap.String("remote-peer-id", to),
-				zap.Int64("bytes", merged.TotalSize),
-				zap.String("size", humanize.Bytes(uint64(merged.TotalSize))),
-				zap.Error(err),
-			)
-		} else {
-			plog.Warningf("database snapshot [index: %d, to: %s] failed to be sent out (%v)", m.Snapshot.Metadata.Index, types.ID(m.To), err)
-		}
+		s.tr.Logger.Warn(
+			"failed to send database snapshot",
+			zap.Uint64("snapshot-index", m.Snapshot.Metadata.Index),
+			zap.String("remote-peer-id", to),
+			zap.Int64("bytes", merged.TotalSize),
+			zap.String("size", humanize.Bytes(uint64(merged.TotalSize))),
+			zap.Error(err),
+		)
 
 		// errMemberRemoved is a critical error since a removed member should
 		// always be stopped. So we use reportCriticalError to report it to errorc.
@@ -105,34 +91,25 @@ func (s *snapshotSender) send(merged snap.Message) {
 		}
 
 		s.picker.unreachable(u)
-		s.status.deactivate(peer.failureType{source: peer.sendSnap, action: "post"}, err.Error())
+		s.status.deactivate(failureType{source: sendSnap, action: "post"}, err.Error())
 		s.r.ReportUnreachable(m.To)
 		// report SnapshotFailure to raft state machine. After raft state
 		// machine knows about it, it would pause a while and retry sending
 		// new snapshot message.
 		s.r.ReportSnapshot(m.To, raft.SnapshotFailure)
-		sentFailures.WithLabelValues(to).Inc()
-		snapshotSendFailures.WithLabelValues(to).Inc()
 		return
 	}
 	s.status.activate()
 	s.r.ReportSnapshot(m.To, raft.SnapshotFinish)
 
-	if s.tr.Logger != nil {
-		s.tr.Logger.Info(
-			"sent database snapshot",
-			zap.Uint64("snapshot-index", m.Snapshot.Metadata.Index),
-			zap.String("remote-peer-id", to),
-			zap.Int64("bytes", merged.TotalSize),
-			zap.String("size", humanize.Bytes(uint64(merged.TotalSize))),
-		)
-	} else {
-		plog.Infof("database snapshot [index: %d, to: %s] sent out successfully", m.Snapshot.Metadata.Index, types.ID(m.To))
-	}
+	s.tr.Logger.Info(
+		"sent database snapshot",
+		zap.Uint64("snapshot-index", m.Snapshot.Metadata.Index),
+		zap.String("remote-peer-id", to),
+		zap.Int64("bytes", merged.TotalSize),
+		zap.String("size", humanize.Bytes(uint64(merged.TotalSize))),
+	)
 
-	sentBytes.WithLabelValues(to).Add(float64(merged.TotalSize))
-	snapshotSend.WithLabelValues(to).Inc()
-	snapshotSendSeconds.WithLabelValues(to).Observe(time.Since(start).Seconds())
 }
 
 // post posts the given request.
@@ -180,11 +157,7 @@ func createSnapBody(lg *zap.Logger, merged snap.Message) io.ReadCloser {
 	enc := &messageEncoder{w: buf}
 	// encode raft message
 	if err := enc.encode(&merged.Message); err != nil {
-		if lg != nil {
-			lg.Panic("failed to encode message", zap.Error(err))
-		} else {
-			plog.Panicf("encode message error (%v)", err)
-		}
+		lg.Panic("failed to encode message", zap.Error(err))
 	}
 
 	return &pioutil.ReaderAndCloser{

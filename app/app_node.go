@@ -4,7 +4,6 @@ import (
 	"context"
 	"github.com/ColdToo/Cold2DB/raft"
 	"github.com/ColdToo/Cold2DB/raftTransport"
-	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"github.com/ColdToo/Cold2DB/wal"
@@ -12,7 +11,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 )
 
@@ -112,33 +110,37 @@ func (an *AppNode) replayWAL() *wal.WAL {
 func (an *AppNode) servePeerRaft() {
 	//Transport 实例，负责raft节点之间的网络通信服务
 	an.transport = &raftTransport.Transport{
-		Logger:      an.logger,
-		ID:          types.ID(an.localId),
-		ClusterID:   0x1000,
-		Raft:        an,
-		ServerStats: stats.NewServerStats("", ""),
-		LeaderStats: stats.NewLeaderStats(strconv.Itoa(an.localId)),
-		ErrorC:      make(chan error),
+		Logger:    an.logger,
+		LocalID:   types.ID(an.localId),
+		ClusterID: 0x1000,
+		Raft:      an,
+		ErrorC:    make(chan error),
 	}
 
-	an.transport.Start()
+	err := an.transport.Initialize()
+	if err != nil {
+		return
+	}
 
+	//raftexample --id 1 --cluster http://127.0.0.1:12379,http://127.0.0.1:22379,http://127.0.0.1:32379 --port 12380
 	for i := range an.peersUrl {
 		if i+1 != an.localId { //加入其他节点
 			an.transport.AddPeer(types.ID(i+1), []string{an.peersUrl[i]})
 		}
 	}
 
+	an.listenAndServePeerRaft()
+}
+
+func (an *AppNode) listenAndServePeerRaft() {
 	localUrl, err := url.Parse(an.peersUrl[an.localId-1])
 	if err != nil {
 		log.Fatalf("raftexample: Failed parsing URL (%v)", err)
 	}
-
 	ln, err := raftTransport.NewStoppableListener(localUrl.Host, an.httpstopc)
 	if err != nil {
 		log.Fatalf("raftexample: Failed to listen raftTransport (%v)", err)
 	}
-
 	err = (&http.Server{Handler: an.transport.Handler()}).Serve(ln)
 
 	select {

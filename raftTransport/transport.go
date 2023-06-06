@@ -3,7 +3,6 @@ package raftTransport
 import (
 	"context"
 	"github.com/ColdToo/Cold2DB/db"
-	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
 	"github.com/ColdToo/Cold2DB/raftTransport/transport"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
@@ -26,7 +25,7 @@ type Raft interface {
 }
 
 type Transporter interface {
-	Start() error
+	Initialize() error
 
 	Handler() http.Handler
 
@@ -66,12 +65,6 @@ type Transporter interface {
 	Stop()
 }
 
-// RaftTransport implements Transporter interface. It provides the functionality
-// to send raft messages to peers, and receive raft messages from peers.
-// User should call Handler method to get a handler to serve requests
-// received from peerURLs.
-// User needs to call Start before calling other functions, and call
-// Stop when the Transport is no longer used.
 type Transport struct {
 	Logger *zap.Logger
 
@@ -82,16 +75,13 @@ type Transport struct {
 
 	TLSInfo transport.TLSInfo // TLS information used when creating connection
 
-	ID        types.ID   // local member ID
+	LocalID   types.ID   // local member ID
 	URLs      types.URLs // local peer URLs
 	ClusterID types.ID   // raft cluster ID for request validation
 	Raft      Raft       // raft state machine, to which the Transport forwards received messages and reports status
 
 	//todo 实现一个快照管理器 方便传输快照
 	Snapshotter *db.SnapShotter
-
-	ServerStats *stats.ServerStats
-	LeaderStats *stats.LeaderStats
 
 	ErrorC chan error
 
@@ -106,7 +96,7 @@ type Transport struct {
 	peers   map[types.ID]Peer
 }
 
-func (t *Transport) Start() error {
+func (t *Transport) Initialize() error {
 	var err error
 	t.streamRt, err = newStreamRoundTripper(t.TLSInfo, t.DialTimeout)
 	if err != nil {
@@ -129,7 +119,7 @@ func (t *Transport) Start() error {
 
 func (t *Transport) Handler() http.Handler {
 	pipelineHandler := newPipelineHandler(t, t.Raft, t.ClusterID)
-	streamHandler := newStreamHandler(t, t, t.Raft, t.ID, t.ClusterID)
+	streamHandler := newStreamHandler(t, t, t.Raft, t.LocalID, t.ClusterID)
 	snapHandler := newSnapshotHandler(t, t.Raft, t.Snapshotter, t.ClusterID)
 
 	mux := http.NewServeMux()
@@ -232,7 +222,7 @@ func (t *Transport) MendPeer(id types.ID) {
 	}
 }
 
-func (t *Transport) AddRemote(id types.ID, us []string) {
+func (t *Transport) AddRemote(id types.ID, urlList []string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.remotes == nil {
@@ -247,42 +237,34 @@ func (t *Transport) AddRemote(id types.ID, us []string) {
 	if _, ok := t.remotes[id]; ok {
 		return
 	}
-	urls, err := types.NewURLs(us)
+	urls, err := types.NewURLs(urlList)
 	if err != nil {
-		if t.Logger != nil {
-			t.Logger.Panic("failed NewURLs", zap.Strings("urls", us), zap.Error(err))
-		} else {
-			plog.Panicf("newURLs %+v should never fail: %+v", us, err)
-		}
+		t.Logger.Panic("failed NewURLs", zap.Strings("urls", urlList), zap.Error(err))
 	}
 	t.remotes[id] = startRemote(t, urls, id)
 
-	if t.Logger != nil {
-		t.Logger.Info(
-			"added new remote peer",
-			zap.String("local-member-id", t.ID.String()),
-			zap.String("remote-peer-id", id.String()),
-			zap.Strings("remote-peer-urls", us),
-		)
-	}
+	t.Logger.Info(
+		"added new remote peer",
+		zap.String("local-member-id", t.LocalID.String()),
+		zap.String("remote-peer-id", id.String()),
+		zap.Strings("remote-peer-urls", urlList),
+	)
 }
 
-func (t *Transport) AddPeer(id types.ID, us []string) {
-	urls, err := types.NewURLs(us)
-
+// AddPeer peer 相当于是其他节点在本地的代言人，本地节点发送消息给其他节点实质就是传入参数给其他节点在本地的代言人peer
+func (t *Transport) AddPeer(id types.ID, urlList []string) {
+	urls, err := types.NewURLs(urlList)
 	if err != nil {
-		t.Logger.Panic("failed NewURLs", zap.Strings("urls", us), zap.Error(err))
+		t.Logger.Panic("failed NewURLs", zap.Strings("urls", urlList), zap.Error(err))
 	}
 
-	fs := t.LeaderStats.Follower(id.String())
-	t.peers[id] = peer.startPeer(t, urls, id, fs)
+	t.peers[id] = startPeer(t, urls, id)
 
 	t.Logger.Info(
 		"added remote peer",
-		zap.String("local-member-id", t.ID.String()),
+		zap.String("local-member-id", t.LocalID.String()),
 		zap.String("remote-peer-id", id.String()),
-		zap.Strings("remote-peer-urls", us))
-
+		zap.Strings("remote-peer-urls", urlList))
 }
 
 func (t *Transport) RemovePeer(id types.ID) {
@@ -304,24 +286,16 @@ func (t *Transport) removePeer(id types.ID) {
 	if peer, ok := t.peers[id]; ok {
 		peer.stop()
 	} else {
-		if t.Logger != nil {
-			t.Logger.Panic("unexpected removal of unknown remote peer", zap.String("remote-peer-id", id.String()))
-		} else {
-			plog.Panicf("unexpected removal of unknown peer '%d'", id)
-		}
+		t.Logger.Panic("unexpected removal of unknown remote peer", zap.String("remote-peer-id", id.String()))
 	}
 	delete(t.peers, id)
 	delete(t.LeaderStats.Followers, id.String())
 
-	if t.Logger != nil {
-		t.Logger.Info(
-			"removed remote peer",
-			zap.String("local-member-id", t.ID.String()),
-			zap.String("removed-remote-peer-id", id.String()),
-		)
-	} else {
-		plog.Infof("removed peer %s", id)
-	}
+	t.Logger.Info(
+		"removed remote peer",
+		zap.String("local-member-id", t.ID.String()),
+		zap.String("removed-remote-peer-id", id.String()),
+	)
 }
 
 func (t *Transport) UpdatePeer(id types.ID, us []string) {
@@ -333,38 +307,16 @@ func (t *Transport) UpdatePeer(id types.ID, us []string) {
 	}
 	urls, err := types.NewURLs(us)
 	if err != nil {
-		if t.Logger != nil {
-			t.Logger.Panic("failed NewURLs", zap.Strings("urls", us), zap.Error(err))
-		} else {
-			plog.Panicf("newURLs %+v should never fail: %+v", us, err)
-		}
+		t.Logger.Panic("failed NewURLs", zap.Strings("urls", us), zap.Error(err))
 	}
 	t.peers[id].update(urls)
 
-	t.pipelineProber.Remove(id.String())
-	addPeerToProber(t.Logger, t.pipelineProber, id.String(), us, RoundTripperNameSnapshot, rttSec)
-	t.streamProber.Remove(id.String())
-	addPeerToProber(t.Logger, t.streamProber, id.String(), us, RoundTripperNameRaftMessage, rttSec)
-
-	if t.Logger != nil {
-		t.Logger.Info(
-			"updated remote peer",
-			zap.String("local-member-id", t.ID.String()),
-			zap.String("updated-remote-peer-id", id.String()),
-			zap.Strings("updated-remote-peer-urls", us),
-		)
-	} else {
-		plog.Infof("updated peer %s", id)
-	}
-}
-
-func (t *Transport) ActiveSince(id types.ID) time.Time {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if p, ok := t.peers[id]; ok {
-		return p.activeSince()
-	}
-	return time.Time{}
+	t.Logger.Info(
+		"updated remote peer",
+		zap.String("local-member-id", t.ID.String()),
+		zap.String("updated-remote-peer-id", id.String()),
+		zap.Strings("updated-remote-peer-urls", us),
+	)
 }
 
 func (t *Transport) SendSnapshot(m snap.Message) {
@@ -400,9 +352,15 @@ func (t *Transport) Resume() {
 	}
 }
 
-// ActivePeers returns a channel that closes when an initial
-// peer connection has been established. Use this to wait until the
-// first peer connection becomes active.
+func (t *Transport) ActiveSince(id types.ID) time.Time {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if p, ok := t.peers[id]; ok {
+		return p.activeSince()
+	}
+	return time.Time{}
+}
+
 func (t *Transport) ActivePeers() (cnt int) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

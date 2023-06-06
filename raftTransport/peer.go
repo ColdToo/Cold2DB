@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"sync"
@@ -21,12 +20,9 @@ const (
 	ConnWriteTimeout = 5 * time.Second
 
 	recvBufSize = 4096
-	// maxPendingProposals holds the proposals during one leader election process.
-	// Generally one leader election takes at most 1 sec. It should have
-	// 0-2 election conflicts, and each one takes 0.5 sec.
-	// We assume the number of concurrent proposers is smaller than 4096.
-	// One client blocks on its proposal for at least 1 sec, so 4096 is enough
-	// to hold all proposals.
+
+	//这段注释是关于在一次 leader 选举过程中，最多可以容纳多少个 proposal 的说明。一般来说，一次 leader 选举最多需要 1 秒钟，可能会有 0-2 次选举冲突，每次冲突需要 0.5 秒钟。
+	//我们假设并发 proposer 的数量小于 4096，因为一个 client 的 proposal 至少需要阻塞 1 秒钟，所以 4096 足以容纳所有的 proposals。
 	maxPendingProposals = 4096
 
 	streamMsg   = "streamMsg"
@@ -61,17 +57,10 @@ type Peer interface {
 	stop()
 }
 
-// peer is the representative of a remote raft node. Local raft node sends
-// messages to the remote through peer.
-// Each peer has two underlying mechanisms to send out a message: stream and
-// pipeline.
-// A stream is a receiver initialized long-polling connection, which
-// is always open to transfer messages. Besides general stream, peer also has
-// a optimized stream for sending msgApp since msgApp accounts for large part
-// of all messages. Only raft leader uses the optimized stream to send msgApp
-// to the remote follower node.
-// A pipeline is a series of http clients that send http requests to the remote.
-// It is only used when the stream has not been established.
+// peer 代表了远程节点，本地节点发送消息通过该结构体发送
+// 本地Raft节点通过peer向远程节点发送消息。每个peer都有两种发送消息的机制：stream和pipeline。
+// stream是一个初始化的长轮询连接，它始终打开以传输消息。除了一般的stream之外，peer还有一个优化的stream用于发送msgApp，因为msgApp占所有消息的大部分。
+// 只有Raft leader使用优化的stream将msgApp发送到远程follower节点。pipeline是一系列向远程发送HTTP请求的HTTP客户端。仅在未建立stream时使用。
 type peer struct {
 	lg *zap.Logger
 
@@ -79,7 +68,7 @@ type peer struct {
 	// id of the remote raft peer node
 	remoteID types.ID
 
-	r Raft
+	raft Raft
 
 	status *peerStatus
 
@@ -101,31 +90,35 @@ type peer struct {
 	stopc  chan struct{}
 }
 
-func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.FollowerStats) *peer {
-	status := newPeerStatus(t.Logger, t.ID, peerID)
+func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
+	status := newPeerStatus(t.Logger, t.LocalID, peerID)
 	picker := newURLPicker(urls)
 	errorc := t.ErrorC
 	r := t.Raft
 
 	pipeline := &pipeline{
-		peerID:        peerID,
-		tr:            t,
-		picker:        picker,
-		status:        status,
-		followerStats: fs,
-		raft:          r,
-		errorc:        errorc,
+		peerID: peerID,
+		tr:     t,
+		picker: picker,
+		status: status,
+		raft:   r,
+		errorc: errorc,
 	}
+
+	// pipeline 用于将数据发送到远端本体
 	pipeline.start()
 
+	streamWriter := startStreamWriter(t.Logger, t.LocalID, peerID, status, r)
+
+	// 用于接收其他节点发送过来的数据
 	p := &peer{
 		lg:         t.Logger,
-		localID:    t.ID,
+		localID:    t.LocalID,
 		remoteID:   peerID,
-		r:          r,
+		raft:       r,
 		status:     status,
 		picker:     picker,
-		writer:     startStreamWriter(t.Logger, t.ID, peerID, status, fs, r),
+		writer:     streamWriter,
 		pipeline:   pipeline,
 		snapSender: newSnapshotSender(t, picker, peerID, status),
 
@@ -137,7 +130,6 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.Followe
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 
-	//处理别的节点发送的Message
 	go func() {
 		for {
 			select {
@@ -151,14 +143,13 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.Followe
 		}
 	}()
 
-	// r.Process might block for processing proposal when there is no leader.
-	// Thus propc must be put into a separate routine with recvc to avoid blocking
-	// processing other raft messages.
+	// 当没有主节点的时候proposal信息有可能会阻塞，所以需要一个单独的协程来处理投票信息
 	go func() {
 		for {
 			select {
 			case mm := <-p.propc:
 				if err := r.Process(ctx, mm); err != nil {
+					t.Logger.Warn("failed to process Raft message", zap.Error(err))
 				}
 			case <-p.stopc:
 				return
@@ -182,7 +173,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID, fs *stats.Followe
 	return p
 }
 
-func (p *peer) send(m *raftproto.Message) {
+func (p *peer) send(m raftproto.Message) {
 	p.mu.Lock()
 	paused := p.paused
 	p.mu.Unlock()
@@ -235,16 +226,10 @@ func (p *peer) update(urls types.URLs) {
 func (p *peer) attachOutgoingConn(conn *outgoingConn) {
 	var ok bool
 	switch conn.t {
-	case streamTypeMsgAppV2:
-		ok = p.msgAppV2Writer.attach(conn)
 	case streamTypeMessage:
 		ok = p.writer.attach(conn)
 	default:
-		if p.lg != nil {
-			p.lg.Panic("unknown stream type", zap.String("type", conn.t.String()))
-		} else {
-			plog.Panicf("unhandled stream type %s", conn.t)
-		}
+		p.lg.Panic("unknown stream type", zap.String("type", conn.t.String()))
 	}
 	if !ok {
 		conn.Close()
@@ -298,26 +283,22 @@ func (p *peer) pick(m *raftproto.Message) (writec chan<- *raftproto.Message, pic
 	return p.pipeline.msgc, pipelineMsg
 }
 
-func isMsgApp(m *raftproto.Message) bool { return m.MsgType == raftproto.MessageType_MsgAppend }
-
-func isMsgSnap(m *raftproto.Message) bool { return m.MsgType == raftproto.MessageType_MsgSnapshot }
-
 type failureType struct {
 	source string
 	action string
 }
 
 type peerStatus struct {
-	lg     *zap.Logger
-	local  types.ID
-	id     types.ID
-	mu     sync.Mutex // protect variables below
-	active bool
-	since  time.Time
+	lg      *zap.Logger
+	localId types.ID
+	id      types.ID
+	mu      sync.Mutex // protect variables below
+	active  bool
+	since   time.Time
 }
 
 func newPeerStatus(lg *zap.Logger, local, id types.ID) *peerStatus {
-	return &peerStatus{lg: lg, local: local, id: id}
+	return &peerStatus{lg: lg, localId: local, id: id}
 }
 
 // 变更为在线状态
@@ -337,17 +318,12 @@ func (s *peerStatus) deactivate(failure failureType, reason string) {
 	defer s.mu.Unlock()
 	msg := fmt.Sprintf("failed to %s %s on %s (%s)", failure.action, s.id, failure.source, reason)
 	if s.active {
-
 		s.lg.Warn("peer became inactive (message send to peer failed)", zap.String("peer-id", s.id.String()), zap.Error(errors.New(msg)))
-
 		s.active = false
 		s.since = time.Time{}
-
 		return
 	}
-
 	s.lg.Debug("peer deactivated again", zap.String("peer-id", s.id.String()), zap.Error(errors.New(msg)))
-
 }
 
 func (s *peerStatus) isActive() bool {
@@ -361,3 +337,7 @@ func (s *peerStatus) activeSince() time.Time {
 	defer s.mu.Unlock()
 	return s.since
 }
+
+func isMsgApp(m *raftproto.Message) bool { return m.MsgType == raftproto.MessageType_MsgAppend }
+
+func isMsgSnap(m *raftproto.Message) bool { return m.MsgType == raftproto.MessageType_MsgSnapshot }

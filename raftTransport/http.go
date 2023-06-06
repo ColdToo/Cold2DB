@@ -22,7 +22,6 @@ const (
 
 var (
 	RaftPrefix         = "/raft"
-	ProbingPrefix      = path.Join(RaftPrefix, "probing")
 	RaftStreamPrefix   = path.Join(RaftPrefix, "stream")
 	RaftSnapshotPrefix = path.Join(RaftPrefix, "snapshot")
 
@@ -50,7 +49,7 @@ type pipelineHandler struct {
 func newPipelineHandler(t *Transport, r Raft, clusterId types.ID) http.Handler {
 	return &pipelineHandler{
 		lg:        t.Logger,
-		localID:   t.ID,
+		localID:   t.LocalID,
 		trans:     t,
 		raft:      r,
 		clusterId: clusterId,
@@ -66,7 +65,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.String())
 
-	addRemoteFromRequest(h.tr, r)
+	addRemoteFromRequest(h.trans, r)
 
 	//限制从请求体中读取的数据大小，这可以确保由于底层实现中可能的阻塞而导致的连接读取不会意外超时。
 	limitedr := pioutil.NewLimitedBufferReader(r.Body, connReadLimitByte)
@@ -262,14 +261,12 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var t streamType
 	switch path.Dir(r.URL.Path) {
-	case streamTypeMsgAppV2.endpoint():
-		t = streamTypeMsgAppV2
 	case streamTypeMessage.endpoint():
 		t = streamTypeMessage
 	default:
 		h.lg.Debug(
 			"ignored unexpected streaming request path",
-			zap.String("local-member-id", h.tr.ID.String()),
+			zap.String("local-member-id", h.tr.LocalID.String()),
 			zap.String("remote-peer-id-stream-handler", h.id.String()),
 			zap.String("path", r.URL.Path),
 		)
@@ -296,7 +293,7 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		h.lg.Warn(
 			"rejected stream from remote peer because it was removed",
-			zap.String("local-member-id", h.tr.ID.String()),
+			zap.String("local-member-id", h.tr.LocalID.String()),
 			zap.String("remote-peer-id-stream-handler", h.id.String()),
 			zap.String("remote-peer-id-from", from.String()),
 		)
@@ -310,7 +307,7 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if gto := r.Header.Get("X-Raft-To"); gto != wto {
 		h.lg.Warn(
 			"ignored streaming request; ID mismatch",
-			zap.String("local-member-id", h.tr.ID.String()),
+			zap.String("local-member-id", h.tr.LocalID.String()),
 			zap.String("remote-peer-id-stream-handler", h.id.String()),
 			zap.String("remote-peer-id-header", gto),
 			zap.String("remote-peer-id-from", from.String()),
@@ -329,7 +326,7 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Writer:  w,
 		Flusher: w.(http.Flusher),
 		Closer:  c,
-		localID: h.tr.ID,
+		localID: h.tr.LocalID,
 		peerID:  h.id,
 	}
 	p.attachOutgoingConn(conn)

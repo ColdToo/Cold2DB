@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/ColdToo/Cold2DB/raftTransport/peer"
-	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"io/ioutil"
@@ -21,6 +19,7 @@ import (
 
 const (
 	connPerPipeline = 4
+
 	// pipelineBufSize is the size of pipeline buffer, which helps hold the
 	// temporary network latency.
 	// The size ensures that pipeline does not drop messages when the network
@@ -31,16 +30,16 @@ const (
 var errStopped = errors.New("stopped")
 
 type pipeline struct {
-	peerID        types.ID
-	tr            *Transport
-	picker        *urlPicker
-	status        *peer.peerStatus
-	raft          Raft
-	errorc        chan error
-	followerStats *stats.FollowerStats
-	msgc          chan *raftproto.Message
-	wg            sync.WaitGroup
-	stopc         chan struct{}
+	peerID types.ID
+	tr     *Transport
+	picker *urlPicker
+	status *peerStatus
+	raft   Raft
+	msgc   chan *raftproto.Message
+
+	wg     sync.WaitGroup
+	stopc  chan struct{}
+	errorc chan error
 }
 
 func (p *pipeline) start() {
@@ -51,30 +50,22 @@ func (p *pipeline) start() {
 		go p.handle()
 	}
 
-	if p.tr != nil && p.tr.Logger != nil {
-		p.tr.Logger.Info(
-			"started HTTP pipelining with remote peer",
-			zap.String("local-member-id", p.tr.ID.String()),
-			zap.String("remote-peer-id", p.peerID.String()),
-		)
-	} else {
-		plog.Infof("started HTTP pipelining with peer %s", p.peerID)
-	}
+	p.tr.Logger.Info(
+		"started HTTP pipelining with remote peer",
+		zap.String("local-member-id", p.tr.LocalID.String()),
+		zap.String("remote-peer-id", p.peerID.String()),
+	)
+
 }
 
 func (p *pipeline) stop() {
 	close(p.stopc)
 	p.wg.Wait()
-
-	if p.tr != nil && p.tr.Logger != nil {
-		p.tr.Logger.Info(
-			"stopped HTTP pipelining with remote peer",
-			zap.String("local-member-id", p.tr.ID.String()),
-			zap.String("remote-peer-id", p.peerID.String()),
-		)
-	} else {
-		plog.Infof("stopped HTTP pipelining with peer %s", p.peerID)
-	}
+	p.tr.Logger.Info(
+		"stopped HTTP pipelining with remote peer",
+		zap.String("local-member-id", p.tr.LocalID.String()),
+		zap.String("remote-peer-id", p.peerID.String()),
+	)
 }
 
 func (p *pipeline) handle() {
@@ -83,32 +74,21 @@ func (p *pipeline) handle() {
 	for {
 		select {
 		case m := <-p.msgc:
-			start := time.Now()
 			err := p.post(pbutil.MustMarshal(m))
-			end := time.Now()
 
 			if err != nil {
-				p.status.deactivate(peer.failureType{source: peer.pipelineMsg, action: "write"}, err.Error())
-
-				if m.MsgType == raftproto.MessageType_MsgAppend && p.followerStats != nil {
-					p.followerStats.Fail()
-				}
+				p.status.deactivate(failureType{source: pipelineMsg, action: "write"}, err.Error())
 				p.raft.ReportUnreachable(m.To)
-				if peer.isMsgSnap(m) {
+				if isMsgSnap(m) {
 					p.raft.ReportSnapshot(m.To, raft.SnapshotFailure)
 				}
-				sentFailures.WithLabelValues(types.ID(m.To).String()).Inc()
 				continue
 			}
 
 			p.status.activate()
-			if m.Type == raftproto.MsgApp && p.followerStats != nil {
-				p.followerStats.Succ(end.Sub(start))
-			}
-			if peer.isMsgSnap(m) {
+			if isMsgSnap(m) {
 				p.raft.ReportSnapshot(m.To, raft.SnapshotFinish)
 			}
-			sentBytes.WithLabelValues(types.ID(m.To).String()).Add(float64(m.Size()))
 		case <-p.stopc:
 			return
 		}
@@ -118,7 +98,7 @@ func (p *pipeline) handle() {
 // post POSTs a data payload to a url. Returns nil if the POST succeeds, error on any failure.
 func (p *pipeline) post(data []byte) (err error) {
 	u := p.picker.pick()
-	req := createPostRequest(u, RaftPrefix, bytes.NewBuffer(data), "application/protobuf", p.tr.URLs, p.tr.ID, p.tr.ClusterID)
+	req := createPostRequest(u, RaftPrefix, bytes.NewBuffer(data), "application/protobuf", p.tr.URLs, p.tr.LocalID, p.tr.ClusterID)
 
 	done := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -127,6 +107,7 @@ func (p *pipeline) post(data []byte) (err error) {
 	go func() {
 		select {
 		case <-done:
+			//暂时关闭pipeline
 		case <-p.stopc:
 			waitSchedule()
 			cancel()

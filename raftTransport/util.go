@@ -71,7 +71,7 @@ func createPostRequest(u url.URL, path string, body io.Reader, contentType strin
 	uu.Path = path
 	req, err := http.NewRequest("POST", uu.String(), body)
 	if err != nil {
-		plog.Panicf("unexpected new request error (%v)", err)
+
 	}
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("X-Server-From", from.String())
@@ -88,12 +88,9 @@ func checkPostResponse(resp *http.Response, body []byte, req *http.Request, to t
 	switch resp.StatusCode {
 	case http.StatusPreconditionFailed:
 		switch strings.TrimSuffix(string(body), "\n") {
-		case errIncompatibleVersion.Error():
-			plog.Errorf("request sent was ignored by peer %s (server version incompatible)", to)
-			return errIncompatibleVersion
 		case errClusterIDMismatch.Error():
-			plog.Errorf("request sent was ignored (cluster ID mismatch: remote[%s]=%s, local=%s)",
-				to, resp.Header.Get("X-Etcd-Cluster-ID"), req.Header.Get("X-Etcd-Cluster-ID"))
+			//plog.Errorf("request sent was ignored (cluster ID mismatch: remote[%s]=%s, local=%s)",
+			//to, resp.Header.Get("X-Etcd-Cluster-ID"), req.Header.Get("X-Etcd-Cluster-ID"))
 			return errClusterIDMismatch
 		default:
 			return fmt.Errorf("unhandled error %q when precondition failed", string(body))

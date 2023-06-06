@@ -3,7 +3,6 @@ package raftTransport
 import (
 	"context"
 	"fmt"
-	stats "github.com/ColdToo/Cold2DB/raftTransport/stats"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"io"
@@ -23,47 +22,28 @@ import (
 )
 
 const (
-	streamTypeMessage  streamType = "message"
-	streamTypeMsgAppV2 streamType = "msgappv2"
+	streamTypeMessage streamType = "message"
 
 	streamBufSize = 4096
 )
 
 var (
 	errUnsupportedStreamType = fmt.Errorf("unsupported stream type")
-
-	// the key is in string format "major.minor.patch"
-	supportedStream = map[string][]streamType{
-		"2.0.0": {},
-		"2.1.0": {streamTypeMsgAppV2, streamTypeMessage},
-		"2.2.0": {streamTypeMsgAppV2, streamTypeMessage},
-		"2.3.0": {streamTypeMsgAppV2, streamTypeMessage},
-		"3.0.0": {streamTypeMsgAppV2, streamTypeMessage},
-		"3.1.0": {streamTypeMsgAppV2, streamTypeMessage},
-		"3.2.0": {streamTypeMsgAppV2, streamTypeMessage},
-		"3.3.0": {streamTypeMsgAppV2, streamTypeMessage},
-		"3.4.0": {streamTypeMsgAppV2, streamTypeMessage},
-	}
 )
 
 type streamType string
 
 func (t streamType) endpoint() string {
 	switch t {
-	case streamTypeMsgAppV2:
-		return path.Join(RaftStreamPrefix, "msgapp")
 	case streamTypeMessage:
 		return path.Join(RaftStreamPrefix, "message")
 	default:
-		plog.Panicf("unhandled stream type %v", t)
 		return ""
 	}
 }
 
 func (t streamType) String() string {
 	switch t {
-	case streamTypeMsgAppV2:
-		return "stream MsgApp v2"
 	case streamTypeMessage:
 		return "stream Message"
 	default:
@@ -72,9 +52,7 @@ func (t streamType) String() string {
 }
 
 var (
-	// linkHeartbeatMessage is a special message used as heartbeat message in
-	// link layer. It never conflicts with messages from raft because raft
-	// doesn't send out messages without From and To fields.
+	// 理解为线路的心跳信息
 	linkHeartbeatMessage = raftproto.Message{MsgType: raftproto.MessageType_MsgHeartbeat}
 )
 
@@ -100,43 +78,40 @@ type streamWriter struct {
 	peerID  types.ID
 
 	status *peerStatus
-	fs     *stats.FollowerStats
 	r      Raft
 
 	mu      sync.Mutex // guard field working and closer
 	closer  io.Closer
 	working bool
 
-	msgc  chan *raftproto.Message
-	connc chan *outgoingConn
+	msgc  chan *raftproto.Message //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
+	connc chan *outgoingConn      //通过该通道获取当前streamWriter实例关联的底层网络连接，  outgoingConn其实是对网络连接的一层封装，其中记录了当前连接使用的协议版本，以及用于关闭连接的Flusher和Closer等信息。
 	stopc chan struct{}
 	done  chan struct{}
 }
 
 // startStreamWriter creates a streamWrite and starts a long running go-routine that accepts
 // messages and writes to the attached outgoing connection.
-func startStreamWriter(lg *zap.Logger, local, id types.ID, status *peer.peerStatus, fs *stats.FollowerStats, r Raft) *streamWriter {
+func startStreamWriter(lg *zap.Logger, local, id types.ID, status *peerStatus, r Raft) *streamWriter {
 	w := &streamWriter{
-		lg: lg,
-
+		lg:      lg,
 		localID: local,
 		peerID:  id,
-
-		status: status,
-		fs:     fs,
-		r:      r,
-		msgc:   make(chan raftproto.Message, streamBufSize),
-		connc:  make(chan *outgoingConn),
-		stopc:  make(chan struct{}),
-		done:   make(chan struct{}),
+		status:  status,
+		r:       r,
+		msgc:    make(chan *raftproto.Message, streamBufSize),
+		connc:   make(chan *outgoingConn),
+		stopc:   make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 	go w.run()
 	return w
 }
 
+// 从管道中获取msg,
 func (cw *streamWriter) run() {
 	var (
-		msgc       chan raftproto.Message
+		msgc       chan *raftproto.Message
 		heartbeatc <-chan time.Time
 		t          streamType
 		enc        encoder
@@ -161,25 +136,19 @@ func (cw *streamWriter) run() {
 			if err == nil {
 				flusher.Flush()
 				batched = 0
-				sentBytes.WithLabelValues(cw.peerID.String()).Add(float64(unflushed))
 				unflushed = 0
 				continue
 			}
 
-			cw.status.deactivate(peer.failureType{source: t.String(), action: "heartbeat"}, err.Error())
+			cw.status.deactivate(failureType{source: t.String(), action: "heartbeat"}, err.Error())
 
-			sentFailures.WithLabelValues(cw.peerID.String()).Inc()
 			cw.close()
-			if cw.lg != nil {
-				cw.lg.Warn(
-					"lost TCP streaming connection with remote peer",
-					zap.String("stream-writer-type", t.String()),
-					zap.String("local-member-id", cw.localID.String()),
-					zap.String("remote-peer-id", cw.peerID.String()),
-				)
-			} else {
-				plog.Warningf("lost the TCP streaming connection with peer %s (%s writer)", cw.peerID, t)
-			}
+			cw.lg.Warn(
+				"lost TCP streaming connection with remote peer",
+				zap.String("stream-writer-type", t.String()),
+				zap.String("local-member-id", cw.localID.String()),
+				zap.String("remote-peer-id", cw.peerID.String()),
+			)
 			heartbeatc, msgc = nil, nil
 
 		case m := <-msgc:
@@ -201,16 +170,12 @@ func (cw *streamWriter) run() {
 
 			cw.status.deactivate(peer.failureType{source: t.String(), action: "write"}, err.Error())
 			cw.close()
-			if cw.lg != nil {
-				cw.lg.Warn(
-					"lost TCP streaming connection with remote peer",
-					zap.String("stream-writer-type", t.String()),
-					zap.String("local-member-id", cw.localID.String()),
-					zap.String("remote-peer-id", cw.peerID.String()),
-				)
-			} else {
-				plog.Warningf("lost the TCP streaming connection with peer %s (%s writer)", cw.peerID, t)
-			}
+			cw.lg.Warn(
+				"lost TCP streaming connection with remote peer",
+				zap.String("stream-writer-type", t.String()),
+				zap.String("local-member-id", cw.localID.String()),
+				zap.String("remote-peer-id", cw.peerID.String()),
+			)
 			heartbeatc, msgc = nil, nil
 			cw.r.ReportUnreachable(m.To)
 			sentFailures.WithLabelValues(cw.peerID.String()).Inc()
@@ -223,16 +188,15 @@ func (cw *streamWriter) run() {
 			case streamTypeMessage:
 				enc = &messageEncoder{w: conn.Writer}
 			default:
-				plog.Panicf("unhandled stream type %s", conn.t)
 			}
-			if cw.lg != nil {
-				cw.lg.Info(
-					"set message encoder",
-					zap.String("from", conn.localID.String()),
-					zap.String("to", conn.peerID.String()),
-					zap.String("stream-type", t.String()),
-				)
-			}
+
+			cw.lg.Info(
+				"set message encoder",
+				zap.String("from", conn.localID.String()),
+				zap.String("to", conn.peerID.String()),
+				zap.String("stream-type", t.String()),
+			)
+
 			flusher = conn.Flusher
 			unflushed = 0
 			cw.status.activate()
@@ -241,50 +205,34 @@ func (cw *streamWriter) run() {
 			cw.mu.Unlock()
 
 			if closed {
-				if cw.lg != nil {
-					cw.lg.Warn(
-						"closed TCP streaming connection with remote peer",
-						zap.String("stream-writer-type", t.String()),
-						zap.String("local-member-id", cw.localID.String()),
-						zap.String("remote-peer-id", cw.peerID.String()),
-					)
-				} else {
-					plog.Warningf("closed an existing TCP streaming connection with peer %s (%s writer)", cw.peerID, t)
-				}
-			}
-			if cw.lg != nil {
 				cw.lg.Warn(
-					"established TCP streaming connection with remote peer",
+					"closed TCP streaming connection with remote peer",
 					zap.String("stream-writer-type", t.String()),
 					zap.String("local-member-id", cw.localID.String()),
 					zap.String("remote-peer-id", cw.peerID.String()),
 				)
-			} else {
-				plog.Infof("established a TCP streaming connection with peer %s (%s writer)", cw.peerID, t)
 			}
+			cw.lg.Warn(
+				"established TCP streaming connection with remote peer",
+				zap.String("stream-writer-type", t.String()),
+				zap.String("local-member-id", cw.localID.String()),
+				zap.String("remote-peer-id", cw.peerID.String()),
+			)
 			heartbeatc, msgc = tickc.C, cw.msgc
 
 		case <-cw.stopc:
 			if cw.close() {
-				if cw.lg != nil {
-					cw.lg.Warn(
-						"closed TCP streaming connection with remote peer",
-						zap.String("stream-writer-type", t.String()),
-						zap.String("remote-peer-id", cw.peerID.String()),
-					)
-				} else {
-					plog.Infof("closed the TCP streaming connection with peer %s (%s writer)", cw.peerID, t)
-				}
-			}
-			if cw.lg != nil {
 				cw.lg.Warn(
-					"stopped TCP streaming connection with remote peer",
+					"closed TCP streaming connection with remote peer",
 					zap.String("stream-writer-type", t.String()),
 					zap.String("remote-peer-id", cw.peerID.String()),
 				)
-			} else {
-				plog.Infof("stopped streaming with peer %s (writer)", cw.peerID)
 			}
+			cw.lg.Warn(
+				"stopped TCP streaming connection with remote peer",
+				zap.String("stream-writer-type", t.String()),
+				zap.String("remote-peer-id", cw.peerID.String()),
+			)
 			close(cw.done)
 			return
 		}
@@ -350,7 +298,7 @@ type streamReader struct {
 
 	tr     *Transport
 	picker *urlPicker
-	status *peer.peerStatus
+	status *peerStatus
 	recvc  chan<- *raftproto.Message
 	propc  chan<- *raftproto.Message
 
@@ -382,77 +330,58 @@ func (cr *streamReader) run() {
 	cr.lg.Info(
 		"started stream reader with remote peer",
 		zap.String("stream-reader-type", t.String()),
-		zap.String("local-member-id", cr.tr.ID.String()),
+		zap.String("local-member-id", cr.tr.LocalID.String()),
 		zap.String("remote-peer-id", cr.peerID.String()),
 	)
 
 	for {
 		rc, err := cr.dial(t)
 		if err != nil {
-			if err != errUnsupportedStreamType {
-				cr.status.deactivate(peer.failureType{source: t.String(), action: "dial"}, err.Error())
-			}
+			cr.status.deactivate(failureType{source: t.String(), action: "dial"}, err.Error())
 		} else {
 			cr.status.activate()
-			if cr.lg != nil {
-				cr.lg.Info(
-					"established TCP streaming connection with remote peer",
-					zap.String("stream-reader-type", cr.typ.String()),
-					zap.String("local-member-id", cr.tr.ID.String()),
-					zap.String("remote-peer-id", cr.peerID.String()),
-				)
-			} else {
-				plog.Infof("established a TCP streaming connection with peer %s (%s reader)", cr.peerID, cr.typ)
-			}
+			cr.lg.Info(
+				"established TCP streaming connection with remote peer",
+				zap.String("local-member-id", cr.tr.ID.String()),
+				zap.String("remote-peer-id", cr.peerID.String()),
+			)
 			err = cr.decodeLoop(rc, t)
-			if cr.lg != nil {
-				cr.lg.Warn(
-					"lost TCP streaming connection with remote peer",
-					zap.String("stream-reader-type", cr.typ.String()),
-					zap.String("local-member-id", cr.tr.ID.String()),
-					zap.String("remote-peer-id", cr.peerID.String()),
-					zap.Error(err),
-				)
-			} else {
-				plog.Warningf("lost the TCP streaming connection with peer %s (%s reader)", cr.peerID, cr.typ)
-			}
+			cr.lg.Warn(
+				"lost TCP streaming connection with remote peer",
+				zap.String("stream-reader-type", cr.typ.String()),
+				zap.String("local-member-id", cr.tr.ID.String()),
+				zap.String("remote-peer-id", cr.peerID.String()),
+				zap.Error(err),
+			)
 			switch {
 			// all data is read out
 			case err == io.EOF:
 			// connection is closed by the remote
 			case transport.IsClosedConnError(err):
 			default:
-				cr.status.deactivate(peer.failureType{source: t.String(), action: "read"}, err.Error())
+				cr.status.deactivate(failureType{source: t.String(), action: "read"}, err.Error())
 			}
 		}
 		// Wait for a while before new dial attempt
 		err = cr.rl.Wait(cr.ctx)
 		if cr.ctx.Err() != nil {
-			if cr.lg != nil {
-				cr.lg.Info(
-					"stopped stream reader with remote peer",
-					zap.String("stream-reader-type", t.String()),
-					zap.String("local-member-id", cr.tr.ID.String()),
-					zap.String("remote-peer-id", cr.peerID.String()),
-				)
-			} else {
-				plog.Infof("stopped streaming with peer %s (%s reader)", cr.peerID, t)
-			}
+			cr.lg.Info(
+				"stopped stream reader with remote peer",
+				zap.String("stream-reader-type", t.String()),
+				zap.String("local-member-id", cr.tr.LocalID.String()),
+				zap.String("remote-peer-id", cr.peerID.String()),
+			)
 			close(cr.done)
 			return
 		}
 		if err != nil {
-			if cr.lg != nil {
-				cr.lg.Warn(
-					"rate limit on stream reader with remote peer",
-					zap.String("stream-reader-type", t.String()),
-					zap.String("local-member-id", cr.tr.ID.String()),
-					zap.String("remote-peer-id", cr.peerID.String()),
-					zap.Error(err),
-				)
-			} else {
-				plog.Errorf("streaming with peer %s (%s reader) rate limiter error: %v", cr.peerID, t, err)
-			}
+			cr.lg.Warn(
+				"rate limit on stream reader with remote peer",
+				zap.String("stream-reader-type", t.String()),
+				zap.String("local-member-id", cr.tr.LocalID.String()),
+				zap.String("remote-peer-id", cr.peerID.String()),
+				zap.Error(err),
+			)
 		}
 	}
 }
@@ -461,16 +390,10 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser, t streamType) error {
 	var dec decoder
 	cr.mu.Lock()
 	switch t {
-	case streamTypeMsgAppV2:
-		dec = newMsgAppV2Decoder(rc, cr.tr.ID, cr.peerID)
 	case streamTypeMessage:
 		dec = &messageDecoder{r: rc}
 	default:
-		if cr.lg != nil {
-			cr.lg.Panic("unknown stream type", zap.String("type", t.String()))
-		} else {
-			plog.Panicf("unhandled stream type %s", t)
-		}
+		cr.lg.Panic("unknown stream type", zap.String("type", t.String()))
 	}
 	select {
 	case <-cr.ctx.Done():
@@ -493,10 +416,6 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser, t streamType) error {
 			cr.mu.Unlock()
 			return err
 		}
-
-		// gofail-go: var raftDropHeartbeat struct{}
-		// continue labelRaftDropHeartbeat
-		receivedBytes.WithLabelValues(types.ID(m.From).String()).Add(float64(m.Size()))
 
 		cr.mu.Lock()
 		paused := cr.paused
@@ -522,33 +441,24 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser, t streamType) error {
 		case recvc <- m:
 		default:
 			if cr.status.isActive() {
-				if cr.lg != nil {
-					cr.lg.Warn(
-						"dropped internal Raft message since receiving buffer is full (overloaded network)",
-						zap.String("message-type", m.Type.String()),
-						zap.String("local-member-id", cr.tr.ID.String()),
-						zap.String("from", types.ID(m.From).String()),
-						zap.String("remote-peer-id", types.ID(m.To).String()),
-						zap.Bool("remote-peer-active", cr.status.isActive()),
-					)
-				} else {
-					plog.MergeWarningf("dropped internal raft message from %s since receiving buffer is full (overloaded network)", types.ID(m.From))
-				}
+				cr.lg.Warn(
+					"dropped internal Raft message since receiving buffer is full (overloaded network)",
+					zap.String("message-type", m.Type.String()),
+					zap.String("local-member-id", cr.tr.ID.String()),
+					zap.String("from", types.ID(m.From).String()),
+					zap.String("remote-peer-id", types.ID(m.To).String()),
+					zap.Bool("remote-peer-active", cr.status.isActive()),
+				)
 			} else {
-				if cr.lg != nil {
-					cr.lg.Warn(
-						"dropped Raft message since receiving buffer is full (overloaded network)",
-						zap.String("message-type", m.Type.String()),
-						zap.String("local-member-id", cr.tr.ID.String()),
-						zap.String("from", types.ID(m.From).String()),
-						zap.String("remote-peer-id", types.ID(m.To).String()),
-						zap.Bool("remote-peer-active", cr.status.isActive()),
-					)
-				} else {
-					plog.Debugf("dropped %s from %s since receiving buffer is full", m.Type, types.ID(m.From))
-				}
+				cr.lg.Warn(
+					"dropped Raft message since receiving buffer is full (overloaded network)",
+					zap.String("message-type", m.Type.String()),
+					zap.String("local-member-id", cr.tr.ID.String()),
+					zap.String("from", types.ID(m.From).String()),
+					zap.String("remote-peer-id", types.ID(m.To).String()),
+					zap.Bool("remote-peer-active", cr.status.isActive()),
+				)
 			}
-			recvFailures.WithLabelValues(types.ID(m.From).String()).Inc()
 		}
 	}
 }

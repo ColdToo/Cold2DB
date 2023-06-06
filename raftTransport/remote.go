@@ -15,10 +15,8 @@
 package raftTransport
 
 import (
-	"github.com/ColdToo/Cold2DB/raftTransport/peer"
-	"go.etcd.io/etcd/pkg/types"
-	"go.etcd.io/etcd/raft/raftpb"
-
+	types "github.com/ColdToo/Cold2DB/raftTransport/types"
+	"github.com/ColdToo/Cold2DB/raftproto"
 	"go.uber.org/zap"
 )
 
@@ -26,15 +24,15 @@ type remote struct {
 	lg       *zap.Logger
 	localID  types.ID
 	id       types.ID
-	status   *peer.peerStatus
+	status   *peerStatus
 	pipeline *pipeline
 }
 
-func startRemote(tr *Transport, urls types.URLs, id types.ID) *remote {
+func startRemote(tr *Transport, urls types.URLs, remoteId types.ID) *remote {
 	picker := newURLPicker(urls)
-	status := peer.newPeerStatus(tr.Logger, tr.ID, id)
+	status := newPeerStatus(tr.Logger, tr.LocalID, remoteId)
 	pipeline := &pipeline{
-		peerID: id,
+		peerID: remoteId,
 		tr:     tr,
 		picker: picker,
 		status: status,
@@ -45,14 +43,14 @@ func startRemote(tr *Transport, urls types.URLs, id types.ID) *remote {
 
 	return &remote{
 		lg:       tr.Logger,
-		localID:  tr.ID,
-		id:       id,
+		localID:  tr.LocalID,
+		id:       remoteId,
 		status:   status,
 		pipeline: pipeline,
 	}
 }
 
-func (g *remote) send(m raftpb.Message) {
+func (g *remote) send(m raftproto.Message) {
 	select {
 	case g.pipeline.msgc <- m:
 	default:
