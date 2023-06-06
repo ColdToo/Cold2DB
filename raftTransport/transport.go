@@ -102,6 +102,7 @@ func (t *Transport) Initialize() error {
 	if err != nil {
 		return err
 	}
+
 	//创建Pipeline消息通道用的http.RoundTripper实例与streamRt不同的是，读写请求的起时时间设置成了永不过期
 	t.pipelineRt, err = NewPipeLineRoundTripper(t.TLSInfo, t.DialTimeout)
 	if err != nil {

@@ -17,7 +17,6 @@ import (
 	"go.etcd.io/etcd/pkg/transport"
 	"go.etcd.io/etcd/version"
 
-	"github.com/coreos/go-semver/semver"
 	"go.uber.org/zap"
 )
 
@@ -108,7 +107,7 @@ func startStreamWriter(lg *zap.Logger, local, id types.ID, status *peerStatus, r
 	return w
 }
 
-// 从管道中获取msg,
+// 从管道中获取msg
 func (cw *streamWriter) run() {
 	var (
 		msgc       chan *raftproto.Message
@@ -256,20 +255,16 @@ func (cw *streamWriter) closeUnlocked() bool {
 		return false
 	}
 	if err := cw.closer.Close(); err != nil {
-		if cw.lg != nil {
-			cw.lg.Warn(
-				"failed to close connection with remote peer",
-				zap.String("remote-peer-id", cw.peerID.String()),
-				zap.Error(err),
-			)
-		} else {
-			plog.Errorf("peer %s (writer) connection close error: %v", cw.peerID, err)
-		}
+		cw.lg.Warn(
+			"failed to close connection with remote peer",
+			zap.String("remote-peer-id", cw.peerID.String()),
+			zap.Error(err),
+		)
 	}
 	if len(cw.msgc) > 0 {
 		cw.r.ReportUnreachable(uint64(cw.peerID))
 	}
-	cw.msgc = make(chan raftproto.Message, streamBufSize)
+	cw.msgc = make(chan *raftproto.Message, streamBufSize)
 	cw.working = false
 	return true
 }
@@ -315,12 +310,8 @@ type streamReader struct {
 
 func (cr *streamReader) start() {
 	cr.done = make(chan struct{})
-	if cr.errorc == nil {
-		cr.errorc = cr.tr.ErrorC
-	}
-	if cr.ctx == nil {
-		cr.ctx, cr.cancel = context.WithCancel(context.Background())
-	}
+	cr.errorc = cr.tr.ErrorC
+	cr.ctx, cr.cancel = context.WithCancel(context.Background())
 	go cr.run()
 }
 
@@ -362,8 +353,7 @@ func (cr *streamReader) run() {
 				cr.status.deactivate(failureType{source: t.String(), action: "read"}, err.Error())
 			}
 		}
-		// Wait for a while before new dial attempt
-		err = cr.rl.Wait(cr.ctx)
+
 		if cr.ctx.Err() != nil {
 			cr.lg.Info(
 				"stopped stream reader with remote peer",
@@ -474,11 +464,11 @@ func (cr *streamReader) stop() {
 func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 	u := cr.picker.pick()
 	uu := u
-	uu.Path = path.Join(t.endpoint(), cr.tr.ID.String())
+	uu.Path = path.Join(t.endpoint(), cr.tr.LocalID.String())
 
 	cr.lg.Debug(
 		"dial stream reader",
-		zap.String("from", cr.tr.ID.String()),
+		zap.String("from", cr.tr.LocalID.String()),
 		zap.String("to", cr.peerID.String()),
 		zap.String("address", uu.String()),
 	)
@@ -488,15 +478,14 @@ func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 		cr.picker.unreachable(u)
 		return nil, fmt.Errorf("failed to make http request to %v (%v)", u, err)
 	}
-	req.Header.Set("X-Server-From", cr.tr.ID.String())
+
+	req.Header.Set("X-Server-From", cr.tr.LocalID.String())
 	req.Header.Set("X-Server-Version", version.Version)
 	req.Header.Set("X-Min-Cluster-Version", version.MinClusterVersion)
 	req.Header.Set("X-Etcd-Cluster-ID", cr.tr.ClusterID.String())
 	req.Header.Set("X-Raft-To", cr.peerID.String())
-
-	setPeerURLsHeader(req, cr.tr.URLs)
-
 	req = req.WithContext(cr.ctx)
+	setPeerURLsHeader(req, cr.tr.URLs)
 
 	cr.mu.Lock()
 	select {
@@ -513,14 +502,6 @@ func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	rv := serverVersion(resp.Header)
-	lv := semver.Must(semver.NewVersion(version.Version))
-	if compareMajorMinorVersion(rv, lv) == -1 {
-		httputil.GracefulClose(resp)
-		cr.picker.unreachable(u)
-		return nil, errUnsupportedStreamType
-	}
-
 	switch resp.StatusCode {
 	case http.StatusGone:
 		httputil.GracefulClose(resp)
@@ -534,7 +515,7 @@ func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 	case http.StatusNotFound:
 		httputil.GracefulClose(resp)
 		cr.picker.unreachable(u)
-		return nil, fmt.Errorf("peer %s failed to find local node %s", cr.peerID, cr.tr.ID)
+		return nil, fmt.Errorf("peer %s failed to find local node %s", cr.peerID, cr.tr.LocalID)
 
 	case http.StatusPreconditionFailed:
 		b, err := ioutil.ReadAll(resp.Body)
@@ -547,32 +528,23 @@ func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 
 		switch strings.TrimSuffix(string(b), "\n") {
 		case errIncompatibleVersion.Error():
-			if cr.lg != nil {
-				cr.lg.Warn(
-					"request sent was ignored by remote peer due to server version incompatibility",
-					zap.String("local-member-id", cr.tr.ID.String()),
-					zap.String("remote-peer-id", cr.peerID.String()),
-					zap.Error(errIncompatibleVersion),
-				)
-			} else {
-				plog.Errorf("request sent was ignored by peer %s (server version incompatible)", cr.peerID)
-			}
+			cr.lg.Warn(
+				"request sent was ignored by remote peer due to server version incompatibility",
+				zap.String("local-member-id", cr.tr.LocalID.String()),
+				zap.String("remote-peer-id", cr.peerID.String()),
+				zap.Error(errIncompatibleVersion),
+			)
 			return nil, errIncompatibleVersion
 
 		case errClusterIDMismatch.Error():
-			if cr.lg != nil {
-				cr.lg.Warn(
-					"request sent was ignored by remote peer due to cluster ID mismatch",
-					zap.String("remote-peer-id", cr.peerID.String()),
-					zap.String("remote-peer-cluster-id", resp.Header.Get("X-Etcd-Cluster-ID")),
-					zap.String("local-member-id", cr.tr.ID.String()),
-					zap.String("local-member-cluster-id", cr.tr.ClusterID.String()),
-					zap.Error(errClusterIDMismatch),
-				)
-			} else {
-				plog.Errorf("request sent was ignored (cluster ID mismatch: peer[%s]=%s, local=%s)",
-					cr.peerID, resp.Header.Get("X-Etcd-Cluster-ID"), cr.tr.ClusterID)
-			}
+			cr.lg.Warn(
+				"request sent was ignored by remote peer due to cluster ID mismatch",
+				zap.String("remote-peer-id", cr.peerID.String()),
+				zap.String("remote-peer-cluster-id", resp.Header.Get("X-Etcd-Cluster-ID")),
+				zap.String("local-member-id", cr.tr.LocalID.String()),
+				zap.String("local-member-cluster-id", cr.tr.ClusterID.String()),
+				zap.Error(errClusterIDMismatch),
+			)
 			return nil, errClusterIDMismatch
 
 		default:
