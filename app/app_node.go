@@ -129,6 +129,7 @@ func (an *AppNode) servePeerRaft() {
 		}
 	}
 
+	//监听来自其他节点的http请求
 	an.listenAndServePeerRaft()
 }
 

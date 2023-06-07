@@ -38,7 +38,7 @@ type snapshotSender struct {
 
 func newSnapshotSender(tr *Transport, picker *urlPicker, to types.ID, status *peerStatus) *snapshotSender {
 	return &snapshotSender{
-		from:   tr.ID,
+		from:   tr.LocalID,
 		to:     to,
 		cid:    tr.ClusterID,
 		tr:     tr,

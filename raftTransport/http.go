@@ -56,7 +56,17 @@ func newPipelineHandler(t *Transport, r Raft, clusterId types.ID) http.Handler {
 	}
 }
 
+// pipeline 主要用于传输快照数据
+
+//1.读取对端发送过来的数据，
+//
+//读取数据的时候，限制每次从底层连接读取的字节数上线，默认是64KB，因为快照数据可能非常大，为了防止读取超时，只能每次读取一部分数据到缓冲区中，最后将全部数据拼接起来，得到完整的快照数据。
+//
+//2.将读取到的消息发送给底层的raft模块
+//
+//3.返回对端节点状态码
 func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// pipeline只允许post请求
 	if r.Method != "POST" {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -65,6 +75,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.String())
 
+	//why pipeline add remote
 	addRemoteFromRequest(h.trans, r)
 
 	//限制从请求体中读取的数据大小，这可以确保由于底层实现中可能的阻塞而导致的连接读取不会意外超时。
@@ -91,6 +102,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	//调用 raft层处理消息
 	if err := h.raft.Process(context.TODO(), m); err != nil {
 		switch v := err.(type) {
 		case writerToResponse:
@@ -131,7 +143,7 @@ func newSnapshotHandler(t *Transport, r Raft, snapshotter *db.SnapShotter, clust
 		trans:       t,
 		raft:        r,
 		snapshotter: snapshotter,
-		localID:     t.ID,
+		localID:     t.LocalID,
 		clusterId:   clusterId,
 	}
 }
@@ -279,7 +291,7 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.lg.Warn(
 			"failed to parse path into ID",
-			zap.String("local-member-id", h.tr.ID.String()),
+			zap.String("local-member-id", h.tr.LocalID.String()),
 			zap.String("remote-peer-id-stream-handler", h.id.String()),
 			zap.String("path", fromStr),
 			zap.Error(err),

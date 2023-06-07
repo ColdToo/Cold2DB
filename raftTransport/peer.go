@@ -72,6 +72,10 @@ type peer struct {
 
 	status *peerStatus
 
+	/*
+		每个节点可能提供了多个URL供其他节点正常访问，当其中一个访问失败时，我们应该可以尝试访问另一个。
+		urlPicker提供的主要功能就是在这些URL之间进行切换
+	*/
 	picker *urlPicker
 
 	writer       *streamWriter
@@ -80,8 +84,8 @@ type peer struct {
 	pipeline   *pipeline
 	snapSender *snapshotSender // snapshot sender to send v3 snapshot messages
 
-	recvc chan *raftproto.Message
-	propc chan *raftproto.Message
+	recvc chan *raftproto.Message //从Stream消息通道中读取到消息之后，会通过该通道将消息交给Raft接口，然后由它返回给底层etcd-raft模块进行处理
+	propc chan *raftproto.Message //从Stream消息通道中读取到MsgProp类型的消息之后，会通过该通道将MsgApp消息交给Raft接口，然后由它返回给底层的etcd-raft模块进行处理
 
 	mu     sync.Mutex
 	paused bool
@@ -96,6 +100,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 	errorc := t.ErrorC
 	r := t.Raft
 
+	///
 	pipeline := &pipeline{
 		peerID: peerID,
 		tr:     t,
@@ -105,9 +110,11 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 		errorc: errorc,
 	}
 
-	// pipeline 用于将数据发送到远端本体
+	// pipeline 用于将快照数据发送到远端本体
 	pipeline.start()
+	////
 
+	// 发送数据到远端本体
 	streamWriter := startStreamWriter(t.Logger, t.LocalID, peerID, status, r)
 
 	// 用于接收其他节点发送过来的数据
@@ -270,7 +277,7 @@ func (p *peer) stop() {
 
 // pick picks a chan for sending the given message. The picked chan and the picked chan
 // string name are returned.
-// 根据消息类型选取可以发送的
+// 根据消息类型选取可以发送的消息信道
 func (p *peer) pick(m *raftproto.Message) (writec chan<- *raftproto.Message, picked string) {
 	var ok bool
 	// Considering MsgSnap may have a big size, e.g., 1G, and will block

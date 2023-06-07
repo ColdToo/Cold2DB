@@ -29,13 +29,18 @@ const (
 
 var errStopped = errors.New("stopped")
 
+// pipeline主要用于发送快照
 type pipeline struct {
 	peerID types.ID
 	tr     *Transport
 	picker *urlPicker
 	status *peerStatus
-	raft   Raft
-	msgc   chan *raftproto.Message
+
+	//向raft报告发送快照失败或者成功
+	raft Raft
+
+	//pipeline实例从这个管道中获取待发送到对端的message，默认缓冲通道是64个
+	msgc chan *raftproto.Message
 
 	wg     sync.WaitGroup
 	stopc  chan struct{}
@@ -84,8 +89,8 @@ func (p *pipeline) handle() {
 				}
 				continue
 			}
-
 			p.status.activate()
+
 			if isMsgSnap(m) {
 				p.raft.ReportSnapshot(m.To, raft.SnapshotFinish)
 			}

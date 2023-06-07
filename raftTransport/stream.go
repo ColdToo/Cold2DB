@@ -111,15 +111,17 @@ func startStreamWriter(lg *zap.Logger, local, id types.ID, status *peerStatus, r
 func (cw *streamWriter) run() {
 	var (
 		msgc       chan *raftproto.Message
-		heartbeatc <-chan time.Time
+		heartbeatc <-chan time.Time //定时器会定时向该通道发送信号，触发心跳消息的发送，该心跳消息与后台介绍的Raft的心跳消息有所不同，该心跳的主要目的是为了防止连接长时间不用断开的
 		t          streamType
-		enc        encoder
-		flusher    http.Flusher
-		batched    int
+		enc        encoder      // 编码器，负责将消息序列化并写入连接的缓冲区中
+		flusher    http.Flusher //负责刷新底层连接，将数据真正的发送出去
+		batched    int          //当前flush了的字节数
 	)
+
 	tickc := time.NewTicker(ConnReadTimeout / 3)
 	defer tickc.Stop()
-	unflushed := 0
+
+	var unflushed uint64 //为unflushed的字节数
 
 	cw.lg.Info(
 		"started stream writer with remote peer",
@@ -129,9 +131,10 @@ func (cw *streamWriter) run() {
 
 	for {
 		select {
-		case <-heartbeatc:
+		case <-heartbeatc: //触发心跳信息
 			err := enc.encode(&linkHeartbeatMessage)
 			unflushed += linkHeartbeatMessage.Size()
+			//若没有异常，则使用flusher将缓存的消息全部发送出去，并重置batched和unflushed两个统计变量
 			if err == nil {
 				flusher.Flush()
 				batched = 0
@@ -139,25 +142,28 @@ func (cw *streamWriter) run() {
 				continue
 			}
 
+			//如果有异常，关闭streamWriter
 			cw.status.deactivate(failureType{source: t.String(), action: "heartbeat"}, err.Error())
 
 			cw.close()
+
 			cw.lg.Warn(
 				"lost TCP streaming connection with remote peer",
 				zap.String("stream-writer-type", t.String()),
 				zap.String("local-member-id", cw.localID.String()),
 				zap.String("remote-peer-id", cw.peerID.String()),
 			)
+
+			//将heartbeatc和msgc两个通道清空，后续就不会在发送心跳消息和其他类型的消息了
 			heartbeatc, msgc = nil, nil
 
 		case m := <-msgc:
-			err := enc.encode(&m)
+			err := enc.encode(m)
 			if err == nil {
 				unflushed += m.Size()
 
 				if len(msgc) == 0 || batched > streamBufSize/2 {
 					flusher.Flush()
-					sentBytes.WithLabelValues(cw.peerID.String()).Add(float64(unflushed))
 					unflushed = 0
 					batched = 0
 				} else {
@@ -167,7 +173,8 @@ func (cw *streamWriter) run() {
 				continue
 			}
 
-			cw.status.deactivate(peer.failureType{source: t.String(), action: "write"}, err.Error())
+			//异常情况处理
+			cw.status.deactivate(failureType{source: t.String(), action: "write"}, err.Error())
 			cw.close()
 			cw.lg.Warn(
 				"lost TCP streaming connection with remote peer",
@@ -177,11 +184,24 @@ func (cw *streamWriter) run() {
 			)
 			heartbeatc, msgc = nil, nil
 			cw.r.ReportUnreachable(m.To)
-			sentFailures.WithLabelValues(cw.peerID.String()).Inc()
+
+			/*
+
+			   当其他节点(对端)主动与当前节点创建Stream消息通道时，会先通过StreamHandler的处理，
+
+			   StreamHandler会通过attach()方法将连接写入对应的peer.writer.connc通道，
+
+			   而当前的goroutine会通过该通道获取连接，然后开始发送消息
+
+			*/
 
 		case conn := <-cw.connc:
 			cw.mu.Lock()
+
+			//什么用途？
 			closed := cw.closeUnlocked()
+
+			//根据不同的消息类型获取不同编码器
 			t = conn.t
 			switch conn.t {
 			case streamTypeMessage:
@@ -196,6 +216,7 @@ func (cw *streamWriter) run() {
 				zap.String("stream-type", t.String()),
 			)
 
+			//获取底层连接的flusher
 			flusher = conn.Flusher
 			unflushed = 0
 			cw.status.activate()
@@ -269,6 +290,7 @@ func (cw *streamWriter) closeUnlocked() bool {
 	return true
 }
 
+// 提供一个可以获取连接的通道
 func (cw *streamWriter) attach(conn *outgoingConn) bool {
 	select {
 	case cw.connc <- conn:
@@ -283,6 +305,9 @@ func (cw *streamWriter) stop() {
 	<-cw.done
 }
 
+/*---------------------------------------------------------------------------*/
+/*---------------------------------------------------------------------------*/
+
 // streamReader is a long-running go-routine that dials to the remote stream
 // endpoint and reads messages from the response body returned.
 type streamReader struct {
@@ -294,8 +319,8 @@ type streamReader struct {
 	tr     *Transport
 	picker *urlPicker
 	status *peerStatus
-	recvc  chan<- *raftproto.Message
-	propc  chan<- *raftproto.Message
+	recvc  chan<- *raftproto.Message //从peer中获取对端节点发送过来的消息，然后交给raft算法层进行处理，只接收非prop信息
+	propc  chan<- *raftproto.Message //只接收propc类消息
 
 	errorc chan<- error
 
@@ -326,17 +351,23 @@ func (cr *streamReader) run() {
 	)
 
 	for {
+
+		//首先调用dial方法给对端发送一个GET请求，从而和对端建立长连接。对端的Header收到该连接后，会封装成outgoingConn结构，并发送给streamWriter，
 		rc, err := cr.dial(t)
+
 		if err != nil {
 			cr.status.deactivate(failureType{source: t.String(), action: "dial"}, err.Error())
-		} else {
+		} else { //如果未出现异常，则开始读取对端返回的消息，并将读取到的消息写入streamReader.recvc通道中
 			cr.status.activate()
 			cr.lg.Info(
 				"established TCP streaming connection with remote peer",
 				zap.String("local-member-id", cr.tr.ID.String()),
 				zap.String("remote-peer-id", cr.peerID.String()),
 			)
-			err = cr.decodeLoop(rc, t)
+
+			//连接建立成功之后会调用decodeLoop方法来轮询读取对端节点发送过来的消息，并将收到的字节流转成raftpb.Message消息类型的格式。如果消息是心跳类型则忽略，如果是raftpb.MsgProp类型的消息，则发送到propc通道中，会有专门的协程发送给本节点底层的raft模块。
+			//如果是其他消息(注意这些消息里没有快照类型的消息，因为快照类型的消息是专门的通道)，则发送到recvc通道中，会有专门的协程将数据发送给底层的raft模块。
+			err = cr.decodeLoop(rc, t) //轮询读取消息
 			cr.lg.Warn(
 				"lost TCP streaming connection with remote peer",
 				zap.String("stream-reader-type", cr.typ.String()),
@@ -379,12 +410,14 @@ func (cr *streamReader) run() {
 func (cr *streamReader) decodeLoop(rc io.ReadCloser, t streamType) error {
 	var dec decoder
 	cr.mu.Lock()
+
 	switch t {
 	case streamTypeMessage:
 		dec = &messageDecoder{r: rc}
 	default:
 		cr.lg.Panic("unknown stream type", zap.String("type", t.String()))
 	}
+
 	select {
 	case <-cr.ctx.Done():
 		cr.mu.Unlock()
@@ -395,6 +428,7 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser, t streamType) error {
 	default:
 		cr.closer = rc
 	}
+
 	cr.mu.Unlock()
 
 	// gofail: labelRaftDropHeartbeat:
@@ -419,11 +453,12 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser, t streamType) error {
 			// raft is not interested in link layer
 			// heartbeat message, so we should ignore
 			// it.
+			// 忽略掉用于
 			continue
 		}
 
 		recvc := cr.recvc
-		if m.Type == raftproto.MsgProp {
+		if m.MsgType == raftproto.MessageType_MsgPropose {
 			recvc = cr.propc
 		}
 
@@ -462,7 +497,7 @@ func (cr *streamReader) stop() {
 }
 
 func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
-	u := cr.picker.pick()
+	u := cr.picker.pick() //获取对端节点暴露的一个url
 	uu := u
 	uu.Path = path.Join(t.endpoint(), cr.tr.LocalID.String())
 
