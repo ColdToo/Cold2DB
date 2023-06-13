@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/db"
+	"github.com/ColdToo/Cold2DB/domain"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	pioutil "go.etcd.io/etcd/pkg/ioutil"
@@ -82,6 +83,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	limitedr := pioutil.NewLimitedBufferReader(r.Body, connReadLimitByte)
 	b, err := ioutil.ReadAll(limitedr)
 	if err != nil {
+		domain.Logger.Warn("")
 		h.lg.Warn(
 			"failed to read Raft message",
 			zap.String("local-member-id", h.localID.String()),

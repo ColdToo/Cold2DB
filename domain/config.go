@@ -1,0 +1,37 @@
+package domain
+
+import (
+	"fmt"
+	"github.com/fsnotify/fsnotify"
+	"github.com/spf13/viper"
+)
+
+type RaftConfig struct {
+	ZapConf *ZapConfig
+}
+
+func InitViper() *viper.Viper {
+	defaultConfigPath := "/bin/config.yaml"
+	v := viper.New()
+	v.SetConfigFile(defaultConfigPath)
+	v.SetConfigType("yaml")
+	err := v.ReadInConfig()
+	if err != nil {
+		panic(fmt.Errorf("Fatal error config file: %s \n", err))
+	}
+
+	if err = v.Unmarshal(&RaftConfig{}); err != nil {
+		fmt.Println(err)
+	}
+
+	//watch config
+	v.WatchConfig()
+	v.OnConfigChange(func(e fsnotify.Event) {
+		fmt.Println("config file changed:", e.Name)
+		if err = v.Unmarshal(&RaftConfig{}); err != nil {
+			fmt.Println(err)
+		}
+	})
+
+	return v
+}
