@@ -35,61 +35,94 @@ func NewZap() (logger *zap.Logger) {
 	return logger
 }
 
+func (l *Logger) Debug(msg string) *Fields {
+	return newFields(msg, l.zap)
+}
+
+func (l *Logger) Info(msg string) *Fields {
+	return newFields(msg, l.zap)
+}
+
+func (l *Logger) Warn(msg string) *Fields {
+	return newFields(msg, l.zap)
+}
+
+func (l *Logger) Error(msg string) *Fields {
+	return newFields(msg, l.zap)
+}
+
+func (l *Logger) Panic(msg string) *Fields {
+	return newFields(msg, l.zap)
+}
+
+func (l *Logger) Fatal(msg string) *Fields {
+	return newFields(msg, l.zap)
+}
+
+func (l *Logger) checkNeedRecord(msg string) bool {
+	// todo 通过判断日志等级选择是否要打印此次日志
+	return true
+}
+
 type Fields struct {
+	Level  zapcore.Level
+	zap    *zap.Logger
 	msg    string
-	fields []*zapcore.Field
+	fields []zapcore.Field
 }
 
-func (l Logger) Debug(msg string) *Fields {
-	//todo 需不需要打印？做一层优化fields字段都可以不用打印
-	fields := new(Fields)
+func newFields(msg string, l *zap.Logger) (fields *Fields) {
+	// TODO 从 sync pool里面复用
 	fields.msg = msg
+	fields.zap = l
 	return fields
 }
 
-func (l Logger) Info(msg string) *Fields {
-
+func (f *Fields) Str(key string, val string) *Fields {
+	// key val 存入field
+	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.StringType, String: val})
+	return f
 }
 
-func (l Logger) Warn(msg string) *Fields {
-	//todo 需不需要打印？做一层优化fields字段都可以不用打印
-	fields := new(Fields)
-	fields.msg = msg
-	return fields
+func (f *Fields) Int(key string, val int) *Fields {
+	// key val 存入field
+	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.Int32Type, Integer: int64(val)})
+	return f
 }
 
-func (l Logger) Error(msg string) *Fields {
+func (f *Fields) Err(key string, err error) *Fields {
+	if err == nil {
+		return f
+	}
 
+	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.ErrorType, Interface: err})
+	return f
 }
 
-func (l Logger) Panic(msg string) *Fields {
-
+func (f *Fields) Bool(key string, val bool) *Fields {
+	var ival int64
+	if val {
+		ival = 1
+	}
+	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.ErrorType, Integer: ival})
+	return f
 }
 
-func (l Logger) Fatal(msg string) *Fields {
-
-}
-
-func (f Fields) Str(key string, val string) *Fields {
-	field := new(zapcore.Field)
-	f.fields = append(f.fields, field)
-	return Fields{}
-}
-
-func (f Fields) Int(key string, val int) *Fields {
-	field := new(zapcore.Field)
-	f.fields = append(f.fields, field)
-	return Fields{}
-}
-
-func (f Fields) Err(key string, val error) *Fields {
-	field := new(zapcore.Field)
-	f.fields = append(f.fields, field)
-	return Fields{}
-}
-
-func (f Fields) Record() {
-
+func (f *Fields) Record() {
+	switch f.Level {
+	case zapcore.DebugLevel:
+		f.zap.Debug(f.msg, f.fields...)
+	case zapcore.InfoLevel:
+		f.zap.Info(f.msg, f.fields...)
+	case zapcore.WarnLevel:
+		f.zap.Warn(f.msg, f.fields...)
+	case zapcore.ErrorLevel:
+		f.zap.Error(f.msg, f.fields...)
+	case zapcore.PanicLevel:
+		f.zap.Panic(f.msg, f.fields...)
+	case zapcore.FatalLevel:
+		f.zap.Fatal(f.msg, f.fields...)
+	}
 }
 
 type ZapConfig struct {

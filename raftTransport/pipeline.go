@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/ColdToo/Cold2DB/domain"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"io/ioutil"
@@ -55,10 +56,12 @@ func (p *pipeline) start() {
 		go p.handle()
 	}
 
+	domain.Log.Info("PRINTF").Int("ID",1).Record()
 	p.tr.Logger.Info(
 		"started HTTP pipelining with remote peer",
 		zap.String("local-member-id", p.tr.LocalID.String()),
 		zap.String("remote-peer-id", p.peerID.String()),
+		zap.Bool()
 	)
 
 }
