@@ -14,6 +14,27 @@ type Logger struct {
 	zap *zap.Logger
 }
 
+func NewLog() *Logger {
+	Zap := NewZap()
+	return &Logger{zap: Zap}
+}
+
+func NewZap() (logger *zap.Logger) {
+	if ok, _ := utils.PathExists(RaftConf.ZapConf.Director); !ok { // 判断是否有Director文件夹
+		fmt.Printf("create %v directory\n", RaftConf.ZapConf.Director)
+		_ = os.Mkdir(RaftConf.ZapConf.Director, os.ModePerm)
+	}
+
+	cores := Zap.GetZapCores()
+	logger = zap.New(zapcore.NewTee(cores...))
+
+	if RaftConf.ZapConf.ShowLine {
+		logger = logger.WithOptions(zap.AddCaller())
+	}
+
+	return logger
+}
+
 type Fields struct {
 	msg    string
 	fields []*zapcore.Field
@@ -49,19 +70,19 @@ func (l Logger) Fatal(msg string) *Fields {
 
 }
 
-func (f Fields) Str(key string, val string) Fields {
+func (f Fields) Str(key string, val string) *Fields {
 	field := new(zapcore.Field)
 	f.fields = append(f.fields, field)
 	return Fields{}
 }
 
-func (f Fields) Int(key string, val int) Fields {
+func (f Fields) Int(key string, val int) *Fields {
 	field := new(zapcore.Field)
 	f.fields = append(f.fields, field)
 	return Fields{}
 }
 
-func (f Fields) Err(key string, val error) Fields {
+func (f Fields) Err(key string, val error) *Fields {
 	field := new(zapcore.Field)
 	f.fields = append(f.fields, field)
 	return Fields{}
@@ -69,27 +90,6 @@ func (f Fields) Err(key string, val error) Fields {
 
 func (f Fields) Record() {
 
-}
-
-func NewLog() *Logger {
-	Zap := NewZap()
-	return &Logger{zap: Zap}
-}
-
-func NewZap() (logger *zap.Logger) {
-	if ok, _ := utils.PathExists(RaftConf.ZapConf.Director); !ok { // 判断是否有Director文件夹
-		fmt.Printf("create %v directory\n", RaftConf.ZapConf.Director)
-		_ = os.Mkdir(RaftConf.ZapConf.Director, os.ModePerm)
-	}
-
-	cores := Zap.GetZapCores()
-	logger = zap.New(zapcore.NewTee(cores...))
-
-	if RaftConf.ZapConf.ShowLine {
-		logger = logger.WithOptions(zap.AddCaller())
-	}
-
-	return logger
 }
 
 type ZapConfig struct {
