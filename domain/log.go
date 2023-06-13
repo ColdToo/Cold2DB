@@ -19,28 +19,33 @@ type Fields struct {
 	fields []*zapcore.Field
 }
 
-func (l Logger) Warn(msg string) *Fields {
+func (l Logger) Debug(msg string) *Fields {
+	//todo 需不需要打印？做一层优化fields字段都可以不用打印
 	fields := new(Fields)
 	fields.msg = msg
 	return fields
 }
 
-func (l Logger) Debug(msg string) Fields {
-}
-
-func (l Logger) Info(msg string) Fields {
+func (l Logger) Info(msg string) *Fields {
 
 }
 
-func (l Logger) Error(msg string) Fields {
+func (l Logger) Warn(msg string) *Fields {
+	//todo 需不需要打印？做一层优化fields字段都可以不用打印
+	fields := new(Fields)
+	fields.msg = msg
+	return fields
+}
+
+func (l Logger) Error(msg string) *Fields {
 
 }
 
-func (l Logger) Panic(msg string) Fields {
+func (l Logger) Panic(msg string) *Fields {
 
 }
 
-func (l Logger) Fatal(msg string) Fields {
+func (l Logger) Fatal(msg string) *Fields {
 
 }
 
@@ -66,9 +71,9 @@ func (f Fields) Record() {
 
 }
 
-func NewLog() *Log {
+func NewLog() *Logger {
 	Zap := NewZap()
-	return &Log{zap: Zap}
+	return &Logger{zap: Zap}
 }
 
 func NewZap() (logger *zap.Logger) {
