@@ -68,22 +68,22 @@ func (l *Logger) checkNeedRecord() bool {
 }
 
 type Fields struct {
-	Level  zapcore.Level
+	level  zapcore.Level
 	zap    *zap.Logger
 	msg    string
 	fields []zapcore.Field
-	Skip   bool
+	skip   bool
 }
 
 func newFields(msg string, l *zap.Logger, skip bool) (fields *Fields) {
 	fields.msg = msg
 	fields.zap = l
-	fields.Skip = skip
+	fields.skip = skip
 	return fields
 }
 
 func (f *Fields) Str(key string, val string) *Fields {
-	if f.Skip {
+	if f.skip {
 		return f
 	}
 
@@ -92,7 +92,7 @@ func (f *Fields) Str(key string, val string) *Fields {
 }
 
 func (f *Fields) Int(key string, val int) *Fields {
-	if f.Skip {
+	if f.skip {
 		return f
 	}
 
@@ -101,7 +101,7 @@ func (f *Fields) Int(key string, val int) *Fields {
 }
 
 func (f *Fields) Err(key string, err error) *Fields {
-	if err == nil || f.Skip {
+	if err == nil || f.skip {
 		return f
 	}
 
@@ -110,7 +110,7 @@ func (f *Fields) Err(key string, err error) *Fields {
 }
 
 func (f *Fields) Bool(key string, val bool) *Fields {
-	if f.Skip {
+	if f.skip {
 		return f
 	}
 	var ival int64
@@ -122,10 +122,10 @@ func (f *Fields) Bool(key string, val bool) *Fields {
 }
 
 func (f *Fields) Record() {
-	if f.Skip {
+	if f.skip {
 		return
 	}
-	switch f.Level {
+	switch f.level {
 	case zapcore.DebugLevel:
 		f.zap.Debug(f.msg, f.fields...)
 	case zapcore.InfoLevel:

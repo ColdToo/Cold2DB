@@ -3,6 +3,7 @@ package raftTransport
 import (
 	"context"
 	"github.com/ColdToo/Cold2DB/db"
+	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/raftTransport/transport"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
@@ -162,15 +163,12 @@ func (t *Transport) Send(msgs []raftproto.Message) {
 			continue
 		}
 
-		if t.Logger != nil {
-			t.Logger.Debug(
-				"ignored message send request; unknown remote peer target",
-				zap.String("type", m.Type.String()),
-				zap.String("unknown-target-peer-id", to.String()),
-			)
-		} else {
-			plog.Debugf("ignored message %s (sent to unknown peer %s)", m.Type, to)
-		}
+		domain.Log.Warn()
+		t.Logger.Debug(
+			"ignored message send request; unknown remote peer target",
+			zap.String("type", m.Type.String()),
+			zap.String("unknown-target-peer-id", to.String()),
+		)
 	}
 }
 
@@ -329,6 +327,7 @@ func (t *Transport) SendSnapshot(m snap.Message) {
 		m.CloseWithError(errMemberNotFound)
 		return
 	}
+	domain.Log.Fatal().Str().Record()
 	p.sendSnap(m)
 }
 
