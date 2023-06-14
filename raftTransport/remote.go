@@ -15,6 +15,7 @@
 package raftTransport
 
 import (
+	"github.com/ColdToo/Cold2DB/domain"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"go.uber.org/zap"
@@ -65,6 +66,10 @@ func (g *remote) send(m raftproto.Message) {
 			)
 
 		} else {
+			domain.Log.Warn("dropped Raft message since sending buffer is full (overloaded network)").
+				Str("message-type", m.Type.String()).
+				Str("local-member-id", g.localID.String()).Str()
+
 			g.lg.Warn(
 				"dropped Raft message since sending buffer is full (overloaded network)",
 				zap.String("message-type", m.Type.String()),

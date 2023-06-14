@@ -36,30 +36,33 @@ func NewZap() (logger *zap.Logger) {
 }
 
 func (l *Logger) Debug(msg string) *Fields {
-	return newFields(msg, l.zap)
+	if !l.zap.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, l.zap, false)
 }
 
 func (l *Logger) Info(msg string) *Fields {
-	return newFields(msg, l.zap)
+	return newFields(msg, l.zap, false)
 }
 
 func (l *Logger) Warn(msg string) *Fields {
-	return newFields(msg, l.zap)
+	return newFields(msg, l.zap, false)
 }
 
 func (l *Logger) Error(msg string) *Fields {
-	return newFields(msg, l.zap)
+	return newFields(msg, l.zap, false)
 }
 
 func (l *Logger) Panic(msg string) *Fields {
-	return newFields(msg, l.zap)
+	return newFields(msg, l.zap, false)
 }
 
 func (l *Logger) Fatal(msg string) *Fields {
-	return newFields(msg, l.zap)
+	return newFields(msg, l.zap, false)
 }
 
-func (l *Logger) checkNeedRecord(msg string) bool {
+func (l *Logger) checkNeedRecord() bool {
 	// todo 通过判断日志等级选择是否要打印此次日志
 	return true
 }
@@ -69,29 +72,36 @@ type Fields struct {
 	zap    *zap.Logger
 	msg    string
 	fields []zapcore.Field
+	Skip   bool
 }
 
-func newFields(msg string, l *zap.Logger) (fields *Fields) {
-	// TODO 从 sync pool里面复用
+func newFields(msg string, l *zap.Logger, skip bool) (fields *Fields) {
 	fields.msg = msg
 	fields.zap = l
+	fields.Skip = skip
 	return fields
 }
 
 func (f *Fields) Str(key string, val string) *Fields {
-	// key val 存入field
+	if f.Skip {
+		return f
+	}
+
 	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.StringType, String: val})
 	return f
 }
 
 func (f *Fields) Int(key string, val int) *Fields {
-	// key val 存入field
+	if f.Skip {
+		return f
+	}
+
 	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.Int32Type, Integer: int64(val)})
 	return f
 }
 
 func (f *Fields) Err(key string, err error) *Fields {
-	if err == nil {
+	if err == nil || f.Skip {
 		return f
 	}
 
@@ -100,6 +110,9 @@ func (f *Fields) Err(key string, err error) *Fields {
 }
 
 func (f *Fields) Bool(key string, val bool) *Fields {
+	if f.Skip {
+		return f
+	}
 	var ival int64
 	if val {
 		ival = 1
@@ -109,6 +122,9 @@ func (f *Fields) Bool(key string, val bool) *Fields {
 }
 
 func (f *Fields) Record() {
+	if f.Skip {
+		return
+	}
 	switch f.Level {
 	case zapcore.DebugLevel:
 		f.zap.Debug(f.msg, f.fields...)
@@ -182,7 +198,6 @@ var Zap = new(ZapInfo)
 type ZapInfo struct{}
 
 // GetEncoder 获取 zapcore.Encoder
-// Author [SliverHorn](https://github.com/SliverHorn)
 func (z *ZapInfo) GetEncoder() zapcore.Encoder {
 	if RaftConf.ZapConf.Format == "json" {
 		return zapcore.NewJSONEncoder(z.GetEncoderConfig())
@@ -191,7 +206,6 @@ func (z *ZapInfo) GetEncoder() zapcore.Encoder {
 }
 
 // GetEncoderConfig 获取zapcore.EncoderConfig
-// Author [SliverHorn](https://github.com/SliverHorn)
 func (z *ZapInfo) GetEncoderConfig() zapcore.EncoderConfig {
 	return zapcore.EncoderConfig{
 		MessageKey:     "message",
@@ -209,7 +223,6 @@ func (z *ZapInfo) GetEncoderConfig() zapcore.EncoderConfig {
 }
 
 // GetEncoderCore 获取Encoder的 zapcore.Core
-// Author [SliverHorn](https://github.com/SliverHorn)
 func (z *ZapInfo) GetEncoderCore(l zapcore.Level, level zap.LevelEnablerFunc) zapcore.Core {
 	writer, err := FileRotatelogs.GetWriteSyncer(l.String()) // 使用file-rotatelogs进行日志分割
 	if err != nil {
@@ -221,13 +234,11 @@ func (z *ZapInfo) GetEncoderCore(l zapcore.Level, level zap.LevelEnablerFunc) za
 }
 
 // CustomTimeEncoder 自定义日志输出时间格式
-// Author [SliverHorn](https://github.com/SliverHorn)
 func (z *ZapInfo) CustomTimeEncoder(t time.Time, encoder zapcore.PrimitiveArrayEncoder) {
 	encoder.AppendString(RaftConf.ZapConf.Prefix + t.Format("2006/01/02 - 15:04:05.000"))
 }
 
 // GetZapCores 根据配置文件的Level获取 []zapcore.Core
-// Author [SliverHorn](https://github.com/SliverHorn)
 func (z *ZapInfo) GetZapCores() []zapcore.Core {
 	cores := make([]zapcore.Core, 0, 7)
 	for level := RaftConf.ZapConf.TransportLevel(); level <= zapcore.FatalLevel; level++ {
@@ -237,7 +248,6 @@ func (z *ZapInfo) GetZapCores() []zapcore.Core {
 }
 
 // GetLevelPriority 根据 zapcore.Level 获取 zap.LevelEnablerFunc
-// Author [SliverHorn](https://github.com/SliverHorn)
 func (z *ZapInfo) GetLevelPriority(level zapcore.Level) zap.LevelEnablerFunc {
 	switch level {
 	case zapcore.DebugLevel:
