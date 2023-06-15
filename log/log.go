@@ -19,7 +19,7 @@ func InitLog() {
 		_ = os.Mkdir(domain.RaftConf.ZapConf.Director, os.ModePerm)
 	}
 
-	cores := Zap.GetZapCores()
+	cores := domain.RaftConf.ZapConf.GetZapCores()
 	log = zap.New(zapcore.NewTee(cores...))
 
 	if domain.RaftConf.ZapConf.ShowLine {
@@ -27,36 +27,46 @@ func InitLog() {
 	}
 }
 
-func (l *Logger) Debug(msg string) *Fields {
-	if !l.zap.Core().Enabled(zapcore.DebugLevel) {
+func Debug(msg string) *Fields {
+	if !log.Core().Enabled(zapcore.DebugLevel) {
 		return newFields("", nil, true)
 	}
-	return newFields(msg, l.zap, false)
+	return newFields(msg, log, false)
 }
 
-func (l *Logger) Info(msg string) *Fields {
-	return newFields(msg, l.zap, false)
+func Info(msg string) *Fields {
+	if !log.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, log, false)
 }
 
-func (l *Logger) Warn(msg string) *Fields {
-	return newFields(msg, l.zap, false)
+func Warn(msg string) *Fields {
+	if !log.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, log, false)
 }
 
-func (l *Logger) Error(msg string) *Fields {
-	return newFields(msg, l.zap, false)
+func Error(msg string) *Fields {
+	if !log.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, log, false)
 }
 
-func (l *Logger) Panic(msg string) *Fields {
-	return newFields(msg, l.zap, false)
+func Panic(msg string) *Fields {
+	if !log.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, log, false)
 }
 
-func (l *Logger) Fatal(msg string) *Fields {
-	return newFields(msg, l.zap, false)
-}
-
-func (l *Logger) checkNeedRecord() bool {
-	// todo 通过判断日志等级选择是否要打印此次日志
-	return true
+func Fatal(msg string) *Fields {
+	if !log.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, log, false)
 }
 
 type Fields struct {
@@ -185,29 +195,25 @@ func (z *ZapConfig) TransportLevel() zapcore.Level {
 	}
 }
 
-var Zap = new(ZapInfo)
-
-type ZapInfo struct{}
-
 // GetEncoder 获取 zapcore.Encoder
-func (z *ZapInfo) GetEncoder() zapcore.Encoder {
-	if RaftConf.ZapConf.Format == "json" {
+func (z *ZapConfig) GetEncoder() zapcore.Encoder {
+	if domain.RaftConf.ZapConf.Format == "json" {
 		return zapcore.NewJSONEncoder(z.GetEncoderConfig())
 	}
 	return zapcore.NewConsoleEncoder(z.GetEncoderConfig())
 }
 
 // GetEncoderConfig 获取zapcore.EncoderConfig
-func (z *ZapInfo) GetEncoderConfig() zapcore.EncoderConfig {
+func (z *ZapConfig) GetEncoderConfig() zapcore.EncoderConfig {
 	return zapcore.EncoderConfig{
 		MessageKey:     "message",
 		LevelKey:       "level",
 		TimeKey:        "time",
 		NameKey:        "logger",
 		CallerKey:      "caller",
-		StacktraceKey:  RaftConf.ZapConf.StacktraceKey,
+		StacktraceKey:  domain.RaftConf.ZapConf.StacktraceKey,
 		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    RaftConf.ZapConf.ZapEncodeLevel(),
+		EncodeLevel:    domain.RaftConf.ZapConf.ZapEncodeLevel(),
 		EncodeTime:     z.CustomTimeEncoder,
 		EncodeDuration: zapcore.SecondsDurationEncoder,
 		EncodeCaller:   zapcore.FullCallerEncoder,
@@ -215,7 +221,7 @@ func (z *ZapInfo) GetEncoderConfig() zapcore.EncoderConfig {
 }
 
 // GetEncoderCore 获取Encoder的 zapcore.Core
-func (z *ZapInfo) GetEncoderCore(l zapcore.Level, level zap.LevelEnablerFunc) zapcore.Core {
+func (z *ZapConfig) GetEncoderCore(l zapcore.Level, level zap.LevelEnablerFunc) zapcore.Core {
 	writer, err := FileRotatelogs.GetWriteSyncer(l.String()) // 使用file-rotatelogs进行日志分割
 	if err != nil {
 		fmt.Printf("Get Write Syncer Failed err:%v", err.Error())
@@ -226,21 +232,21 @@ func (z *ZapInfo) GetEncoderCore(l zapcore.Level, level zap.LevelEnablerFunc) za
 }
 
 // CustomTimeEncoder 自定义日志输出时间格式
-func (z *ZapInfo) CustomTimeEncoder(t time.Time, encoder zapcore.PrimitiveArrayEncoder) {
-	encoder.AppendString(RaftConf.ZapConf.Prefix + t.Format("2006/01/02 - 15:04:05.000"))
+func (z *ZapConfig) CustomTimeEncoder(t time.Time, encoder zapcore.PrimitiveArrayEncoder) {
+	encoder.AppendString(domain.RaftConf.ZapConf.Prefix + t.Format("2006/01/02 - 15:04:05.000"))
 }
 
 // GetZapCores 根据配置文件的Level获取 []zapcore.Core
-func (z *ZapInfo) GetZapCores() []zapcore.Core {
+func (z *ZapConfig) GetZapCores() []zapcore.Core {
 	cores := make([]zapcore.Core, 0, 7)
-	for level := RaftConf.ZapConf.TransportLevel(); level <= zapcore.FatalLevel; level++ {
+	for level := domain.RaftConf.ZapConf.TransportLevel(); level <= zapcore.FatalLevel; level++ {
 		cores = append(cores, z.GetEncoderCore(level, z.GetLevelPriority(level)))
 	}
 	return cores
 }
 
 // GetLevelPriority 根据 zapcore.Level 获取 zap.LevelEnablerFunc
-func (z *ZapInfo) GetLevelPriority(level zapcore.Level) zap.LevelEnablerFunc {
+func (z *ZapConfig) GetLevelPriority(level zapcore.Level) zap.LevelEnablerFunc {
 	switch level {
 	case zapcore.DebugLevel:
 		return func(level zapcore.Level) bool { // 调试级别
@@ -275,46 +281,4 @@ func (z *ZapInfo) GetLevelPriority(level zapcore.Level) zap.LevelEnablerFunc {
 			return level == zap.DebugLevel
 		}
 	}
-}
-
-func Debug(msg string) *Fields {
-	if !log.zap.Core().Enabled(zapcore.DebugLevel) {
-		return newFields("", nil, true)
-	}
-	return newFields(msg, log.zap, false)
-}
-
-func Info(msg string) *Fields {
-	if !log.zap.Core().Enabled(zapcore.DebugLevel) {
-		return newFields("", nil, true)
-	}
-	return newFields(msg, log.zap, false)
-}
-
-func Warn(msg string) *Fields {
-	if !log.zap.Core().Enabled(zapcore.DebugLevel) {
-		return newFields("", nil, true)
-	}
-	return newFields(msg, log.zap, false)
-}
-
-func Error(msg string) *Fields {
-	if !log.zap.Core().Enabled(zapcore.DebugLevel) {
-		return newFields("", nil, true)
-	}
-	return newFields(msg, log.zap, false)
-}
-
-func Panic(msg string) *Fields {
-	if !log.zap.Core().Enabled(zapcore.DebugLevel) {
-		return newFields("", nil, true)
-	}
-	return newFields(msg, log.zap, false)
-}
-
-func Fatal(msg string) *Fields {
-	if !log.zap.Core().Enabled(zapcore.DebugLevel) {
-		return newFields("", nil, true)
-	}
-	return newFields(msg, log.zap, false)
 }
