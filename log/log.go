@@ -1,7 +1,8 @@
-package domain
+package log
 
 import (
 	"fmt"
+	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/utils"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -10,29 +11,20 @@ import (
 	"time"
 )
 
-type Logger struct {
-	zap *zap.Logger
-}
+var log *zap.Logger
 
-func NewLog() *Logger {
-	Zap := NewZap()
-	return &Logger{zap: Zap}
-}
-
-func NewZap() (logger *zap.Logger) {
-	if ok, _ := utils.PathExists(RaftConf.ZapConf.Director); !ok { // 判断是否有Director文件夹
-		fmt.Printf("create %v directory\n", RaftConf.ZapConf.Director)
-		_ = os.Mkdir(RaftConf.ZapConf.Director, os.ModePerm)
+func InitLog() {
+	if ok, _ := utils.PathExists(domain.RaftConf.ZapConf.Director); !ok { // 判断是否有Director文件夹
+		fmt.Printf("create %v directory\n", domain.RaftConf.ZapConf.Director)
+		_ = os.Mkdir(domain.RaftConf.ZapConf.Director, os.ModePerm)
 	}
 
 	cores := Zap.GetZapCores()
-	logger = zap.New(zapcore.NewTee(cores...))
+	log = zap.New(zapcore.NewTee(cores...))
 
-	if RaftConf.ZapConf.ShowLine {
-		logger = logger.WithOptions(zap.AddCaller())
+	if domain.RaftConf.ZapConf.ShowLine {
+		log = log.WithOptions(zap.AddCaller())
 	}
-
-	return logger
 }
 
 func (l *Logger) Debug(msg string) *Fields {
@@ -283,4 +275,46 @@ func (z *ZapInfo) GetLevelPriority(level zapcore.Level) zap.LevelEnablerFunc {
 			return level == zap.DebugLevel
 		}
 	}
+}
+
+func Debug(msg string) *Fields {
+	if !log.zap.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, log.zap, false)
+}
+
+func Info(msg string) *Fields {
+	if !log.zap.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, log.zap, false)
+}
+
+func Warn(msg string) *Fields {
+	if !log.zap.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, log.zap, false)
+}
+
+func Error(msg string) *Fields {
+	if !log.zap.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, log.zap, false)
+}
+
+func Panic(msg string) *Fields {
+	if !log.zap.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, log.zap, false)
+}
+
+func Fatal(msg string) *Fields {
+	if !log.zap.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, log.zap, false)
 }

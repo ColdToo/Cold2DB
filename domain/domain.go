@@ -6,11 +6,10 @@ import (
 
 var (
 	Viper    *viper.Viper
-	Log      *Logger
 	RaftConf *RaftConfig
 )
 
 func Init() {
 	Viper = InitViper()
-	Log = NewLog()
+	InitLog()
 }

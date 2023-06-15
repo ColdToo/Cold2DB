@@ -2,12 +2,13 @@ package domain
 
 import (
 	"fmt"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 )
 
 type RaftConfig struct {
-	ZapConf *ZapConfig
+	ZapConf *log.ZapConfig
 }
 
 func InitViper() *viper.Viper {
@@ -34,4 +35,8 @@ func InitViper() *viper.Viper {
 	})
 
 	return v
+}
+
+func InitLog() {
+
 }
