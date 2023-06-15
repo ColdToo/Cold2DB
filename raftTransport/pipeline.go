@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/ColdToo/Cold2DB/domain"
+	"github.com/ColdToo/Cold2DB/code"
+	"github.com/ColdToo/Cold2DB/log"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"io/ioutil"
@@ -32,10 +33,10 @@ var errStopped = errors.New("stopped")
 
 // pipeline主要用于发送快照
 type pipeline struct {
-	peerID types.ID
-	tr     *Transport
-	picker *urlPicker
-	status *peerStatus
+	peerID     types.ID
+	tr         *Transport
+	picker     *urlPicker
+	peerStatus *peerStatus
 
 	//向raft报告发送快照失败或者成功
 	raft Raft
@@ -44,25 +45,19 @@ type pipeline struct {
 	msgc chan *raftproto.Message
 
 	wg     sync.WaitGroup
-	stopc  chan struct{}
-	errorc chan error
+	stopC  chan struct{}
+	errorC chan error
 }
 
 func (p *pipeline) start() {
-	p.stopc = make(chan struct{})
+	p.stopC = make(chan struct{})
 	p.msgc = make(chan *raftproto.Message, pipelineBufSize)
 	p.wg.Add(connPerPipeline)
 	for i := 0; i < connPerPipeline; i++ {
 		go p.handle()
 	}
 
-	domain.Log.Info("PRINTF").Int("ID",1).Record()
-	p.tr.Logger.Info(
-		"started HTTP pipelining with remote peer",
-		zap.String("local-member-id", p.tr.LocalID.String()),
-		zap.String("remote-peer-id", p.peerID.String()),
-		zap.Bool()
-	)
+	log.Info("started HTTP pipelining with remote peer").Str(code.LocalMemberId, p.tr.LocalID.Str()).Str(code.RemotePeerId, p.peerID.Str()).Record()
 
 }
 

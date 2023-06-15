@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ColdToo/Cold2DB/code"
+	"github.com/ColdToo/Cold2DB/log"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"sync"
@@ -62,8 +64,6 @@ type Peer interface {
 // stream是一个初始化的长轮询连接，它始终打开以传输消息。除了一般的stream之外，peer还有一个优化的stream用于发送msgApp，因为msgApp占所有消息的大部分。
 // 只有Raft leader使用优化的stream将msgApp发送到远程follower节点。pipeline是一系列向远程发送HTTP请求的HTTP客户端。仅在未建立stream时使用。
 type peer struct {
-	lg *zap.Logger
-
 	localID types.ID
 	// id of the remote raft peer node
 	remoteID types.ID
@@ -95,39 +95,36 @@ type peer struct {
 }
 
 func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
-	status := newPeerStatus(t.Logger, t.LocalID, peerID)
+	peerStatus := newPeerStatus(t.LocalID, peerID)
 	picker := newURLPicker(urls)
-	errorc := t.ErrorC
+	errorC := t.ErrorC
 	r := t.Raft
 
-	///
 	pipeline := &pipeline{
-		peerID: peerID,
-		tr:     t,
-		picker: picker,
-		status: status,
-		raft:   r,
-		errorc: errorc,
+		peerID:     peerID,
+		tr:         t,
+		picker:     picker,
+		peerStatus: peerStatus,
+		raft:       r,
+		errorC:     errorC,
 	}
 
 	// pipeline 用于将快照数据发送到远端本体
 	pipeline.start()
-	////
 
 	// 发送数据到远端本体
-	streamWriter := startStreamWriter(t.Logger, t.LocalID, peerID, status, r)
+	streamWriter := startStreamWriter(t.LocalID, peerID, peerStatus, r)
 
 	// 用于接收其他节点发送过来的数据
 	p := &peer{
-		lg:         t.Logger,
 		localID:    t.LocalID,
 		remoteID:   peerID,
 		raft:       r,
-		status:     status,
+		status:     peerStatus,
 		picker:     picker,
 		writer:     streamWriter,
 		pipeline:   pipeline,
-		snapSender: newSnapshotSender(t, picker, peerID, status),
+		snapSender: newSnapshotSender(t, picker, peerID, peerStatus),
 
 		recvc: make(chan *raftproto.Message, recvBufSize),
 		propc: make(chan *raftproto.Message, maxPendingProposals),
@@ -142,7 +139,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 			select {
 			case mm := <-p.recvc:
 				if err := r.Process(ctx, mm); err != nil {
-					t.Logger.Warn("failed to process Raft message", zap.Error(err))
+					log.Warn("failed to process Raft message").Err(code.MessageProcErr, err)
 				}
 			case <-p.stopc:
 				return
@@ -156,7 +153,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 			select {
 			case mm := <-p.propc:
 				if err := r.Process(ctx, mm); err != nil {
-					t.Logger.Warn("failed to process Raft message", zap.Error(err))
+					log.Warn("failed to process Raft message").Err(code.MessageProcErr, err)
 				}
 			case <-p.stopc:
 				return
@@ -165,12 +162,11 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 	}()
 
 	p.msgAppReader = &streamReader{
-		lg:         t.Logger,
 		peerID:     peerID,
 		streamType: streamTypeMessage,
 		tr:         t,
 		picker:     picker,
-		status:     status,
+		status:     peerStatus,
 		recvc:      p.recvc,
 		propc:      p.propc,
 	}
@@ -296,7 +292,6 @@ type failureType struct {
 }
 
 type peerStatus struct {
-	lg      *zap.Logger
 	localId types.ID
 	id      types.ID
 	mu      sync.Mutex // protect variables below
@@ -304,8 +299,8 @@ type peerStatus struct {
 	since   time.Time
 }
 
-func newPeerStatus(lg *zap.Logger, local, id types.ID) *peerStatus {
-	return &peerStatus{lg: lg, localId: local, id: id}
+func newPeerStatus(local, id types.ID) *peerStatus {
+	return &peerStatus{localId: local, id: id}
 }
 
 // 变更为在线状态

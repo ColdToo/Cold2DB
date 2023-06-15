@@ -2,8 +2,10 @@ package raftTransport
 
 import (
 	"context"
+	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/domain"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/raftTransport/transport"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
@@ -67,8 +69,6 @@ type Transporter interface {
 }
 
 type Transport struct {
-	Logger *zap.Logger
-
 	//DialTimeout是请求超时时间，而DialRetryFrequency定义了每个对等节点的重试频率限制，即每秒最多重试10次。
 	DialTimeout time.Duration
 
@@ -255,16 +255,11 @@ func (t *Transport) AddRemote(id types.ID, urlList []string) {
 func (t *Transport) AddPeer(id types.ID, urlList []string) {
 	urls, err := types.NewURLs(urlList)
 	if err != nil {
-		t.Logger.Panic("failed NewURLs", zap.Strings("urls", urlList), zap.Error(err))
+		log.Panic("failed NewURLs").Err("urls", err)
 	}
 
 	t.peers[id] = startPeer(t, urls, id)
-
-	t.Logger.Info(
-		"added remote peer",
-		zap.String("local-member-id", t.LocalID.String()),
-		zap.String("remote-peer-id", id.String()),
-		zap.Strings("remote-peer-urls", urlList))
+	log.Info("added remote peer").Str(code.LocalMemberId, t.LocalID.Str()).Str(code.RemotePeerId, id.Str()).Record()
 }
 
 func (t *Transport) RemovePeer(id types.ID) {

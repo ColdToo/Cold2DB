@@ -71,8 +71,6 @@ type outgoingConn struct {
 
 // streamWriter writes messages to the attached outgoingConn.
 type streamWriter struct {
-	lg *zap.Logger
-
 	localID types.ID
 	peerID  types.ID
 
@@ -91,9 +89,8 @@ type streamWriter struct {
 
 // startStreamWriter creates a streamWrite and starts a long running go-routine that accepts
 // messages and writes to the attached outgoing connection.
-func startStreamWriter(lg *zap.Logger, local, id types.ID, status *peerStatus, r Raft) *streamWriter {
+func startStreamWriter(local, id types.ID, status *peerStatus, r Raft) *streamWriter {
 	w := &streamWriter{
-		lg:      lg,
 		localID: local,
 		peerID:  id,
 		status:  status,

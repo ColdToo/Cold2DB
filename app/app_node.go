@@ -2,13 +2,14 @@ package main
 
 import (
 	"context"
+	"github.com/ColdToo/Cold2DB/code"
+	log "github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/raft"
 	"github.com/ColdToo/Cold2DB/raftTransport"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"github.com/ColdToo/Cold2DB/wal"
 	"go.uber.org/zap"
-	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -110,7 +111,6 @@ func (an *AppNode) replayWAL() *wal.WAL {
 func (an *AppNode) servePeerRaft() {
 	//Transport 实例，负责raft节点之间的网络通信服务
 	an.transport = &raftTransport.Transport{
-		Logger:    an.logger,
 		LocalID:   types.ID(an.localId),
 		ClusterID: 0x1000,
 		Raft:      an,
@@ -119,12 +119,13 @@ func (an *AppNode) servePeerRaft() {
 
 	err := an.transport.Initialize()
 	if err != nil {
+		log.Panic("initialize transport failed").Err(code.NodeInIErr, err).Record()
 		return
 	}
 
 	//raftexample --id 1 --cluster http://127.0.0.1:12379,http://127.0.0.1:22379,http://127.0.0.1:32379 --port 12380
 	for i := range an.peersUrl {
-		if i+1 != an.localId { //加入其他节点
+		if i+1 != an.localId {
 			an.transport.AddPeer(types.ID(i+1), []string{an.peersUrl[i]})
 		}
 	}

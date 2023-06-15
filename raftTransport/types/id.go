@@ -21,7 +21,7 @@ import "strconv"
 // base-16 string for input/output
 type ID uint64
 
-func (i ID) String() string {
+func (i ID) Str() string {
 	return strconv.FormatUint(uint64(i), 16)
 }
 

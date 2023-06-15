@@ -49,7 +49,7 @@ func Warn(msg string) *Fields {
 }
 
 func Error(msg string) *Fields {
-	if !log.Core().Enabled(zapcore.DebugLevel) {
+	if !log.Core().Enabled(zapcore.ErrorLevel) {
 		return newFields("", nil, true)
 	}
 	return newFields(msg, log, false)
@@ -90,6 +90,16 @@ func (f *Fields) Str(key string, val string) *Fields {
 	}
 
 	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.StringType, String: val})
+	return f
+}
+
+func (f *Fields) Strs(key string, val []string) *Fields {
+	if f.skip {
+		return f
+	}
+
+	zap.Array(key, stringArray(ss))
+	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.StringType, Interface: val})
 	return f
 }
 
