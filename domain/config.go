@@ -36,7 +36,3 @@ func InitViper() *viper.Viper {
 
 	return v
 }
-
-func InitLog() {
-
-}
