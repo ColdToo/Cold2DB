@@ -58,7 +58,6 @@ func (p *pipeline) start() {
 	}
 
 	log.Info("started HTTP pipelining with remote peer").Str(code.LocalMemberId, p.tr.LocalID.Str()).Str(code.RemotePeerId, p.peerID.Str()).Record()
-
 }
 
 func (p *pipeline) stop() {
@@ -80,19 +79,22 @@ func (p *pipeline) handle() {
 			err := p.post(pbutil.MustMarshal(m))
 
 			if err != nil {
-				p.status.deactivate(failureType{source: pipelineMsg, action: "write"}, err.Error())
+				p.peerStatus.deactivate(failureType{source: pipelineMsg, action: "write"}, err.Error())
 				p.raft.ReportUnreachable(m.To)
+
+				//todo pipeline不是只处理 snapshot？加这个isMsgSnap是不是画蛇添足
 				if isMsgSnap(m) {
-					p.raft.ReportSnapshot(m.To, raft.SnapshotFailure)
+					p.raft.ReportSnapshotStatus(m.To, raft.SnapshotFailure)
 				}
 				continue
 			}
-			p.status.activate()
+
+			p.peerStatus.activate()
 
 			if isMsgSnap(m) {
-				p.raft.ReportSnapshot(m.To, raft.SnapshotFinish)
+				p.raft.ReportSnapshotStatus(m.To, raft.SnapshotFinish)
 			}
-		case <-p.stopc:
+		case <-p.stopC:
 			return
 		}
 	}

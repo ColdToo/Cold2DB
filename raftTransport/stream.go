@@ -3,6 +3,8 @@ package raftTransport
 import (
 	"context"
 	"fmt"
+	"github.com/ColdToo/Cold2DB/code"
+	"github.com/ColdToo/Cold2DB/log"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"io"
@@ -108,11 +110,11 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r Raft) *streamWr
 func (cw *streamWriter) run() {
 	var (
 		msgc       chan *raftproto.Message
-		heartbeatc <-chan time.Time //定时器会定时向该通道发送信号，触发心跳消息的发送，该心跳消息与后台介绍的Raft的心跳消息有所不同，该心跳的主要目的是为了防止连接长时间不用断开的
+		heartbeatc <-chan time.Time // 定时器会定时向该通道发送信号，触发心跳消息的发送，该心跳消息与后台介绍的Raft的心跳消息有所不同，该心跳的主要目的是为了防止连接长时间不用断开的
 		t          streamType
-		enc        encoder      // 编码器，负责将消息序列化并写入连接的缓冲区中
-		flusher    http.Flusher //负责刷新底层连接，将数据真正的发送出去
-		batched    int          //当前flush了的字节数
+		enc        encoder      // 编码器接口，实际实现该接口的会负责将消息序列化并写入连接的缓冲区中
+		flusher    http.Flusher // 负责刷新底层连接，将缓冲区的数据发送出去
+		batched    int          // 统计未flush的批次
 	)
 
 	tickc := time.NewTicker(ConnReadTimeout / 3)
@@ -120,11 +122,8 @@ func (cw *streamWriter) run() {
 
 	var unflushed uint64 //为unflushed的字节数
 
-	cw.lg.Info(
-		"started stream writer with remote peer",
-		zap.String("local-member-id", cw.localID.String()),
-		zap.String("remote-peer-id", cw.peerID.String()),
-	)
+	log.Info("started stream writer with remote peer").Str(code.LocalMemberId, cw.localID.Str()).
+		Str(code.RemotePeerId, cw.peerID.Str()).Record()
 
 	for {
 		select {
@@ -144,12 +143,8 @@ func (cw *streamWriter) run() {
 
 			cw.close()
 
-			cw.lg.Warn(
-				"lost TCP streaming connection with remote peer",
-				zap.String("stream-writer-type", t.String()),
-				zap.String("local-member-id", cw.localID.String()),
-				zap.String("remote-peer-id", cw.peerID.String()),
-			)
+			log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalMemberId, cw.localID.Str()).
+				Str(code.RemotePeerId, cw.peerID.Str()).Record()
 
 			//将heartbeatc和msgc两个通道清空，后续就不会在发送心跳消息和其他类型的消息了
 			heartbeatc, msgc = nil, nil
@@ -159,6 +154,7 @@ func (cw *streamWriter) run() {
 			if err == nil {
 				unflushed += m.Size()
 
+				//todo 这是什么策略？
 				if len(msgc) == 0 || batched > streamBufSize/2 {
 					flusher.Flush()
 					unflushed = 0
@@ -173,12 +169,8 @@ func (cw *streamWriter) run() {
 			//异常情况处理
 			cw.status.deactivate(failureType{source: t.String(), action: "write"}, err.Error())
 			cw.close()
-			cw.lg.Warn(
-				"lost TCP streaming connection with remote peer",
-				zap.String("stream-writer-type", t.String()),
-				zap.String("local-member-id", cw.localID.String()),
-				zap.String("remote-peer-id", cw.peerID.String()),
-			)
+			log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalMemberId, cw.localID.Str()).
+				Str(code.RemotePeerId, cw.peerID.Str()).Record()
 			heartbeatc, msgc = nil, nil
 			cw.r.ReportUnreachable(m.To)
 
@@ -195,23 +187,15 @@ func (cw *streamWriter) run() {
 		case conn := <-cw.connc:
 			cw.mu.Lock()
 
-			//什么用途？
 			closed := cw.closeUnlocked()
 
 			//根据不同的消息类型获取不同编码器
 			t = conn.t
 			switch conn.t {
 			case streamTypeMessage:
-				enc = &messageEncoder{w: conn.Writer}
+				enc = &messageEncoderAndWriter{w: conn.Writer}
 			default:
 			}
-
-			cw.lg.Info(
-				"set message encoder",
-				zap.String("from", conn.localID.String()),
-				zap.String("to", conn.peerID.String()),
-				zap.String("stream-type", t.String()),
-			)
 
 			//获取底层连接的flusher
 			flusher = conn.Flusher
@@ -222,34 +206,21 @@ func (cw *streamWriter) run() {
 			cw.mu.Unlock()
 
 			if closed {
-				cw.lg.Warn(
-					"closed TCP streaming connection with remote peer",
-					zap.String("stream-writer-type", t.String()),
-					zap.String("local-member-id", cw.localID.String()),
-					zap.String("remote-peer-id", cw.peerID.String()),
-				)
+				log.Warn("closed TCP streaming connection with remote peer").Str(code.LocalMemberId, cw.localID.Str()).
+					Str(code.RemotePeerId, cw.peerID.Str()).Record()
 			}
-			cw.lg.Warn(
-				"established TCP streaming connection with remote peer",
-				zap.String("stream-writer-type", t.String()),
-				zap.String("local-member-id", cw.localID.String()),
-				zap.String("remote-peer-id", cw.peerID.String()),
-			)
+
+			log.Warn("established TCP streaming connection with remote peer").Str(code.LocalMemberId, cw.localID.Str()).
+				Str(code.RemotePeerId, cw.peerID.Str()).Record()
+
 			heartbeatc, msgc = tickc.C, cw.msgc
 
 		case <-cw.stopc:
 			if cw.close() {
-				cw.lg.Warn(
-					"closed TCP streaming connection with remote peer",
-					zap.String("stream-writer-type", t.String()),
-					zap.String("remote-peer-id", cw.peerID.String()),
-				)
+				log.Warn("closed TCP streaming connection with remote peer").Str(code.RemotePeerId, cw.peerID.Str()).Record()
 			}
-			cw.lg.Warn(
-				"stopped TCP streaming connection with remote peer",
-				zap.String("stream-writer-type", t.String()),
-				zap.String("remote-peer-id", cw.peerID.String()),
-			)
+
+			log.Warn("stopped TCP streaming connection with remote peer").Str(code.RemotePeerId, cw.peerID.Str()).Record()
 			close(cw.done)
 			return
 		}
@@ -313,11 +284,11 @@ type streamReader struct {
 	peerID     types.ID
 	streamType streamType
 
-	tr     *Transport
-	picker *urlPicker
-	status *peerStatus
-	recvc  chan<- *raftproto.Message //从peer中获取对端节点发送过来的消息，然后交给raft算法层进行处理，只接收非prop信息
-	propc  chan<- *raftproto.Message //只接收propc类消息
+	tr         *Transport
+	picker     *urlPicker
+	peerStatus *peerStatus
+	recvc      chan<- *raftproto.Message //从peer中获取对端节点发送过来的消息，然后交给raft算法层进行处理，只接收非prop信息
+	propc      chan<- *raftproto.Message //只接收propc类消息
 
 	errorc chan<- error
 
@@ -340,27 +311,18 @@ func (cr *streamReader) start() {
 func (cr *streamReader) run() {
 	t := cr.streamType
 
-	cr.lg.Info(
-		"started stream reader with remote peer",
-		zap.String("stream-reader-type", t.String()),
-		zap.String("local-member-id", cr.tr.LocalID.String()),
-		zap.String("remote-peer-id", cr.peerID.String()),
-	)
+	log.Info("started stream reader with remote peer").Str(code.LocalMemberId, cr.tr.LocalID.Str()).
+		Str(code.RemotePeerId, cr.peerID.Str()).Record()
 
 	for {
-
 		//首先调用dial方法给对端发送一个GET请求，从而和对端建立长连接。对端的Header收到该连接后，会封装成outgoingConn结构，并发送给streamWriter，
 		rc, err := cr.dial(t)
-
 		if err != nil {
-			cr.status.deactivate(failureType{source: t.String(), action: "dial"}, err.Error())
+			cr.peerStatus.deactivate(failureType{source: t.String(), action: "dial"}, err.Error())
 		} else { //如果未出现异常，则开始读取对端返回的消息，并将读取到的消息写入streamReader.recvc通道中
-			cr.status.activate()
-			cr.lg.Info(
-				"established TCP streaming connection with remote peer",
-				zap.String("local-member-id", cr.tr.ID.String()),
-				zap.String("remote-peer-id", cr.peerID.String()),
-			)
+			cr.peerStatus.activate()
+			log.Info("established TCP streaming connection with remote peer").Str(code.LocalMemberId, cr.tr.LocalID.Str()).
+				Str(code.RemotePeerId, cr.peerID.Str()).Record()
 
 			//连接建立成功之后会调用decodeLoop方法来轮询读取对端节点发送过来的消息，并将收到的字节流转成raftpb.Message消息类型的格式。如果消息是心跳类型则忽略，如果是raftpb.MsgProp类型的消息，则发送到propc通道中，会有专门的协程发送给本节点底层的raft模块。
 			//如果是其他消息(注意这些消息里没有快照类型的消息，因为快照类型的消息是专门的通道)，则发送到recvc通道中，会有专门的协程将数据发送给底层的raft模块。
@@ -378,7 +340,7 @@ func (cr *streamReader) run() {
 			// connection is closed by the remote
 			case transport.IsClosedConnError(err):
 			default:
-				cr.status.deactivate(failureType{source: t.String(), action: "read"}, err.Error())
+				cr.peerStatus.deactivate(failureType{source: t.String(), action: "read"}, err.Error())
 			}
 		}
 
@@ -447,10 +409,7 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser, t streamType) error {
 		}
 
 		if isLinkHeartbeatMessage(&m) {
-			// raft is not interested in link layer
-			// heartbeat message, so we should ignore
-			// it.
-			// 忽略掉用于
+			// 忽略掉用于维护长连接的心跳信息
 			continue
 		}
 
@@ -460,9 +419,9 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser, t streamType) error {
 		}
 
 		select {
-		case recvc <- m:
+		case recvc <- &m:
 		default:
-			if cr.status.isActive() {
+			if cr.peerStatus.isActive() {
 				cr.lg.Warn(
 					"dropped internal Raft message since receiving buffer is full (overloaded network)",
 					zap.String("message-type", m.Type.String()),

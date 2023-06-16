@@ -100,6 +100,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 	errorC := t.ErrorC
 	r := t.Raft
 
+	// pipeline 用于将快照数据发送到远端本体
 	pipeline := &pipeline{
 		peerID:     peerID,
 		tr:         t,
@@ -109,13 +110,12 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 		errorC:     errorC,
 	}
 
-	// pipeline 用于将快照数据发送到远端本体
 	pipeline.start()
 
-	// 发送数据到远端本体
+	// 发送message到远端本体
 	streamWriter := startStreamWriter(t.LocalID, peerID, peerStatus, r)
 
-	// 用于接收其他节点发送过来的数据
+	// 用于接收其他节点发送过来的数据交给raft层进行处理
 	p := &peer{
 		localID:    t.LocalID,
 		remoteID:   peerID,
@@ -166,7 +166,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 		streamType: streamTypeMessage,
 		tr:         t,
 		picker:     picker,
-		status:     peerStatus,
+		peerStatus: peerStatus,
 		recvc:      p.recvc,
 		propc:      p.propc,
 	}

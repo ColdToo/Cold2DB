@@ -19,11 +19,11 @@ type decoder interface {
 	decode() (raftproto.Message, error)
 }
 
-type messageEncoder struct {
+type messageEncoderAndWriter struct {
 	w io.Writer
 }
 
-func (enc *messageEncoder) encode(m *raftproto.Message) error {
+func (enc *messageEncoderAndWriter) encode(m *raftproto.Message) error {
 	if err := binary.Write(enc.w, binary.BigEndian, uint64(m.Size())); err != nil {
 		return err
 	}

@@ -24,7 +24,7 @@ type Raft interface {
 	Process(ctx context.Context, m *raftproto.Message) error
 	IsIDRemoved(id uint64) bool
 	ReportUnreachable(id uint64)
-	ReportSnapshot(id uint64, status raft.SnapshotStatus)
+	ReportSnapshotStatus(id uint64, status raft.SnapshotStatus)
 }
 
 type Transporter interface {
