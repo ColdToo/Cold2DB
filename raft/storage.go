@@ -2,7 +2,7 @@ package raft
 
 import (
 	"errors"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
 	"sync"
 )
 
@@ -30,11 +30,11 @@ var ErrSnapshotTemporarilyUnavailable = errors.New("snapshot is temporarily unav
 // application is responsible for cleanup and recovery in this case.
 type Storage interface {
 	// InitialState returns the saved HardState and ConfState information.
-	InitialState() (raftproto.HardState, raftproto.ConfState, error)
+	InitialState() (pb.HardState, pb.ConfState, error)
 	// Entries returns a slice of log entries in the range [lo,hi).
 	// MaxSize limits the total size of the log entries returned, but
 	// Entries returns at least one entry if any.
-	Entries(lo, hi uint64) ([]raftproto.Entry, error)
+	Entries(lo, hi uint64) ([]pb.Entry, error)
 	// Term returns the term of entry i, which must be in the range
 	// [FirstIndex()-1, LastIndex()]. The term of the entry before
 	// FirstIndex is retained for matching purposes even though the
@@ -51,7 +51,7 @@ type Storage interface {
 	// If snapshot is temporarily unavailable, it should return ErrSnapshotTemporarilyUnavailable,
 	// so raft state machine could know that Storage needs some time to prepare
 	// snapshot and call Snapshot later.
-	Snapshot() (raftproto.Snapshot, error)
+	Snapshot() (pb.Snapshot, error)
 }
 
 // MemoryStorage implements the Storage interface backed by an
@@ -62,28 +62,28 @@ type MemoryStorage struct {
 	// goroutine.
 	sync.Mutex
 
-	hardState raftproto.HardState
-	snapshot  raftproto.Snapshot
+	hardState pb.HardState
+	snapshot  pb.Snapshot
 	// ents[i] has raft log position i+snapshot.Metadata.Index
-	ents []raftproto.Entry
+	ents []pb.Entry
 }
 
 // NewMemoryStorage creates an empty MemoryStorage.
 func NewMemoryStorage() *MemoryStorage {
 	return &MemoryStorage{
 		// When starting from scratch populate the list with a dummy entry at term zero.
-		ents:     make([]raftproto.Entry, 1),
-		snapshot: raftproto.Snapshot{Metadata: &raftproto.SnapshotMetadata{ConfState: &raftproto.ConfState{}}},
+		ents:     make([]pb.Entry, 1),
+		snapshot: pb.Snapshot{Metadata: &pb.SnapshotMetadata{ConfState: &pb.ConfState{}}},
 	}
 }
 
 // InitialState implements the Storage interface.
-func (ms *MemoryStorage) InitialState() (raftproto.HardState, raftproto.ConfState, error) {
+func (ms *MemoryStorage) InitialState() (pb.HardState, pb.ConfState, error) {
 	return ms.hardState, *ms.snapshot.Metadata.ConfState, nil
 }
 
 // SetHardState saves the current HardState.
-func (ms *MemoryStorage) SetHardState(st raftproto.HardState) error {
+func (ms *MemoryStorage) SetHardState(st pb.HardState) error {
 	ms.Lock()
 	defer ms.Unlock()
 	ms.hardState = st
@@ -91,7 +91,7 @@ func (ms *MemoryStorage) SetHardState(st raftproto.HardState) error {
 }
 
 // Entries implements the Storage interface.
-func (ms *MemoryStorage) Entries(lo, hi uint64) ([]raftproto.Entry, error) {
+func (ms *MemoryStorage) Entries(lo, hi uint64) ([]pb.Entry, error) {
 	ms.Lock()
 	defer ms.Unlock()
 	offset := ms.ents[0].Index
@@ -147,7 +147,7 @@ func (ms *MemoryStorage) firstIndex() uint64 {
 }
 
 // Snapshot implements the Storage interface.
-func (ms *MemoryStorage) Snapshot() (raftproto.Snapshot, error) {
+func (ms *MemoryStorage) Snapshot() (pb.Snapshot, error) {
 	ms.Lock()
 	defer ms.Unlock()
 	return ms.snapshot, nil
@@ -155,7 +155,7 @@ func (ms *MemoryStorage) Snapshot() (raftproto.Snapshot, error) {
 
 // ApplySnapshot overwrites the contents of this Storage object with
 // those of the given snapshot.
-func (ms *MemoryStorage) ApplySnapshot(snap raftproto.Snapshot) error {
+func (ms *MemoryStorage) ApplySnapshot(snap pb.Snapshot) error {
 	ms.Lock()
 	defer ms.Unlock()
 
@@ -167,7 +167,7 @@ func (ms *MemoryStorage) ApplySnapshot(snap raftproto.Snapshot) error {
 	}
 
 	ms.snapshot = snap
-	ms.ents = []raftproto.Entry{{Term: snap.Metadata.Term, Index: snap.Metadata.Index}}
+	ms.ents = []pb.Entry{{Term: snap.Metadata.Term, Index: snap.Metadata.Index}}
 	return nil
 }
 
@@ -175,11 +175,11 @@ func (ms *MemoryStorage) ApplySnapshot(snap raftproto.Snapshot) error {
 // can be used to reconstruct the state at that point.
 // If any configuration changes have been made since the last compaction,
 // the result of the last ApplyConfChange must be passed in.
-func (ms *MemoryStorage) CreateSnapshot(i uint64, cs *raftproto.ConfState, data []byte) (raftproto.Snapshot, error) {
+func (ms *MemoryStorage) CreateSnapshot(i uint64, cs *pb.ConfState, data []byte) (pb.Snapshot, error) {
 	ms.Lock()
 	defer ms.Unlock()
 	if i <= ms.snapshot.Metadata.Index {
-		return raftproto.Snapshot{}, ErrSnapOutOfDate
+		return pb.Snapshot{}, ErrSnapOutOfDate
 	}
 
 	offset := ms.ents[0].Index
@@ -211,7 +211,7 @@ func (ms *MemoryStorage) Compact(compactIndex uint64) error {
 	}
 
 	i := compactIndex - offset
-	ents := make([]raftproto.Entry, 1, 1+uint64(len(ms.ents))-i)
+	ents := make([]pb.Entry, 1, 1+uint64(len(ms.ents))-i)
 	ents[0].Index = ms.ents[i].Index
 	ents[0].Term = ms.ents[i].Term
 	ents = append(ents, ms.ents[i+1:]...)
@@ -222,7 +222,7 @@ func (ms *MemoryStorage) Compact(compactIndex uint64) error {
 // Append the new entries to storage.
 // TODO (xiangli): ensure the entries are continuous and
 // entries[0].Index > ms.entries[0].Index
-func (ms *MemoryStorage) Append(entries []raftproto.Entry) error {
+func (ms *MemoryStorage) Append(entries []pb.Entry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -245,7 +245,7 @@ func (ms *MemoryStorage) Append(entries []raftproto.Entry) error {
 	offset := entries[0].Index - ms.ents[0].Index
 	switch {
 	case uint64(len(ms.ents)) > offset:
-		ms.ents = append([]raftproto.Entry{}, ms.ents[:offset]...)
+		ms.ents = append([]pb.Entry{}, ms.ents[:offset]...)
 		ms.ents = append(ms.ents, entries...)
 	case uint64(len(ms.ents)) == offset:
 		ms.ents = append(ms.ents, entries...)

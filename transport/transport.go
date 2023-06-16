@@ -1,14 +1,14 @@
-package Transport
+package transport
 
 import (
 	"context"
-	"github.com/ColdToo/Cold2DB/Transport/transport"
-	types "github.com/ColdToo/Cold2DB/Transport/types"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/log"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
+	"github.com/ColdToo/Cold2DB/transport/transport"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 
 	"net/http"
 	"sync"
@@ -21,7 +21,7 @@ import (
 
 // Raft app_node实现该接口
 type Raft interface {
-	Process(ctx context.Context, m *raftproto.Message) error
+	Process(ctx context.Context, m *pb.Message) error
 	IsIDRemoved(id uint64) bool
 	ReportUnreachable(id uint64)
 	ReportSnapshotStatus(id uint64, status raft.SnapshotStatus)
@@ -33,7 +33,7 @@ type Transporter interface {
 	Handler() http.Handler
 
 	// Send 应用层通过该接口发送消息给peer,如果在transport中没有找到该peer那么忽略该消息
-	Send(m []raftproto.Message)
+	Send(m []pb.Message)
 
 	// SendSnapshot sends out the given snapshot message to a remote peer.
 	// The behavior of SendSnapshot is similar to Send.
@@ -138,7 +138,7 @@ func (t *Transport) Get(id types.ID) Peer {
 	return t.peers[id]
 }
 
-func (t *Transport) Send(msgs []raftproto.Message) {
+func (t *Transport) Send(msgs []pb.Message) {
 	for _, m := range msgs {
 		if m.To == 0 {
 			continue
@@ -151,7 +151,7 @@ func (t *Transport) Send(msgs []raftproto.Message) {
 		t.mu.RUnlock()
 
 		if pok {
-			if m.MsgType == raftproto.MessageType_MsgAppend {
+			if m.MsgType == pb.MessageType_MsgAppend {
 				t.ServerStats.SendAppendReq(int(m.Size()))
 			}
 			p.send(m)

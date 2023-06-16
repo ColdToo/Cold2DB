@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -10,7 +10,7 @@ import (
 
 type HttpKVAPI struct {
 	store       *kvstore
-	confChangeC chan<- raftproto.ConfChange
+	confChangeC chan<- pb.ConfChange
 }
 
 func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -51,8 +51,8 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		cc := raftproto.ConfChange{
-			ChangeType: raftproto.ConfChangeType_AddNode,
+		cc := pb.ConfChange{
+			ChangeType: pb.ConfChangeType_AddNode,
 			NodeId:     nodeId,
 			Context:    url,
 		}
@@ -68,8 +68,8 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		cc := raftproto.ConfChange{
-			ChangeType: raftproto.ConfChangeType_RemoveNode,
+		cc := pb.ConfChange{
+			ChangeType: pb.ConfChangeType_RemoveNode,
 			NodeId:     nodeId,
 		}
 		h.confChangeC <- cc
@@ -86,7 +86,7 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func ServeHttpKVAPI(kvStore *kvstore, port int, confChangeC chan<- raftproto.ConfChange, errorC <-chan error) {
+func ServeHttpKVAPI(kvStore *kvstore, port int, confChangeC chan<- pb.ConfChange, errorC <-chan error) {
 	srv := http.Server{
 		Addr: ":" + strconv.Itoa(port),
 		Handler: &HttpKVAPI{

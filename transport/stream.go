@@ -1,12 +1,12 @@
-package Transport
+package transport
 
 import (
 	"context"
 	"fmt"
-	types "github.com/ColdToo/Cold2DB/Transport/types"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -54,11 +54,11 @@ func (t streamType) String() string {
 
 var (
 	// 理解为线路的心跳信息
-	linkHeartbeatMessage = raftproto.Message{MsgType: raftproto.MessageType_MsgHeartbeat}
+	linkHeartbeatMessage = pb.Message{MsgType: pb.MessageType_MsgHeartbeat}
 )
 
-func isLinkHeartbeatMessage(m *raftproto.Message) bool {
-	return m.MsgType == raftproto.MessageType_MsgHeartbeat && m.From == 0 && m.To == 0
+func isLinkHeartbeatMessage(m *pb.Message) bool {
+	return m.MsgType == pb.MessageType_MsgHeartbeat && m.From == 0 && m.To == 0
 }
 
 type outgoingConn struct {
@@ -83,8 +83,8 @@ type streamWriter struct {
 	closer  io.Closer
 	working bool
 
-	msgc  chan *raftproto.Message //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
-	connc chan *outgoingConn      //通过该通道获取当前streamWriter实例关联的底层网络连接，  outgoingConn其实是对网络连接的一层封装，其中记录了当前连接使用的协议版本，以及用于关闭连接的Flusher和Closer等信息。
+	msgc  chan *pb.Message   //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
+	connc chan *outgoingConn //通过该通道获取当前streamWriter实例关联的底层网络连接，  outgoingConn其实是对网络连接的一层封装，其中记录了当前连接使用的协议版本，以及用于关闭连接的Flusher和Closer等信息。
 	stopc chan struct{}
 	done  chan struct{}
 }
@@ -97,7 +97,7 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r Raft) *streamWr
 		peerID:  id,
 		status:  status,
 		r:       r,
-		msgc:    make(chan *raftproto.Message, streamBufSize),
+		msgc:    make(chan *pb.Message, streamBufSize),
 		connc:   make(chan *outgoingConn),
 		stopc:   make(chan struct{}),
 		done:    make(chan struct{}),
@@ -109,7 +109,7 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r Raft) *streamWr
 // 从管道中获取msg
 func (cw *streamWriter) run() {
 	var (
-		msgc       chan *raftproto.Message
+		msgc       chan *pb.Message
 		heartbeatc <-chan time.Time // 定时器会定时向该通道发送信号，触发心跳消息的发送，该心跳消息与后台介绍的Raft的心跳消息有所不同，该心跳的主要目的是为了防止连接长时间不用断开的
 		t          streamType
 		enc        encoder      // 编码器接口，实际实现该接口的会负责将消息序列化并写入连接的缓冲区中
@@ -227,7 +227,7 @@ func (cw *streamWriter) run() {
 	}
 }
 
-func (cw *streamWriter) writec() (chan<- *raftproto.Message, bool) {
+func (cw *streamWriter) writec() (chan<- *pb.Message, bool) {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
 	return cw.msgc, cw.working
@@ -253,7 +253,7 @@ func (cw *streamWriter) closeUnlocked() bool {
 	if len(cw.msgc) > 0 {
 		cw.r.ReportUnreachable(uint64(cw.peerID))
 	}
-	cw.msgc = make(chan *raftproto.Message, streamBufSize)
+	cw.msgc = make(chan *pb.Message, streamBufSize)
 	cw.working = false
 	return true
 }
@@ -287,8 +287,8 @@ type streamReader struct {
 	tr         *Transport
 	picker     *urlPicker
 	peerStatus *peerStatus
-	recvc      chan<- *raftproto.Message //从peer中获取对端节点发送过来的消息，然后交给raft算法层进行处理，只接收非prop信息
-	propc      chan<- *raftproto.Message //只接收propc类消息
+	recvc      chan<- *pb.Message //从peer中获取对端节点发送过来的消息，然后交给raft算法层进行处理，只接收非prop信息
+	propc      chan<- *pb.Message //只接收propc类消息
 
 	errorc chan<- error
 
@@ -414,7 +414,7 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser, t streamType) error {
 		}
 
 		recvc := cr.recvc
-		if m.MsgType == raftproto.MessageType_MsgPropose {
+		if m.MsgType == pb.MessageType_MsgPropose {
 			recvc = cr.propc
 		}
 

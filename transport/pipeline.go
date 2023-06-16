@@ -1,13 +1,13 @@
-package Transport
+package transport
 
 import (
 	"bytes"
 	"context"
 	"errors"
-	types "github.com/ColdToo/Cold2DB/Transport/types"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	"io/ioutil"
 	"sync"
 	"time"
@@ -42,7 +42,7 @@ type pipeline struct {
 	raft Raft
 
 	//pipeline实例从这个管道中获取待发送到对端的message，默认缓冲通道是64个
-	msgc chan *raftproto.Message
+	msgc chan *pb.Message
 
 	wg     sync.WaitGroup
 	stopC  chan struct{}
@@ -51,7 +51,7 @@ type pipeline struct {
 
 func (p *pipeline) start() {
 	p.stopC = make(chan struct{})
-	p.msgc = make(chan *raftproto.Message, pipelineBufSize)
+	p.msgc = make(chan *pb.Message, pipelineBufSize)
 	p.wg.Add(connPerPipeline)
 	for i := 0; i < connPerPipeline; i++ {
 		go p.handle()
@@ -61,7 +61,7 @@ func (p *pipeline) start() {
 }
 
 func (p *pipeline) stop() {
-	close(p.stopc)
+	close(p.stopC)
 	p.wg.Wait()
 	p.tr.Logger.Info(
 		"stopped HTTP pipelining with remote peer",
@@ -113,7 +113,7 @@ func (p *pipeline) post(data []byte) (err error) {
 		select {
 		case <-done:
 			//暂时关闭pipeline
-		case <-p.stopc:
+		case <-p.stopC:
 			waitSchedule()
 			cancel()
 		}

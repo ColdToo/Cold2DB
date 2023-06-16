@@ -1,13 +1,13 @@
-package Transport
+package transport
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	types "github.com/ColdToo/Cold2DB/Transport/types"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	"sync"
 	"time"
 
@@ -37,7 +37,7 @@ type Peer interface {
 	// and has no promise that the message will be received by the remote.
 	// When it fails to send message out, it will report the status to underlying
 	// raft.
-	send(m raftproto.Message)
+	send(m pb.Message)
 
 	// sendSnap sends the merged snapshot message to the remote peer. Its behavior
 	// is similar to send.
@@ -84,8 +84,8 @@ type peer struct {
 	pipeline   *pipeline
 	snapSender *snapshotSender // snapshot sender to send v3 snapshot messages
 
-	recvc chan *raftproto.Message //从Stream消息通道中读取到消息之后，会通过该通道将消息交给Raft接口，然后由它返回给底层etcd-raft模块进行处理
-	propc chan *raftproto.Message //从Stream消息通道中读取到MsgProp类型的消息之后，会通过该通道将MsgApp消息交给Raft接口，然后由它返回给底层的etcd-raft模块进行处理
+	recvc chan *pb.Message //从Stream消息通道中读取到消息之后，会通过该通道将消息交给Raft接口，然后由它返回给底层etcd-raft模块进行处理
+	propc chan *pb.Message //从Stream消息通道中读取到MsgProp类型的消息之后，会通过该通道将MsgApp消息交给Raft接口，然后由它返回给底层的etcd-raft模块进行处理
 
 	mu     sync.Mutex
 	paused bool
@@ -126,8 +126,8 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 		pipeline:   pipeline,
 		snapSender: newSnapshotSender(t, picker, peerID, peerStatus),
 
-		recvc: make(chan *raftproto.Message, recvBufSize),
-		propc: make(chan *raftproto.Message, maxPendingProposals),
+		recvc: make(chan *pb.Message, recvBufSize),
+		propc: make(chan *pb.Message, maxPendingProposals),
 		stopc: make(chan struct{}),
 	}
 
@@ -177,7 +177,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 	return p
 }
 
-func (p *peer) send(m raftproto.Message) {
+func (p *peer) send(m pb.Message) {
 	p.mu.Lock()
 	paused := p.paused
 	p.mu.Unlock()
@@ -274,7 +274,7 @@ func (p *peer) stop() {
 // pick picks a chan for sending the given message. The picked chan and the picked chan
 // string name are returned.
 // 根据消息类型选取可以发送的消息信道
-func (p *peer) pick(m *raftproto.Message) (writec chan<- *raftproto.Message, picked string) {
+func (p *peer) pick(m *pb.Message) (writec chan<- *pb.Message, picked string) {
 	var ok bool
 	// Considering MsgSnap may have a big size, e.g., 1G, and will block
 	// stream for a long time, only use one of the N pipelines to send MsgSnap.
@@ -340,6 +340,6 @@ func (s *peerStatus) activeSince() time.Time {
 	return s.since
 }
 
-func isMsgApp(m *raftproto.Message) bool { return m.MsgType == raftproto.MessageType_MsgAppend }
+func isMsgApp(m *pb.Message) bool { return m.MsgType == pb.MessageType_MsgAppend }
 
-func isMsgSnap(m *raftproto.Message) bool { return m.MsgType == raftproto.MessageType_MsgSnapshot }
+func isMsgSnap(m *pb.Message) bool { return m.MsgType == pb.MessageType_MsgSnapshot }

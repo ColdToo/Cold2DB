@@ -1,14 +1,14 @@
-package Transport
+package transport
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	types "github.com/ColdToo/Cold2DB/Transport/types"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db"
 	log "github.com/ColdToo/Cold2DB/log"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	pioutil "go.etcd.io/etcd/pkg/ioutil"
 	"io/ioutil"
 	"net/http"
@@ -83,7 +83,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var m *raftproto.Message
+	var m *pb.Message
 	if err := m.Unmarshal(b); err != nil {
 		h.lg.Warn(
 			"failed to unmarshal Raft message",
@@ -248,7 +248,7 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	msgSize := m.Size()
 
-	if m.MsgType != raftproto.MessageType_MsgSnapshot {
+	if m.MsgType != pb.MessageType_MsgSnapshot {
 		h.lg.Warn(
 			"unexpected Raft message type",
 			zap.String("local-member-id", h.localID.Str()),

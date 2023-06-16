@@ -2,7 +2,7 @@ package raft
 
 import (
 	"errors"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
 )
 
 // ErrStepLocalMsg is returned when try to step a local raft message
@@ -18,7 +18,7 @@ type SoftState struct {
 }
 
 type msgWithResult struct {
-	m      raftproto.Message
+	m      pb.Message
 	result chan error
 }
 
@@ -32,9 +32,9 @@ type RaftNode struct {
 	Raft *Raft
 
 	propc      chan msgWithResult
-	recvc      chan raftproto.Message
-	confc      chan raftproto.ConfChange
-	confstatec chan raftproto.ConfState
+	recvc      chan pb.Message
+	confc      chan pb.ConfChange
+	confstatec chan pb.ConfState
 	readyc     chan Ready
 	advancec   chan struct{}
 	tickc      chan struct{}
@@ -42,7 +42,7 @@ type RaftNode struct {
 	stop       chan struct{}
 
 	prevSoftSt *SoftState
-	prevHardSt raftproto.HardState
+	prevHardSt pb.HardState
 }
 
 // NewRaftNode returns a new RaftNode given configuration and a list of raft peers.
@@ -62,22 +62,22 @@ func (rn *RaftNode) Tick() {
 
 // Campaign causes this RaftNode to transition to candidate state.
 func (rn *RaftNode) Campaign() error {
-	return rn.Raft.Step(&raftproto.Message{
-		MsgType: raftproto.MessageType_MsgHup,
+	return rn.Raft.Step(&pb.Message{
+		MsgType: pb.MessageType_MsgHup,
 	})
 }
 
 // Propose proposes data be appended to the raft log.
 func (rn *RaftNode) Propose(data []byte) error {
-	ent := raftproto.Entry{Data: data}
-	return rn.Raft.Step(&raftproto.Message{
-		MsgType: raftproto.MessageType_MsgPropose,
+	ent := pb.Entry{Data: data}
+	return rn.Raft.Step(&pb.Message{
+		MsgType: pb.MessageType_MsgPropose,
 		From:    rn.Raft.id,
-		Entries: []*raftproto.Entry{&ent}})
+		Entries: []*pb.Entry{&ent}})
 }
 
 // Step advances the state machine using the given message.
-func (rn *RaftNode) Step(m *raftproto.Message) error {
+func (rn *RaftNode) Step(m *pb.Message) error {
 	// ignore unexpected local messages receiving over network
 	if IsLocalMsg(m.MsgType) {
 		return ErrStepLocalMsg
@@ -102,48 +102,48 @@ func (rn *RaftNode) GetProgress() map[uint64]Progress {
 
 // TransferLeader tries to transfer leadership to the given transferee.
 func (rn *RaftNode) TransferLeader(transferee uint64) {
-	_ = rn.Raft.Step(&raftproto.Message{MsgType: raftproto.MessageType_MsgTransferLeader, From: transferee})
+	_ = rn.Raft.Step(&pb.Message{MsgType: pb.MessageType_MsgTransferLeader, From: transferee})
 }
 
 type Ready struct {
 	*SoftState
 
-	raftproto.HardState
+	pb.HardState
 
-	Entries []raftproto.Entry // 待持久化
+	Entries []pb.Entry // 待持久化
 
-	CommittedEntries []raftproto.Entry // 待apply
+	CommittedEntries []pb.Entry // 待apply
 
-	Messages []raftproto.Message // 待发送给其他节点的message
+	Messages []pb.Message // 待发送给其他节点的message
 }
 
 // ProposeConfChange proposes a config change.
-func (rn *RaftNode) ProposeConfChange(cc *raftproto.ConfChange) error {
+func (rn *RaftNode) ProposeConfChange(cc *pb.ConfChange) error {
 	data, err := cc.Marshal()
 	if err != nil {
 		return err
 	}
-	ent := raftproto.Entry{EntryType: raftproto.EntryType_EntryConfChange, Data: data}
-	return rn.Raft.Step(&raftproto.Message{
-		MsgType: raftproto.MessageType_MsgPropose,
-		Entries: []*raftproto.Entry{&ent},
+	ent := pb.Entry{EntryType: pb.EntryType_EntryConfChange, Data: data}
+	return rn.Raft.Step(&pb.Message{
+		MsgType: pb.MessageType_MsgPropose,
+		Entries: []*pb.Entry{&ent},
 	})
 }
 
 // ApplyConfChange applies a config change to the local node.
-func (rn *RaftNode) ApplyConfChange(cc *raftproto.ConfChange) *raftproto.ConfState {
+func (rn *RaftNode) ApplyConfChange(cc *pb.ConfChange) *pb.ConfState {
 	if cc.NodeId == None {
-		return &raftproto.ConfState{Nodes: nodes(rn.Raft)}
+		return &pb.ConfState{Nodes: nodes(rn.Raft)}
 	}
 	switch cc.ChangeType {
-	case raftproto.ConfChangeType_AddNode:
+	case pb.ConfChangeType_AddNode:
 		rn.Raft.addNode(cc.NodeId)
-	case raftproto.ConfChangeType_RemoveNode:
+	case pb.ConfChangeType_RemoveNode:
 		rn.Raft.removeNode(cc.NodeId)
 	default:
 		panic("unexpected conf type")
 	}
-	return &raftproto.ConfState{Nodes: nodes(rn.Raft)}
+	return &pb.ConfState{Nodes: nodes(rn.Raft)}
 }
 
 func StartRaftNode(c *Config, peers []Peer) *RaftNode {

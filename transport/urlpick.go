@@ -1,7 +1,7 @@
-package Transport
+package transport
 
 import (
-	types "github.com/ColdToo/Cold2DB/Transport/types"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	"net/url"
 	"sync"
 )

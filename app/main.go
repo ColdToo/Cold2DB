@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"github.com/ColdToo/Cold2DB/domain"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
 	"strings"
 )
 
@@ -22,7 +22,7 @@ func main() {
 
 	proposeC := make(chan kv)
 	defer close(proposeC)
-	confChangeC := make(chan raftproto.ConfChange)
+	confChangeC := make(chan pb.ConfChange)
 	defer close(confChangeC)
 	errC := make(chan error)
 	defer close(errC)

@@ -2,7 +2,7 @@ package raft
 
 import (
 	"errors"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
 	"go.uber.org/zap"
 )
 
@@ -37,10 +37,10 @@ type RaftLog struct {
 	stabled uint64
 
 	// 所有还未压缩的日志
-	entries []raftproto.Entry
+	entries []pb.Entry
 
 	// the incoming unstable snapshot, if any.
-	pendingSnapshot *raftproto.Snapshot
+	pendingSnapshot *pb.Snapshot
 
 	logger zap.Logger
 }
@@ -73,17 +73,17 @@ func (l *RaftLog) maybeCompact() {
 // allEntries return all the entries not compacted.
 // note, exclude any dummy entries from the return value.
 // note, this is one of the test stub functions you need to implement.
-func (l *RaftLog) allEntries() []raftproto.Entry {
+func (l *RaftLog) allEntries() []pb.Entry {
 	return l.entries
 }
 
 // unstableEntries return all the unstable entries
-func (l *RaftLog) unstableEntries() []raftproto.Entry {
+func (l *RaftLog) unstableEntries() []pb.Entry {
 	return l.entries[:l.stabled+1]
 }
 
 // nextEnts returns all the committed but not applied entries
-func (l *RaftLog) nextEnts() (ents []raftproto.Entry) {
+func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	return l.entries[l.committed:]
 }
 

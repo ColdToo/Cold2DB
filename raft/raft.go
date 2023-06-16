@@ -3,7 +3,7 @@ package raft
 import (
 	"errors"
 	"fmt"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
 	"go.etcd.io/etcd/raft/quorum"
 	"go.etcd.io/etcd/raft/tracker"
 )
@@ -90,7 +90,7 @@ type Raft struct {
 	votes map[uint64]bool
 
 	// msgs need to send
-	msgs []raftproto.Message
+	msgs []pb.Message
 
 	LeaderID uint64
 
@@ -158,30 +158,30 @@ func (r *Raft) sendHeartbeat(to uint64) {
 }
 
 // handleAppendEntries handle AppendEntries RPC request
-func (r *Raft) handleAppendEntries(m *raftproto.Message) {
+func (r *Raft) handleAppendEntries(m *pb.Message) {
 	// Your Code Here (2A).
 }
 
 // handleHeartbeat handle Heartbeat RPC request
-func (r *Raft) handleHeartbeat(m *raftproto.Message) {
+func (r *Raft) handleHeartbeat(m *pb.Message) {
 	// Your Code Here (2A).
 }
 
 // handleSnapshot handle Snapshot RPC request
-func (r *Raft) handleSnapshot(m *raftproto.Message) {
+func (r *Raft) handleSnapshot(m *pb.Message) {
 	// Your Code Here (2C).
 }
 
 // Step 该函数接收一个 Msg，然后根据节点的角色和 Msg 的类型调用不同的处理函数。
 // 上层 RawNode 发送 Msg 时，实际上就是将 Msg 传递给 Step()，然后进入 Msg 的处理模块，起到推进的作用。
-func (r *Raft) Step(m *raftproto.Message) error {
+func (r *Raft) Step(m *pb.Message) error {
 	switch  {
 	case m.Term == 0: //本地发送的消息
 		switch  {
-		case m.MsgType == raftproto.MessageType_MsgHup:
+		case m.MsgType == pb.MessageType_MsgHup:
 			r.becomeCandidate()
-		case m.MsgType == raftproto.MessageType_MsgPropose:
-		case m.MsgType == raftproto.
+		case m.MsgType == pb.MessageType_MsgPropose:
+		case m.MsgType == pb.
 		}
 	case m.Term > r.CurrentTerm:
 	case m.Term < r.CurrentTerm:
@@ -196,15 +196,15 @@ func (r *Raft) Step(m *raftproto.Message) error {
 }
 
 
-type stepFunc func(r *Raft, m raftproto.Message) error
+type stepFunc func(r *Raft, m pb.Message) error
 
-func stepLeader(r *Raft, m raftproto.Message) error {
+func stepLeader(r *Raft, m pb.Message) error {
 	// These message types do not require any progress for m.From.
 	switch m.Type {
-	case raftproto.MsgBeat:
+	case pb.MsgBeat:
 		r.bcastHeartbeat()
 		return nil
-	case raftproto.MsgCheckQuorum:
+	case pb.MsgCheckQuorum:
 		// The leader should always see itself as active. As a precaution, handle
 		// the case in which the leader isn't in the configuration any more (for
 		// example if it just removed itself).
@@ -226,7 +226,7 @@ func stepLeader(r *Raft, m raftproto.Message) error {
 			}
 		})
 		return nil
-	case raftproto.MsgProp:
+	case pb.MsgProp:
 		if len(m.Entries) == 0 {
 			r.logger.Panicf("%x stepped empty MsgProp", r.id)
 		}
@@ -243,15 +243,15 @@ func stepLeader(r *Raft, m raftproto.Message) error {
 
 		for i := range m.Entries {
 			e := &m.Entries[i]
-			var cc raftproto.ConfChangeI
-			if e.Type == raftproto.EntryConfChange {
-				var ccc raftproto.ConfChange
+			var cc pb.ConfChangeI
+			if e.Type == pb.EntryConfChange {
+				var ccc pb.ConfChange
 				if err := ccc.Unmarshal(e.Data); err != nil {
 					panic(err)
 				}
 				cc = ccc
-			} else if e.Type == raftproto.EntryConfChangeV2 {
-				var ccc raftproto.ConfChangeV2
+			} else if e.Type == pb.EntryConfChangeV2 {
+				var ccc pb.ConfChangeV2
 				if err := ccc.Unmarshal(e.Data); err != nil {
 					panic(err)
 				}
@@ -273,7 +273,7 @@ func stepLeader(r *Raft, m raftproto.Message) error {
 
 				if refused != "" {
 					r.logger.Infof("%x ignoring conf change %v at config %s: %s", r.id, cc, r.prs.Config, refused)
-					m.Entries[i] = raftproto.Entry{Type: raftproto.EntryNormal}
+					m.Entries[i] = pb.Entry{Type: pb.EntryNormal}
 				} else {
 					r.pendingConfIndex = r.raftLog.lastIndex() + uint64(i) + 1
 				}
@@ -285,7 +285,7 @@ func stepLeader(r *Raft, m raftproto.Message) error {
 		}
 		r.bcastAppend()
 		return nil
-	case raftproto.MsgReadIndex:
+	case pb.MsgReadIndex:
 		// only one voting member (the leader) in the cluster
 		if r.prs.IsSingleton() {
 			if resp := r.responseToReadIndexReq(m, r.raftLog.committed); resp.To != None {
@@ -313,7 +313,7 @@ func stepLeader(r *Raft, m raftproto.Message) error {
 		return nil
 	}
 	switch m.Type {
-	case raftproto.MsgAppResp:
+	case pb.MsgAppResp:
 		pr.RecentActive = true
 
 		if m.Reject {
@@ -491,7 +491,7 @@ func stepLeader(r *Raft, m raftproto.Message) error {
 				}
 			}
 		}
-	case raftproto.MsgHeartbeatResp:
+	case pb.MsgHeartbeatResp:
 		pr.RecentActive = true
 		pr.ProbeSent = false
 
@@ -517,7 +517,7 @@ func stepLeader(r *Raft, m raftproto.Message) error {
 				r.send(resp)
 			}
 		}
-	case raftproto.MsgSnapStatus:
+	case pb.MsgSnapStatus:
 		if pr.State != tracker.StateSnapshot {
 			return nil
 		}
@@ -539,14 +539,14 @@ func stepLeader(r *Raft, m raftproto.Message) error {
 		// out the next MsgApp.
 		// If snapshot failure, wait for a heartbeat interval before next try
 		pr.ProbeSent = true
-	case raftproto.MsgUnreachable:
+	case pb.MsgUnreachable:
 		// During optimistic replication, if the remote becomes unreachable,
 		// there is huge probability that a MsgApp is lost.
 		if pr.State == tracker.StateReplicate {
 			pr.BecomeProbe()
 		}
 		r.logger.Debugf("%x failed to send message to %x because it is unreachable [%s]", r.id, m.From, pr)
-	case raftproto.MsgTransferLeader:
+	case pb.MsgTransferLeader:
 		if pr.IsLearner {
 			r.logger.Debugf("%x is learner. Ignored transferring leadership", r.id)
 			return nil
@@ -581,27 +581,27 @@ func stepLeader(r *Raft, m raftproto.Message) error {
 	return nil
 }
 
-func stepCandidate(r *Raft, m raftproto.Message) error {
+func stepCandidate(r *Raft, m pb.Message) error {
 	// Only handle vote responses corresponding to our candidacy (while in
 	// StateCandidate, we may get stale MsgPreVoteResp messages in this term from
 	// our pre-candidate state).
-	var myVoteRespType raftproto.MessageType
+	var myVoteRespType pb.MessageType
 	if r.state == StatePreCandidate {
-		myVoteRespType = raftproto.MsgPreVoteResp
+		myVoteRespType = pb.MsgPreVoteResp
 	} else {
-		myVoteRespType = raftproto.MsgVoteResp
+		myVoteRespType = pb.MsgVoteResp
 	}
 	switch m.Type {
-	case raftproto.MsgProp:
+	case pb.MsgProp:
 		r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
 		return ErrProposalDropped
-	case raftproto.MsgApp:
+	case pb.MsgApp:
 		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
 		r.handleAppendEntries(m)
-	case raftproto.MsgHeartbeat:
+	case pb.MsgHeartbeat:
 		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
 		r.handleHeartbeat(m)
-	case raftproto.MsgSnap:
+	case pb.MsgSnap:
 		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
 		r.handleSnapshot(m)
 	case myVoteRespType:
@@ -616,19 +616,19 @@ func stepCandidate(r *Raft, m raftproto.Message) error {
 				r.bcastAppend()
 			}
 		case quorum.VoteLost:
-			// raftproto.MsgPreVoteResp contains future term of pre-candidate
+			// pb.MsgPreVoteResp contains future term of pre-candidate
 			// m.Term > r.Term; reuse r.Term
 			r.becomeFollower(r.Term, None)
 		}
-	case raftproto.MsgTimeoutNow:
+	case pb.MsgTimeoutNow:
 		r.logger.Debugf("%x [term %d state %v] ignored MsgTimeoutNow from %x", r.id, r.Term, r.state, m.From)
 	}
 	return nil
 }
 
-func stepFollower(r *Raft, m raftproto.Message) error {
+func stepFollower(r *Raft, m pb.Message) error {
 	switch m.Type {
-	case raftproto.MsgProp:
+	case pb.MsgProp:
 		if r.lead == None {
 			r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
 			return ErrProposalDropped
@@ -638,39 +638,39 @@ func stepFollower(r *Raft, m raftproto.Message) error {
 		}
 		m.To = r.lead
 		r.send(m)
-	case raftproto.MsgApp:
+	case pb.MsgApp:
 		r.electionElapsed = 0
 		r.lead = m.From
 		r.handleAppendEntries(m)
-	case raftproto.MsgHeartbeat:
+	case pb.MsgHeartbeat:
 		r.electionElapsed = 0
 		r.lead = m.From
 		r.handleHeartbeat(m)
-	case raftproto.MsgSnap:
+	case pb.MsgSnap:
 		r.electionElapsed = 0
 		r.lead = m.From
 		r.handleSnapshot(m)
-	case raftproto.MsgTransferLeader:
+	case pb.MsgTransferLeader:
 		if r.lead == None {
 			r.logger.Infof("%x no leader at term %d; dropping leader transfer msg", r.id, r.Term)
 			return nil
 		}
 		m.To = r.lead
 		r.send(m)
-	case raftproto.MsgTimeoutNow:
+	case pb.MsgTimeoutNow:
 		r.logger.Infof("%x [term %d] received MsgTimeoutNow from %x and starts an election to get leadership.", r.id, r.Term, m.From)
 		// Leadership transfers never use pre-vote even if r.preVote is true; we
 		// know we are not recovering from a partition so there is no need for the
 		// extra round trip.
 		r.hup(campaignTransfer)
-	case raftproto.MsgReadIndex:
+	case pb.MsgReadIndex:
 		if r.lead == None {
 			r.logger.Infof("%x no leader at term %d; dropping index reading msg", r.id, r.Term)
 			return nil
 		}
 		m.To = r.lead
 		r.send(m)
-	case raftproto.MsgReadIndexResp:
+	case pb.MsgReadIndexResp:
 		if len(m.Entries) != 1 {
 			r.logger.Errorf("%x invalid format of MsgReadIndexResp from %x, entries count: %d", r.id, m.From, len(m.Entries))
 			return nil
@@ -689,7 +689,7 @@ func (r *Raft) tickElection() {
 
 	if  r.electionElapsed > r.electionTimeout {
 		r.electionElapsed = 0
-		r.Step(&raftproto.Message{From: r.id, MsgType: raftproto.MessageType_MsgHup})
+		r.Step(&pb.Message{From: r.id, MsgType: pb.MessageType_MsgHup})
 	}
 }
 
@@ -702,7 +702,7 @@ func (r *Raft) tickHeartbeat() {
 		r.electionElapsed = 0
 		if r.checkQuorum {
 			//检查网络分区
-			r.Step(&raftproto.Message{From: r.id, MsgType: raftproto.MsgCheckQuorum})
+			r.Step(&pb.Message{From: r.id, MsgType: pb.MsgCheckQuorum})
 		}
 		// If current leader cannot transfer leadership in electionTimeout, it becomes leader again.
 		if r.State == Leader && r.leadTransferee != None {
@@ -716,7 +716,7 @@ func (r *Raft) tickHeartbeat() {
 
 	if r.heartbeatElapsed >= r.heartbeatTimeout {
 		r.heartbeatElapsed = 0
-		r.Step(&raftproto.Message{From: r.id, MsgType: raftproto.MessageType_MsgBeat})
+		r.Step(&pb.Message{From: r.id, MsgType: pb.MessageType_MsgBeat})
 	}
 }
 

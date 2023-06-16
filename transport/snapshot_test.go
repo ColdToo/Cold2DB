@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package Transport
+package transport
 
 import (
 	"fmt"
-	"github.com/ColdToo/Cold2DB/Transport/peer"
+	"github.com/ColdToo/Cold2DB/transport/peer"
 	"io"
 	"io/ioutil"
 	"net/http"

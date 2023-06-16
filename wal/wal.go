@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
 	"hash/crc32"
 	"io"
 	"os"
@@ -823,7 +823,7 @@ func (w *WAL) saveState(s *raftpb.HardState) error {
 	return w.encoder.encode(rec)
 }
 
-func (w *WAL) Save(st *raftproto.HardState, ents []raftproto.Entry) error {
+func (w *WAL) Save(st *pb.HardState, ents []pb.Entry) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 

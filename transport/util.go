@@ -1,9 +1,9 @@
-package Transport
+package transport
 
 import (
 	"fmt"
-	"github.com/ColdToo/Cold2DB/Transport/transport"
-	types "github.com/ColdToo/Cold2DB/Transport/types"
+	"github.com/ColdToo/Cold2DB/transport/transport"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	"io"
 	"net"
 	"net/http"

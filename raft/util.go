@@ -16,7 +16,7 @@ package raft
 
 import (
 	"fmt"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
 	"io"
 	"io/ioutil"
 	"os"
@@ -40,12 +40,12 @@ func max(a, b uint64) uint64 {
 }
 
 // IsEmptyHardState returns true if the given HardState is empty.
-func IsEmptyHardState(st raftproto.HardState) bool {
-	return isHardStateEqual(st, raftproto.HardState{})
+func IsEmptyHardState(st pb.HardState) bool {
+	return isHardStateEqual(st, pb.HardState{})
 }
 
 // IsEmptySnap returns true if the given Snapshot is empty.
-func IsEmptySnap(sp *raftproto.Snapshot) bool {
+func IsEmptySnap(sp *pb.Snapshot) bool {
 	if sp == nil || sp.Metadata == nil {
 		return true
 	}
@@ -115,14 +115,14 @@ func (p uint64Slice) Len() int           { return len(p) }
 func (p uint64Slice) Less(i, j int) bool { return p[i] < p[j] }
 func (p uint64Slice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
-func IsLocalMsg(msgt raftproto.MessageType) bool {
-	return msgt == raftproto.MessageType_MsgHup || msgt == raftproto.MessageType_MsgBeat
+func IsLocalMsg(msgt pb.MessageType) bool {
+	return msgt == pb.MessageType_MsgHup || msgt == pb.MessageType_MsgBeat
 }
 
-func IsResponseMsg(msgt raftproto.MessageType) bool {
-	return msgt == raftproto.MessageType_MsgAppendResponse || msgt == raftproto.MessageType_MsgRequestVoteResponse || msgt == raftproto.MessageType_MsgHeartbeatResponse
+func IsResponseMsg(msgt pb.MessageType) bool {
+	return msgt == pb.MessageType_MsgAppendResponse || msgt == pb.MessageType_MsgRequestVoteResponse || msgt == pb.MessageType_MsgHeartbeatResponse
 }
 
-func isHardStateEqual(a, b raftproto.HardState) bool {
+func isHardStateEqual(a, b pb.HardState) bool {
 	return a.Term == b.Term && a.Vote == b.Vote && a.Commit == b.Commit
 }

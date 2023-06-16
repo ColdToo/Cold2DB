@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"github.com/ColdToo/Cold2DB/Transport"
-	types "github.com/ColdToo/Cold2DB/Transport/types"
 	"github.com/ColdToo/Cold2DB/code"
 	log "github.com/ColdToo/Cold2DB/log"
+	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/transport"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	"github.com/ColdToo/Cold2DB/wal"
 	"go.uber.org/zap"
 	"net/http"
@@ -25,29 +25,29 @@ type AppNode struct {
 	peersUrl []string
 	join     bool
 
-	confState     *raftproto.ConfState
+	confState     *pb.ConfState
 	snapshotIndex uint64
 	appliedIndex  uint64
 
 	raftNode    *raft.RaftNode
 	raftStorage *raft.MemoryStorage
 	wal         *wal.WAL
-	transport   *Transport.Transport
+	transport   *transport.Transport
 
-	proposeC    <-chan kv                   // 提议 (k,v)
-	confChangeC <-chan raftproto.ConfChange // 提议更改配置文件
-	commitC     chan<- *commit              // 提交 (k,v)
-	errorC      chan<- error                // errors from raft session
-	stopc       chan struct{}               // signals proposal channel closed
-	httpstopc   chan struct{}               // signals http server to shutdown
-	httpdonec   chan struct{}               // signals http server shutdown complete
+	proposeC    <-chan kv            // 提议 (k,v)
+	confChangeC <-chan pb.ConfChange // 提议更改配置文件
+	commitC     chan<- *commit       // 提交 (k,v)
+	errorC      chan<- error         // errors from raft session
+	stopc       chan struct{}        // signals proposal channel closed
+	httpstopc   chan struct{}        // signals http server to shutdown
+	httpdonec   chan struct{}        // signals http server shutdown complete
 
 	TickTime int //定时触发定时器的时间
 
 	logger *zap.Logger
 }
 
-func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan kv, confChangeC <-chan raftproto.ConfChange, commitC chan<- *commit, errorC chan<- error) {
+func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan kv, confChangeC <-chan pb.ConfChange, commitC chan<- *commit, errorC chan<- error) {
 	an := &AppNode{
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
@@ -109,8 +109,8 @@ func (an *AppNode) replayWAL() *wal.WAL {
 }
 
 func (an *AppNode) servePeerRaft() {
-	//Transport 实例，负责raft节点之间的网络通信服务
-	an.transport = &Transport.Transport{
+	//transport 实例，负责raft节点之间的网络通信服务
+	an.transport = &transport.Transport{
 		LocalID:   types.ID(an.localId),
 		ClusterID: 0x1000,
 		Raft:      an,
@@ -139,16 +139,16 @@ func (an *AppNode) listenAndServePeerRaft() {
 	if err != nil {
 		log.Panic("raftexample: Failed parsing URL (%v)")
 	}
-	ln, err := Transport.NewStoppableListener(localUrl.Host, an.httpstopc)
+	ln, err := transport.NewStoppableListener(localUrl.Host, an.httpstopc)
 	if err != nil {
-		log.Panic("raftexample: Failed to listen Transport (%v)")
+		log.Panic("raftexample: Failed to listen transport (%v)")
 	}
 	err = (&http.Server{Handler: an.transport.Handler()}).Serve(ln)
 
 	select {
 	case <-an.httpstopc:
 	default:
-		log.Panic("raftexample: Failed to serve Transport (%v)")
+		log.Panic("raftexample: Failed to serve transport (%v)")
 	}
 	close(an.httpdonec)
 }
@@ -229,7 +229,7 @@ func (an *AppNode) serveRaftLayer() {
 	}
 }
 
-func (an *AppNode) checkEntrys(ents []raftproto.Entry) (nents []raftproto.Entry) {
+func (an *AppNode) checkEntrys(ents []pb.Entry) (nents []pb.Entry) {
 	if len(ents) == 0 {
 		return ents
 	}
@@ -243,7 +243,7 @@ func (an *AppNode) checkEntrys(ents []raftproto.Entry) (nents []raftproto.Entry)
 	return nents
 }
 
-func (an *AppNode) commitEntries(ents []raftproto.Entry) (<-chan struct{}, bool) {
+func (an *AppNode) commitEntries(ents []pb.Entry) (<-chan struct{}, bool) {
 	if len(ents) == 0 {
 		return nil, true
 	}
@@ -251,7 +251,7 @@ func (an *AppNode) commitEntries(ents []raftproto.Entry) (<-chan struct{}, bool)
 	data := make([]string, 0, len(ents))
 	for i := range ents {
 		switch ents[i].EntryType {
-		case raftproto.EntryType_EntryNormal:
+		case pb.EntryType_EntryNormal:
 			if len(ents[i].Data) == 0 {
 				// ignore empty messages
 				break
@@ -259,17 +259,17 @@ func (an *AppNode) commitEntries(ents []raftproto.Entry) (<-chan struct{}, bool)
 			s := string(ents[i].Data)
 			data = append(data, s)
 
-		case raftproto.EntryType_EntryConfChange:
-			var cc raftproto.ConfChange
+		case pb.EntryType_EntryConfChange:
+			var cc pb.ConfChange
 			cc.Unmarshal(ents[i].Data)
 			//通过算法层应用配置更新请求
 			an.confState = *an.raftNode.ApplyConfChange(cc)
 			switch cc.Type {
-			case raftproto.ConfChangeType_AddNode:
+			case pb.ConfChangeType_AddNode:
 				if len(cc.Context) > 0 {
 					an.transport.AddPeer(types.ID(cc.NodeID), []string{string(cc.Context)})
 				}
-			case raftproto.ConfChangeType_RemoveNode:
+			case pb.ConfChangeType_RemoveNode:
 				if cc.NodeID == uint64(an.id) {
 					log.Println("I've been removed from the cluster! Shutting down.")
 					return nil, false
@@ -322,7 +322,7 @@ func (an *AppNode) writeError(err error) {
 //  实现Rat接口,网络层通过该接口与RaftNode交互
 //	当transport模块接收到其他节点的信息时调用如下方法让raft算法层进行处理
 
-func (an *AppNode) Process(ctx context.Context, m *raftproto.Message) error {
+func (an *AppNode) Process(ctx context.Context, m *pb.Message) error {
 	return an.raftNode.Step(m)
 }
 

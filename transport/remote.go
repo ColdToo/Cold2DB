@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package Transport
+package transport
 
 import (
-	types "github.com/ColdToo/Cold2DB/Transport/types"
 	"github.com/ColdToo/Cold2DB/domain"
-	"github.com/ColdToo/Cold2DB/raftproto"
+	"github.com/ColdToo/Cold2DB/pb"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	"go.uber.org/zap"
 )
 
@@ -51,7 +51,7 @@ func startRemote(tr *Transport, urls types.URLs, remoteId types.ID) *remote {
 	}
 }
 
-func (g *remote) send(m raftproto.Message) {
+func (g *remote) send(m pb.Message) {
 	select {
 	case g.pipeline.msgc <- m:
 	default:

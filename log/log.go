@@ -97,8 +97,6 @@ func (f *Fields) Strs(key string, val []string) *Fields {
 	if f.skip {
 		return f
 	}
-
-	zap.Array(key, stringArray(ss))
 	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.StringType, Interface: val})
 	return f
 }

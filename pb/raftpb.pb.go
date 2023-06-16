@@ -4,7 +4,7 @@
 // 	protoc        v3.20.1
 // source: raftpb.proto
 
-package raftproto
+package pb
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -210,7 +210,7 @@ type Entry struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	EntryType EntryType `protobuf:"varint,1,opt,name=entry_type,json=entryType,proto3,enum=raftproto.EntryType" json:"entry_type,omitempty"`
+	EntryType EntryType `protobuf:"varint,1,opt,name=entry_type,json=entryType,proto3,enum=pb.EntryType" json:"entry_type,omitempty"`
 	Term      uint64    `protobuf:"varint,2,opt,name=term,proto3" json:"term,omitempty"`
 	Index     uint64    `protobuf:"varint,3,opt,name=index,proto3" json:"index,omitempty"`
 	Data      []byte    `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"`
@@ -401,7 +401,7 @@ type Message struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	MsgType  MessageType `protobuf:"varint,1,opt,name=msg_type,json=msgType,proto3,enum=raftproto.MessageType" json:"msg_type,omitempty"`
+	MsgType  MessageType `protobuf:"varint,1,opt,name=msg_type,json=msgType,proto3,enum=pb.MessageType" json:"msg_type,omitempty"`
 	To       uint64      `protobuf:"varint,2,opt,name=to,proto3" json:"to,omitempty"`
 	From     uint64      `protobuf:"varint,3,opt,name=from,proto3" json:"from,omitempty"`
 	Term     uint64      `protobuf:"varint,4,opt,name=term,proto3" json:"term,omitempty"`
@@ -648,7 +648,7 @@ type ConfChange struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	ChangeType ConfChangeType `protobuf:"varint,1,opt,name=change_type,json=changeType,proto3,enum=raftproto.ConfChangeType" json:"change_type,omitempty"`
+	ChangeType ConfChangeType `protobuf:"varint,1,opt,name=change_type,json=changeType,proto3,enum=pb.ConfChangeType" json:"change_type,omitempty"`
 	// node will be add/remove
 	NodeId  uint64 `protobuf:"varint,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	Context []byte `protobuf:"bytes,3,opt,name=context,proto3" json:"context,omitempty"`
@@ -806,25 +806,25 @@ func file_raftpb_proto_rawDescGZIP() []byte {
 var file_raftpb_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_raftpb_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_raftpb_proto_goTypes = []interface{}{
-	(EntryType)(0),           // 0: raftproto.EntryType
-	(MessageType)(0),         // 1: raftproto.MessageType
-	(ConfChangeType)(0),      // 2: raftproto.ConfChangeType
-	(*Entry)(nil),            // 3: raftproto.Entry
-	(*SnapshotMetadata)(nil), // 4: raftproto.SnapshotMetadata
-	(*Snapshot)(nil),         // 5: raftproto.Snapshot
-	(*Message)(nil),          // 6: raftproto.Message
-	(*HardState)(nil),        // 7: raftproto.HardState
-	(*ConfState)(nil),        // 8: raftproto.ConfState
-	(*ConfChange)(nil),       // 9: raftproto.ConfChange
+	(EntryType)(0),           // 0: pb.EntryType
+	(MessageType)(0),         // 1: pb.MessageType
+	(ConfChangeType)(0),      // 2: pb.ConfChangeType
+	(*Entry)(nil),            // 3: pb.Entry
+	(*SnapshotMetadata)(nil), // 4: pb.SnapshotMetadata
+	(*Snapshot)(nil),         // 5: pb.Snapshot
+	(*Message)(nil),          // 6: pb.Message
+	(*HardState)(nil),        // 7: pb.HardState
+	(*ConfState)(nil),        // 8: pb.ConfState
+	(*ConfChange)(nil),       // 9: pb.ConfChange
 }
 var file_raftpb_proto_depIdxs = []int32{
-	0, // 0: raftproto.Entry.entry_type:type_name -> raftproto.EntryType
-	8, // 1: raftproto.SnapshotMetadata.conf_state:type_name -> raftproto.ConfState
-	4, // 2: raftproto.Snapshot.metadata:type_name -> raftproto.SnapshotMetadata
-	1, // 3: raftproto.Message.msg_type:type_name -> raftproto.MessageType
-	3, // 4: raftproto.Message.entries:type_name -> raftproto.Entry
-	5, // 5: raftproto.Message.snapshot:type_name -> raftproto.Snapshot
-	2, // 6: raftproto.ConfChange.change_type:type_name -> raftproto.ConfChangeType
+	0, // 0: pb.Entry.entry_type:type_name -> pb.EntryType
+	8, // 1: pb.SnapshotMetadata.conf_state:type_name -> pb.ConfState
+	4, // 2: pb.Snapshot.metadata:type_name -> pb.SnapshotMetadata
+	1, // 3: pb.Message.msg_type:type_name -> pb.MessageType
+	3, // 4: pb.Message.entries:type_name -> pb.Entry
+	5, // 5: pb.Message.snapshot:type_name -> pb.Snapshot
+	2, // 6: pb.ConfChange.change_type:type_name -> pb.ConfChangeType
 	7, // [7:7] is the sub-list for method output_type
 	7, // [7:7] is the sub-list for method input_type
 	7, // [7:7] is the sub-list for extension type_name

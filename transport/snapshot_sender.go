@@ -1,9 +1,9 @@
-package Transport
+package transport
 
 import (
 	"bytes"
 	"context"
-	types "github.com/ColdToo/Cold2DB/Transport/types"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	"io"
 	"io/ioutil"
 	"net/http"
