@@ -25,7 +25,7 @@ import (
 // a key-value store backed by raft
 type kvstore struct {
 	db       db.Cold2
-	proposeC chan<- kv // channel for proposing updates
+	proposeC chan<- bytes.Buffer // channel for proposing updates
 	mu       sync.RWMutex
 	kvStore  map[string]string // current committed key-value pairs
 	//snapshotter *snap.Snapshotter
@@ -36,7 +36,7 @@ type kv struct {
 	Val []byte
 }
 
-func NewKVStore(proposeC chan<- kv, commitC <-chan *commit, errorC <-chan error) *kvstore {
+func NewKVStore(proposeC chan<- bytes.Buffer, commitC <-chan *commit, errorC <-chan error) *kvstore {
 	s := &kvstore{proposeC: proposeC, kvStore: make(map[string]string)}
 	go s.serveCommitC(commitC, errorC)
 	return s
@@ -52,14 +52,16 @@ func (s *kvstore) Lookup(key []byte) ([]byte, bool) {
 	return get, true
 }
 
+// Propose 提议kv对交给raft算法层处理
 func (s *kvstore) Propose(kv kv) {
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(kv); err != nil {
 		log.Fatal(err)
 	}
-	s.proposeC <- kv
+	s.proposeC <- buf
 }
 
+//  持久化kv对到db中
 func (s *kvstore) serveCommitC(commitC <-chan *commit, errorC <-chan error) {
 	for commit := range commitC {
 		for _, data := range commit.kv {

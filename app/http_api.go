@@ -52,9 +52,9 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		cc := pb.ConfChange{
-			ChangeType: pb.ConfChangeType_AddNode,
-			NodeId:     nodeId,
-			Context:    url,
+			Type:    pb.ConfChangeAddNode,
+			NodeID:  nodeId,
+			Context: url,
 		}
 		h.confChangeC <- cc
 
@@ -69,8 +69,8 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		cc := pb.ConfChange{
-			ChangeType: pb.ConfChangeType_RemoveNode,
-			NodeId:     nodeId,
+			Type:   pb.ConfChangeRemoveNode,
+			NodeID: nodeId,
 		}
 		h.confChangeC <- cc
 

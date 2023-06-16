@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"bytes"
 	"errors"
 	"github.com/ColdToo/Cold2DB/pb"
 )
@@ -75,26 +76,26 @@ func (rn *RaftNode) Tick() {
 // Campaign causes this RaftNode to transition to candidate state.
 func (rn *RaftNode) Campaign() error {
 	return rn.Raft.Step(&pb.Message{
-		MsgType: pb.MessageType_MsgHup,
+		Type: pb.MsgHup,
 	})
 }
 
 // Propose proposes data be appended to the raft log.
-func (rn *RaftNode) Propose(data []byte) error {
-	ent := pb.Entry{Data: data}
+func (rn *RaftNode) Propose(buffer bytes.Buffer) error {
+	ent := pb.Entry{Data: buffer.Bytes()}
 	return rn.Raft.Step(&pb.Message{
-		MsgType: pb.MessageType_MsgPropose,
+		Type:    pb.MsgProp,
 		From:    rn.Raft.id,
-		Entries: []*pb.Entry{&ent}})
+		Entries: []pb.Entry{ent}})
 }
 
 // Step advances the state machine using the given message.
 func (rn *RaftNode) Step(m *pb.Message) error {
 	// ignore unexpected local messages receiving over network
-	if IsLocalMsg(m.MsgType) {
+	if IsLocalMsg(m.Type) {
 		return ErrStepLocalMsg
 	}
-	if pr := rn.Raft.Prs[m.From]; pr != nil || !IsResponseMsg(m.MsgType) {
+	if pr := rn.Raft.Prs[m.From]; pr != nil || !IsResponseMsg(m.Type) {
 		return rn.Raft.Step(m)
 	}
 	return ErrStepPeerNotFound
@@ -118,12 +119,12 @@ func (rn *RaftNode) TransferLeader(transferee uint64) {
 }
 
 // ProposeConfChange proposes a config change.
-func (rn *RaftNode) ProposeConfChange(cc *pb.ConfChange) error {
+func (rn *RaftNode) ProposeConfChange(cc pb.ConfChange) error {
 	data, err := cc.Marshal()
 	if err != nil {
 		return err
 	}
-	ent := pb.Entry{EntryType: pb.EntryType_EntryConfChange, Data: data}
+	ent := pb.Entry{Type: pb.EntryConfChange, Data: data}
 	return rn.Raft.Step(&pb.Message{
 		MsgType: pb.MessageType_MsgPropose,
 		Entries: []*pb.Entry{&ent},

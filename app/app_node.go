@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"github.com/ColdToo/Cold2DB/code"
 	log "github.com/ColdToo/Cold2DB/log"
@@ -34,7 +35,7 @@ type AppNode struct {
 	wal         *wal.WAL
 	transport   *transport.Transport
 
-	proposeC    <-chan kv            // 提议 (k,v)
+	proposeC    <-chan bytes.Buffer  // 提议 (k,v)
 	confChangeC <-chan pb.ConfChange // 提议更改配置文件
 	commitC     chan<- *commit       // 提交 (k,v)
 	errorC      chan<- error         // errors from raft session
@@ -99,58 +100,13 @@ func (an *AppNode) startRaft() {
 	go an.serveRaftLayer()
 }
 
-func (an *AppNode) servePeerRaft() {
-	//transport 实例，负责raft节点之间的网络通信服务
-	an.transport = &transport.Transport{
-		LocalID:   types.ID(an.localId),
-		ClusterID: 0x1000,
-		Raft:      an,
-		ErrorC:    make(chan error),
-	}
-
-	err := an.transport.Initialize()
-	if err != nil {
-		log.Panic("initialize transport failed").Err(code.NodeInIErr, err).Record()
-		return
-	}
-
-	//raftexample --id 1 --cluster http://127.0.0.1:12379,http://127.0.0.1:22379,http://127.0.0.1:32379 --port 12380
-	for i := range an.peersUrl {
-		if i+1 != an.localId {
-			an.transport.AddPeer(types.ID(i+1), []string{an.peersUrl[i]})
-		}
-	}
-
-	//监听来自其他节点的http请求
-	an.listenAndServePeerRaft()
-}
-
-func (an *AppNode) listenAndServePeerRaft() {
-	localUrl, err := url.Parse(an.peersUrl[an.localId-1])
-	if err != nil {
-		log.Panic("raftexample: Failed parsing URL (%v)")
-	}
-	ln, err := transport.NewStoppableListener(localUrl.Host, an.httpstopc)
-	if err != nil {
-		log.Panic("raftexample: Failed to listen transport (%v)")
-	}
-	err = (&http.Server{Handler: an.transport.Handler()}).Serve(ln)
-
-	select {
-	case <-an.httpstopc:
-	default:
-		log.Panic("raftexample: Failed to serve transport (%v)")
-	}
-	close(an.httpdonec)
-}
-
 func (an *AppNode) serveRaftLayer() {
 	// 获取快照的一些信息
 	snap, err := an.raftStorage.Snapshot()
 	if err != nil {
 		panic(err)
 	}
-	an.confState = snap.Metadata.ConfState
+	//an.confState = snap.Metadata.ConfState
 	an.snapshotIndex = snap.Metadata.Index
 	an.appliedIndex = snap.Metadata.Index
 
@@ -165,7 +121,7 @@ func (an *AppNode) serveRaftLayer() {
 					an.proposeC = nil
 				} else {
 					// blocks until accepted by raft state machine
-					an.raftNode.Propose([]byte(prop))
+					an.raftNode.Propose(prop)
 				}
 
 			case cc, ok := <-an.confChangeC:
@@ -218,6 +174,51 @@ func (an *AppNode) serveRaftLayer() {
 			return
 		}
 	}
+}
+
+func (an *AppNode) servePeerRaft() {
+	//transport 实例，负责raft节点之间的网络通信服务
+	an.transport = &transport.Transport{
+		LocalID:   types.ID(an.localId),
+		ClusterID: 0x1000,
+		Raft:      an,
+		ErrorC:    make(chan error),
+	}
+
+	err := an.transport.Initialize()
+	if err != nil {
+		log.Panic("initialize transport failed").Err(code.NodeInIErr, err).Record()
+		return
+	}
+
+	//raftexample --id 1 --cluster http://127.0.0.1:12379,http://127.0.0.1:22379,http://127.0.0.1:32379 --port 12380
+	for i := range an.peersUrl {
+		if i+1 != an.localId {
+			an.transport.AddPeer(types.ID(i+1), []string{an.peersUrl[i]})
+		}
+	}
+
+	//监听来自其他节点的http请求
+	an.listenAndServePeerRaft()
+}
+
+func (an *AppNode) listenAndServePeerRaft() {
+	localUrl, err := url.Parse(an.peersUrl[an.localId-1])
+	if err != nil {
+		log.Panic("raftexample: Failed parsing URL (%v)")
+	}
+	ln, err := transport.NewStoppableListener(localUrl.Host, an.httpstopc)
+	if err != nil {
+		log.Panic("raftexample: Failed to listen transport (%v)")
+	}
+	err = (&http.Server{Handler: an.transport.Handler()}).Serve(ln)
+
+	select {
+	case <-an.httpstopc:
+	default:
+		log.Panic("raftexample: Failed to serve transport (%v)")
+	}
+	close(an.httpdonec)
 }
 
 func (an *AppNode) checkEntrys(ents []pb.Entry) (nents []pb.Entry) {
