@@ -137,18 +137,18 @@ func (an *AppNode) servePeerRaft() {
 func (an *AppNode) listenAndServePeerRaft() {
 	localUrl, err := url.Parse(an.peersUrl[an.localId-1])
 	if err != nil {
-		log.Fatalf("raftexample: Failed parsing URL (%v)", err)
+		log.Panic("raftexample: Failed parsing URL (%v)")
 	}
 	ln, err := raftTransport.NewStoppableListener(localUrl.Host, an.httpstopc)
 	if err != nil {
-		log.Fatalf("raftexample: Failed to listen raftTransport (%v)", err)
+		log.Panic("raftexample: Failed to listen raftTransport (%v)")
 	}
 	err = (&http.Server{Handler: an.transport.Handler()}).Serve(ln)
 
 	select {
 	case <-an.httpstopc:
 	default:
-		log.Fatalf("raftexample: Failed to serve raftTransport (%v)", err)
+		log.Panic("raftexample: Failed to serve raftTransport (%v)")
 	}
 	close(an.httpdonec)
 }

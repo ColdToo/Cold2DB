@@ -8,4 +8,6 @@ const (
 	RemotePeerUrls = "remote-peer-urls"
 
 	MessageProcErr = "MessageProcErr"
+
+	FailedReadMessage = "FailedReadMessage"
 )

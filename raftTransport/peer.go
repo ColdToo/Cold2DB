@@ -115,7 +115,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 	// 发送message到远端本体
 	streamWriter := startStreamWriter(t.LocalID, peerID, peerStatus, r)
 
-	// 用于接收其他节点发送过来的数据交给raft层进行处理
+	// 读出recvc和propc的数据交给raft层进行处理
 	p := &peer{
 		localID:    t.LocalID,
 		remoteID:   peerID,
@@ -161,6 +161,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 		}
 	}()
 
+	// 用于接收其他节点发送过来的数据传递给recvc和propc通道
 	p.msgAppReader = &streamReader{
 		peerID:     peerID,
 		streamType: streamTypeMessage,

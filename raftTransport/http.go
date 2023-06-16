@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db"
 	log "github.com/ColdToo/Cold2DB/log"
 	types "github.com/ColdToo/Cold2DB/raftTransport/types"
@@ -38,7 +39,6 @@ type writerToResponse interface {
 	WriteTo(w http.ResponseWriter)
 }
 
-// pipeline
 type pipelineHandler struct {
 	lg        *zap.Logger
 	localID   types.ID
@@ -49,7 +49,6 @@ type pipelineHandler struct {
 
 func newPipelineHandler(t *Transport, r Raft, clusterId types.ID) http.Handler {
 	return &pipelineHandler{
-		lg:        t.Logger,
 		localID:   t.LocalID,
 		trans:     t,
 		raft:      r,
@@ -58,13 +57,9 @@ func newPipelineHandler(t *Transport, r Raft, clusterId types.ID) http.Handler {
 }
 
 // pipeline 主要用于传输快照数据
-
 //1.读取对端发送过来的数据，
-//
 //读取数据的时候，限制每次从底层连接读取的字节数上线，默认是64KB，因为快照数据可能非常大，为了防止读取超时，只能每次读取一部分数据到缓冲区中，最后将全部数据拼接起来，得到完整的快照数据。
-//
 //2.将读取到的消息发送给底层的raft模块
-//
 //3.返回对端节点状态码
 func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// pipeline只允许post请求
@@ -74,7 +69,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.String())
+	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.Str())
 
 	//why pipeline add remote
 	addRemoteFromRequest(h.trans, r)
@@ -83,12 +78,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	limitedr := pioutil.NewLimitedBufferReader(r.Body, connReadLimitByte)
 	b, err := ioutil.ReadAll(limitedr)
 	if err != nil {
-		Log.Warn("")
-		h.lg.Warn(
-			"failed to read Raft message",
-			zap.String("local-member-id", h.localID.String()),
-			zap.Error(err),
-		)
+		log.Warn("failed to read Raft message").Str(code.LocalMemberId, h.localID.Str()).Err(code.FailedReadMessage, err).Record()
 		http.Error(w, "error reading raft message", http.StatusBadRequest)
 		return
 	}
@@ -97,7 +87,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := m.Unmarshal(b); err != nil {
 		h.lg.Warn(
 			"failed to unmarshal Raft message",
-			zap.String("local-member-id", h.localID.String()),
+			zap.String("local-member-id", h.localID.Str()),
 			zap.Error(err),
 		)
 		http.Error(w, "error unmarshalling raft message", http.StatusBadRequest)
@@ -112,7 +102,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			h.lg.Warn(
 				"failed to process Raft message",
-				zap.String("local-member-id", h.localID.String()),
+				zap.String("local-member-id", h.localID.Str()),
 				zap.Error(err),
 			)
 			http.Error(w, "error processing raft message", http.StatusInternalServerError)
@@ -128,7 +118,112 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// snapshot
+//stream
+type streamHandler struct {
+	lg         *zap.Logger
+	tr         *Transport
+	peerGetter peerGetter
+	r          Raft
+	id         types.ID
+	clusterId  types.ID
+}
+
+func newStreamHandler(t *Transport, pg peerGetter, r Raft, id, clusterId types.ID) http.Handler {
+	return &streamHandler{
+		tr:         t,
+		peerGetter: pg,
+		r:          r,
+		id:         id,
+		clusterId:  clusterId,
+	}
+}
+
+func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.String())
+
+	var t streamType
+	switch path.Dir(r.URL.Path) {
+	case streamTypeMessage.endpoint():
+		t = streamTypeMessage
+	default:
+		log.Warn("")
+		h.lg.Debug(
+			"ignored unexpected streaming request path",
+			zap.String("local-member-id", h.tr.LocalID.String()),
+			zap.String("remote-peer-id-stream-handler", h.id.String()),
+			zap.String("path", r.URL.Path),
+		)
+		http.Error(w, "invalid path", http.StatusNotFound)
+		return
+	}
+
+	fromStr := path.Base(r.URL.Path)
+	from, err := types.IDFromString(fromStr)
+	if err != nil {
+		h.lg.Warn(
+			"failed to parse path into ID",
+			zap.String("local-member-id", h.tr.LocalID.String()),
+			zap.String("remote-peer-id-stream-handler", h.id.String()),
+			zap.String("path", fromStr),
+			zap.Error(err),
+		)
+
+		http.Error(w, "invalid from", http.StatusNotFound)
+		return
+	}
+
+	if h.r.IsIDRemoved(uint64(from)) {
+
+		log.Info("rejected stream from remote peer because it was removed").Str("local-member-id", "").Record()
+		h.lg.Warn(
+			"rejected stream from remote peer because it was removed",
+			zap.String("local-member-id", h.tr.LocalID.String()),
+			zap.String("remote-peer-id-stream-handler", h.id.String()),
+			zap.String("remote-peer-id-from", from.String()),
+		)
+
+		http.Error(w, "removed member", http.StatusGone)
+		return
+	}
+	p := h.peerGetter.Get(from)
+
+	wto := h.id.String()
+	if gto := r.Header.Get("X-Raft-To"); gto != wto {
+		h.lg.Warn(
+			"ignored streaming request; ID mismatch",
+			zap.String("local-member-id", h.tr.LocalID.String()),
+			zap.String("remote-peer-id-stream-handler", h.id.String()),
+			zap.String("remote-peer-id-header", gto),
+			zap.String("remote-peer-id-from", from.String()),
+			zap.String("cluster-id", h.clusterId.String()),
+		)
+		http.Error(w, "to field mismatch", http.StatusPreconditionFailed)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.(http.Flusher).Flush()
+
+	c := newCloseNotifier()
+	conn := &outgoingConn{
+		t:       t,
+		Writer:  w,
+		Flusher: w.(http.Flusher),
+		Closer:  c,
+		localID: h.tr.LocalID,
+		peerID:  h.id,
+	}
+	p.attachOutgoingConn(conn)
+	<-c.closeNotify()
+}
+
+// v3 版本使用新接口处理snapshot
 type snapshotHandler struct {
 	lg          *zap.Logger
 	trans       Transporter
@@ -141,7 +236,6 @@ type snapshotHandler struct {
 
 func newSnapshotHandler(t *Transport, r Raft, snapshotter *db.SnapShotter, clusterId types.ID) http.Handler {
 	return &snapshotHandler{
-		lg:          t.Logger,
 		trans:       t,
 		raft:        r,
 		snapshotter: snapshotter,
@@ -241,112 +335,6 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-//stream
-type streamHandler struct {
-	lg         *zap.Logger
-	tr         *Transport
-	peerGetter peerGetter
-	r          Raft
-	id         types.ID
-	clusterId  types.ID
-}
-
-func newStreamHandler(t *Transport, pg peerGetter, r Raft, id, clusterId types.ID) http.Handler {
-	return &streamHandler{
-		lg:         t.Logger,
-		tr:         t,
-		peerGetter: pg,
-		r:          r,
-		id:         id,
-		clusterId:  clusterId,
-	}
-}
-
-func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		w.Header().Set("Allow", "GET")
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.String())
-
-	var t streamType
-	switch path.Dir(r.URL.Path) {
-	case streamTypeMessage.endpoint():
-		t = streamTypeMessage
-	default:
-		log.Warn("")
-		h.lg.Debug(
-			"ignored unexpected streaming request path",
-			zap.String("local-member-id", h.tr.LocalID.String()),
-			zap.String("remote-peer-id-stream-handler", h.id.String()),
-			zap.String("path", r.URL.Path),
-		)
-		http.Error(w, "invalid path", http.StatusNotFound)
-		return
-	}
-
-	fromStr := path.Base(r.URL.Path)
-	from, err := types.IDFromString(fromStr)
-	if err != nil {
-		h.lg.Warn(
-			"failed to parse path into ID",
-			zap.String("local-member-id", h.tr.LocalID.String()),
-			zap.String("remote-peer-id-stream-handler", h.id.String()),
-			zap.String("path", fromStr),
-			zap.Error(err),
-		)
-
-		http.Error(w, "invalid from", http.StatusNotFound)
-		return
-	}
-
-	if h.r.IsIDRemoved(uint64(from)) {
-
-		log.Info("rejected stream from remote peer because it was removed").Str("local-member-id", "").Record()
-		h.lg.Warn(
-			"rejected stream from remote peer because it was removed",
-			zap.String("local-member-id", h.tr.LocalID.String()),
-			zap.String("remote-peer-id-stream-handler", h.id.String()),
-			zap.String("remote-peer-id-from", from.String()),
-		)
-
-		http.Error(w, "removed member", http.StatusGone)
-		return
-	}
-	p := h.peerGetter.Get(from)
-
-	wto := h.id.String()
-	if gto := r.Header.Get("X-Raft-To"); gto != wto {
-		h.lg.Warn(
-			"ignored streaming request; ID mismatch",
-			zap.String("local-member-id", h.tr.LocalID.String()),
-			zap.String("remote-peer-id-stream-handler", h.id.String()),
-			zap.String("remote-peer-id-header", gto),
-			zap.String("remote-peer-id-from", from.String()),
-			zap.String("cluster-id", h.clusterId.String()),
-		)
-		http.Error(w, "to field mismatch", http.StatusPreconditionFailed)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.(http.Flusher).Flush()
-
-	c := newCloseNotifier()
-	conn := &outgoingConn{
-		t:       t,
-		Writer:  w,
-		Flusher: w.(http.Flusher),
-		Closer:  c,
-		localID: h.tr.LocalID,
-		peerID:  h.id,
-	}
-	p.attachOutgoingConn(conn)
-	<-c.closeNotify()
 }
 
 // closeNotifier
