@@ -27,6 +27,18 @@ type Peer struct {
 	Context []byte
 }
 
+type Ready struct {
+	*SoftState
+
+	pb.HardState
+
+	Entries []pb.Entry // 待持久化
+
+	CommittedEntries []pb.Entry // 待apply
+
+	Messages []pb.Message // 待发送给其他节点的message
+}
+
 // RaftNode is a wrapper of Raft.
 type RaftNode struct {
 	Raft *Raft
@@ -103,18 +115,6 @@ func (rn *RaftNode) GetProgress() map[uint64]Progress {
 // TransferLeader tries to transfer leadership to the given transferee.
 func (rn *RaftNode) TransferLeader(transferee uint64) {
 	_ = rn.Raft.Step(&pb.Message{MsgType: pb.MessageType_MsgTransferLeader, From: transferee})
-}
-
-type Ready struct {
-	*SoftState
-
-	pb.HardState
-
-	Entries []pb.Entry // 待持久化
-
-	CommittedEntries []pb.Entry // 待apply
-
-	Messages []pb.Message // 待发送给其他节点的message
 }
 
 // ProposeConfChange proposes a config change.
@@ -272,4 +272,12 @@ func (rn *RaftNode) alterRaftStatus(rd Ready) {
 //关闭raft层（相关数据结构）
 func (rn *RaftNode) Stop() {
 
+}
+
+func (rn *RaftNode) ReportUnreachable(id uint64) {
+	return
+}
+
+func (rn *RaftNode) ReportSnapshot(id uint64, status SnapshotStatus) {
+	return
 }

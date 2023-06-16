@@ -7,15 +7,15 @@ import (
 	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
+	"github.com/ColdToo/Cold2DB/raft"
 	"github.com/ColdToo/Cold2DB/transport/transport"
 	types "github.com/ColdToo/Cold2DB/transport/types"
+	"go.etcd.io/etcd/etcdserver/api/snap"
 
 	"net/http"
 	"sync"
 	"time"
 
-	"go.etcd.io/etcd/etcdserver/api/snap"
-	"go.etcd.io/etcd/raft"
 	"go.uber.org/zap"
 )
 
@@ -35,36 +35,22 @@ type Transporter interface {
 	// Send 应用层通过该接口发送消息给peer,如果在transport中没有找到该peer那么忽略该消息
 	Send(m []pb.Message)
 
-	// SendSnapshot sends out the given snapshot message to a remote peer.
-	// The behavior of SendSnapshot is similar to Send.
 	SendSnapshot(m snap.Message)
-	// AddRemote adds a remote with given peer urls into the transport.
-	// A remote helps newly joined member to catch up the progress of cluster,
-	// and will not be used after that.
-	// It is the caller's responsibility to ensure the urls are all valid,
-	// or it panics.
+
 	AddRemote(id types.ID, urls []string)
-	// AddPeer adds a peer with given peer urls into the transport.
-	// It is the caller's responsibility to ensure the urls are all valid,
-	// or it panics.
-	// Peer urls are used to connect to the remote peer.
+
 	AddPeer(id types.ID, urls []string)
-	// RemovePeer removes the peer with given id.
+
 	RemovePeer(id types.ID)
-	// RemoveAllPeers removes all the existing peers in the transport.
+
 	RemoveAllPeers()
-	// UpdatePeer updates the peer urls of the peer with the given id.
-	// It is the caller's responsibility to ensure the urls are all valid,
-	// or it panics.
+
 	UpdatePeer(id types.ID, urls []string)
-	// ActiveSince returns the time that the connection with the peer
-	// of the given id becomes active.
-	// If the connection is active since peer was added, it returns the adding time.
-	// If the connection is currently inactive, it returns zero time.
+
 	ActiveSince(id types.ID) time.Time
-	// ActivePeers returns the number of active peers.
+
 	ActivePeers() int
-	// Stop closes the connections and stops the transporter.
+
 	Stop()
 }
 
@@ -322,7 +308,7 @@ func (t *Transport) SendSnapshot(m snap.Message) {
 		m.CloseWithError(errMemberNotFound)
 		return
 	}
-	domain.Log.Fatal().Str().Record()
+
 	p.sendSnap(m)
 }
 

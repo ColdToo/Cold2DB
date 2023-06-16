@@ -70,7 +70,7 @@ func (an *AppNode) startRaft() {
 	oldwal := wal.Exist(an.wal.Dir)
 
 	//如果wal文件存在那么先回放wal中的文件到内存中
-	an.wal = an.replayWAL()
+	an.wal = an.openWAL()
 
 	rpeers := make([]raft.Peer, len(an.peersUrl))
 	for i := range rpeers {
@@ -97,15 +97,6 @@ func (an *AppNode) startRaft() {
 	go an.servePeerRaft()
 	// 启动一个goroutine,处理appLayer与raftLayer的交互
 	go an.serveRaftLayer()
-}
-
-func (an *AppNode) openWAL() (w *wal.WAL) {
-	return w
-}
-
-func (an *AppNode) replayWAL() *wal.WAL {
-	log.Printf("replaying WAL of member %d", an.localId)
-	return nil
 }
 
 func (an *AppNode) servePeerRaft() {
@@ -297,6 +288,30 @@ func (an *AppNode) commitEntries(ents []pb.Entry) (<-chan struct{}, bool) {
 	return applyDoneC, true
 }
 
+func (an *AppNode) openWAL() (w *wal.WAL) {
+	return w
+}
+
+// 回放可能存在的wal到内存中
+func (an *AppNode) replayWAL() {
+	log.Info("replaying WAL of member %d").Record()
+}
+
+//  实现Rat接口,网络层通过该接口与RaftNode交互
+//	当transport模块接收到其他节点的信息时调用如下方法让raft算法层进行处理
+
+func (an *AppNode) Process(ctx context.Context, m *pb.Message) error {
+	return an.raftNode.Step(m)
+}
+
+func (an *AppNode) IsIDRemoved(id uint64) bool { return false }
+
+func (an *AppNode) ReportUnreachable(id uint64) { an.raftNode.ReportUnreachable(id) }
+
+func (an *AppNode) ReportSnapshotStatus(id uint64, status raft.SnapshotStatus) {
+	an.raftNode.ReportSnapshot(id, status)
+}
+
 // close app node
 func (an *AppNode) stopHTTP() {
 	an.transport.Stop()
@@ -317,19 +332,4 @@ func (an *AppNode) writeError(err error) {
 	an.errorC <- err
 	close(an.errorC)
 	an.raftNode.Stop()
-}
-
-//  实现Rat接口,网络层通过该接口与RaftNode交互
-//	当transport模块接收到其他节点的信息时调用如下方法让raft算法层进行处理
-
-func (an *AppNode) Process(ctx context.Context, m *pb.Message) error {
-	return an.raftNode.Step(m)
-}
-
-func (an *AppNode) IsIDRemoved(id uint64) bool { return false }
-
-func (an *AppNode) ReportUnreachable(id uint64) { an.node.ReportUnreachable(id) }
-
-func (an *AppNode) ReportSnapshot(id uint64, status raft.SnapshotStatus) {
-	an.node.ReportSnapshot(id, status)
 }
