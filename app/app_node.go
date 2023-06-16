@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
+	"github.com/ColdToo/Cold2DB/Transport"
+	types "github.com/ColdToo/Cold2DB/Transport/types"
 	"github.com/ColdToo/Cold2DB/code"
 	log "github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/raft"
-	"github.com/ColdToo/Cold2DB/raftTransport"
-	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"github.com/ColdToo/Cold2DB/wal"
 	"go.uber.org/zap"
@@ -32,7 +32,7 @@ type AppNode struct {
 	raftNode    *raft.RaftNode
 	raftStorage *raft.MemoryStorage
 	wal         *wal.WAL
-	transport   *raftTransport.Transport
+	transport   *Transport.Transport
 
 	proposeC    <-chan kv                   // 提议 (k,v)
 	confChangeC <-chan raftproto.ConfChange // 提议更改配置文件
@@ -110,7 +110,7 @@ func (an *AppNode) replayWAL() *wal.WAL {
 
 func (an *AppNode) servePeerRaft() {
 	//Transport 实例，负责raft节点之间的网络通信服务
-	an.transport = &raftTransport.Transport{
+	an.transport = &Transport.Transport{
 		LocalID:   types.ID(an.localId),
 		ClusterID: 0x1000,
 		Raft:      an,
@@ -139,16 +139,16 @@ func (an *AppNode) listenAndServePeerRaft() {
 	if err != nil {
 		log.Panic("raftexample: Failed parsing URL (%v)")
 	}
-	ln, err := raftTransport.NewStoppableListener(localUrl.Host, an.httpstopc)
+	ln, err := Transport.NewStoppableListener(localUrl.Host, an.httpstopc)
 	if err != nil {
-		log.Panic("raftexample: Failed to listen raftTransport (%v)")
+		log.Panic("raftexample: Failed to listen Transport (%v)")
 	}
 	err = (&http.Server{Handler: an.transport.Handler()}).Serve(ln)
 
 	select {
 	case <-an.httpstopc:
 	default:
-		log.Panic("raftexample: Failed to serve raftTransport (%v)")
+		log.Panic("raftexample: Failed to serve Transport (%v)")
 	}
 	close(an.httpdonec)
 }

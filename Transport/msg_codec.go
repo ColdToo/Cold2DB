@@ -1,4 +1,4 @@
-package raftTransport
+package Transport
 
 import (
 	"encoding/binary"
@@ -37,7 +37,7 @@ type messageDecoder struct {
 
 var (
 	readBytesLimit     uint64 = 512 * 1024 * 1024 // 512 MB
-	ErrExceedSizeLimit        = errors.New("raftTransport: error limit exceeded")
+	ErrExceedSizeLimit        = errors.New("Transport: error limit exceeded")
 )
 
 func (dec *messageDecoder) decode() (raftproto.Message, error) {

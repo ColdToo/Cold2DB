@@ -1,7 +1,7 @@
-package raftTransport
+package Transport
 
 import (
-	types "github.com/ColdToo/Cold2DB/raftTransport/types"
+	types "github.com/ColdToo/Cold2DB/Transport/types"
 	"net/url"
 	"sync"
 )

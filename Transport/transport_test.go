@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package raftTransport
+package Transport
 
 import (
 	"net/http"

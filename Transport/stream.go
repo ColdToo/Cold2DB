@@ -1,11 +1,11 @@
-package raftTransport
+package Transport
 
 import (
 	"context"
 	"fmt"
+	types "github.com/ColdToo/Cold2DB/Transport/types"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
-	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	"io"
 	"io/ioutil"

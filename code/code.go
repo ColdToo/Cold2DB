@@ -3,9 +3,11 @@ package code
 const (
 	NodeInIErr = "NodeInIErr"
 
-	LocalMemberId  = "local-member-id"
-	RemotePeerId   = "remote-peer-id"
-	RemotePeerUrls = "remote-peer-urls"
+	ClusterId       = "cluster-id"
+	LocalMemberId   = "local-member-id"
+	RemotePeerId    = "remote-peer-id"
+	RemotePeerUrls  = "remote-peer-urls"
+	RemotePeerReqId = "remote-peer-req-id"
 
 	MessageProcErr = "MessageProcErr"
 

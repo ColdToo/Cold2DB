@@ -1,9 +1,9 @@
-package raftTransport
+package Transport
 
 import (
 	"bytes"
 	"context"
-	types "github.com/ColdToo/Cold2DB/raftTransport/types"
+	types "github.com/ColdToo/Cold2DB/Transport/types"
 	"io"
 	"io/ioutil"
 	"net/http"

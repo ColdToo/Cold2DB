@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package raftTransport
+package Transport
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ColdToo/Cold2DB/raftTransport/peer"
+	"github.com/ColdToo/Cold2DB/Transport/peer"
 	"io"
 	"net/http"
 	"net/http/httptest"

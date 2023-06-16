@@ -1,13 +1,13 @@
-package raftTransport
+package Transport
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	types "github.com/ColdToo/Cold2DB/Transport/types"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db"
 	log "github.com/ColdToo/Cold2DB/log"
-	types "github.com/ColdToo/Cold2DB/raftTransport/types"
 	"github.com/ColdToo/Cold2DB/raftproto"
 	pioutil "go.etcd.io/etcd/pkg/ioutil"
 	"io/ioutil"
@@ -118,9 +118,8 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-//stream
+//stream Handler的主要作用就是建立一个长链接
 type streamHandler struct {
-	lg         *zap.Logger
 	tr         *Transport
 	peerGetter peerGetter
 	r          Raft
@@ -145,20 +144,13 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.String())
+	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.Str())
 
 	var t streamType
 	switch path.Dir(r.URL.Path) {
 	case streamTypeMessage.endpoint():
 		t = streamTypeMessage
 	default:
-		log.Warn("")
-		h.lg.Debug(
-			"ignored unexpected streaming request path",
-			zap.String("local-member-id", h.tr.LocalID.String()),
-			zap.String("remote-peer-id-stream-handler", h.id.String()),
-			zap.String("path", r.URL.Path),
-		)
 		http.Error(w, "invalid path", http.StatusNotFound)
 		return
 	}
@@ -166,48 +158,29 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fromStr := path.Base(r.URL.Path)
 	from, err := types.IDFromString(fromStr)
 	if err != nil {
-		h.lg.Warn(
-			"failed to parse path into ID",
-			zap.String("local-member-id", h.tr.LocalID.String()),
-			zap.String("remote-peer-id-stream-handler", h.id.String()),
-			zap.String("path", fromStr),
-			zap.Error(err),
-		)
+		log.Warn("failed to parse path into ID").Str(code.LocalMemberId, h.tr.LocalID.Str()).Record()
 
 		http.Error(w, "invalid from", http.StatusNotFound)
 		return
 	}
 
 	if h.r.IsIDRemoved(uint64(from)) {
-
-		log.Info("rejected stream from remote peer because it was removed").Str("local-member-id", "").Record()
-		h.lg.Warn(
-			"rejected stream from remote peer because it was removed",
-			zap.String("local-member-id", h.tr.LocalID.String()),
-			zap.String("remote-peer-id-stream-handler", h.id.String()),
-			zap.String("remote-peer-id-from", from.String()),
-		)
-
+		log.Info("rejected stream from remote peer because it was removed").Str(code.RemotePeerId, fromStr).Record()
 		http.Error(w, "removed member", http.StatusGone)
 		return
 	}
 	p := h.peerGetter.Get(from)
 
-	wto := h.id.String()
+	wto := h.id.Str()
 	if gto := r.Header.Get("X-Raft-To"); gto != wto {
-		h.lg.Warn(
-			"ignored streaming request; ID mismatch",
-			zap.String("local-member-id", h.tr.LocalID.String()),
-			zap.String("remote-peer-id-stream-handler", h.id.String()),
-			zap.String("remote-peer-id-header", gto),
-			zap.String("remote-peer-id-from", from.String()),
-			zap.String("cluster-id", h.clusterId.String()),
-		)
+		log.Warn("ignored streaming request; ID mismatch").Str(code.LocalMemberId, h.tr.LocalID.Str()).
+			Str(code.RemotePeerReqId, gto).Str(code.ClusterId, h.clusterId.Str()).Record()
 		http.Error(w, "to field mismatch", http.StatusPreconditionFailed)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
+	// todo 这个flush是啥子意思？
 	w.(http.Flusher).Flush()
 
 	c := newCloseNotifier()
@@ -219,6 +192,8 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		localID: h.tr.LocalID,
 		peerID:  h.id,
 	}
+
+	//将链接传递给streamWriter
 	p.attachOutgoingConn(conn)
 	<-c.closeNotify()
 }
@@ -251,19 +226,19 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.String())
+	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.Str())
 
 	addRemoteFromRequest(h.trans, r)
 
 	dec := &messageDecoder{r: r.Body}
 	// let snapshots be very large since they can exceed 512MB for large installations
 	m, err := dec.decodeLimit(uint64(1 << 63))
-	from := types.ID(m.From).String()
+	from := types.ID(m.From).Str()
 	if err != nil {
 		msg := fmt.Sprintf("failed to decode raft message (%v)", err)
 		h.lg.Warn(
 			"failed to decode Raft message",
-			zap.String("local-member-id", h.localID.String()),
+			zap.String("local-member-id", h.localID.Str()),
 			zap.String("remote-snapshot-sender-id", from),
 			zap.Error(err),
 		)
@@ -276,7 +251,7 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if m.MsgType != raftproto.MessageType_MsgSnapshot {
 		h.lg.Warn(
 			"unexpected Raft message type",
-			zap.String("local-member-id", h.localID.String()),
+			zap.String("local-member-id", h.localID.Str()),
 			zap.String("remote-snapshot-sender-id", from),
 			zap.String("message-type", m.MsgType.String()),
 		)
@@ -286,7 +261,7 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h.lg.Info(
 		"receiving database snapshot",
-		zap.String("local-member-id", h.localID.String()),
+		zap.String("local-member-id", h.localID.Str()),
 		zap.String("remote-snapshot-sender-id", from),
 		zap.Uint64("incoming-snapshot-index", m.Snapshot.Metadata.Index),
 		zap.Int("incoming-snapshot-message-size-bytes", int(msgSize)),
@@ -297,7 +272,7 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.lg.Warn(
 			"failed to save incoming database snapshot",
-			zap.String("local-member-id", h.localID.String()),
+			zap.String("local-member-id", h.localID.Str()),
 			zap.String("remote-snapshot-sender-id", from),
 			zap.Uint64("incoming-snapshot-index", m.Snapshot.Metadata.Index),
 			zap.Error(err),
@@ -309,7 +284,7 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h.lg.Info(
 		"received and saved database snapshot",
-		zap.String("local-member-id", h.localID.String()),
+		zap.String("local-member-id", h.localID.Str()),
 		zap.String("remote-snapshot-sender-id", from),
 		zap.Uint64("incoming-snapshot-index", m.Snapshot.Metadata.Index),
 		zap.Int64("incoming-snapshot-size-bytes", int64(n)),
@@ -325,7 +300,7 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			msg := fmt.Sprintf("failed to process raft message (%v)", err)
 			h.lg.Warn(
 				"failed to process Raft message",
-				zap.String("local-member-id", h.localID.String()),
+				zap.String("local-member-id", h.localID.Str()),
 				zap.String("remote-snapshot-sender-id", from),
 				zap.Error(err),
 			)
