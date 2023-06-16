@@ -17,7 +17,6 @@ func main() {
 	join := flag.Bool("join", false, "是否加入已经存在的集群")
 	flag.Parse()
 
-	//初始化服务
 	domain.Init()
 
 	proposeC := make(chan kv)

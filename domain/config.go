@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-type RaftConfig struct {
+type Config struct {
 	ZapConf *log.ZapConfig
 }
 
@@ -21,7 +21,7 @@ func InitViper() *viper.Viper {
 		panic(fmt.Errorf("Fatal error config file: %s \n", err))
 	}
 
-	if err = v.Unmarshal(&RaftConfig{}); err != nil {
+	if err = v.Unmarshal(&Config{}); err != nil {
 		fmt.Println(err)
 	}
 
@@ -29,7 +29,7 @@ func InitViper() *viper.Viper {
 	v.WatchConfig()
 	v.OnConfigChange(func(e fsnotify.Event) {
 		fmt.Println("config file changed:", e.Name)
-		if err = v.Unmarshal(&RaftConfig{}); err != nil {
+		if err = v.Unmarshal(&Config{}); err != nil {
 			fmt.Println(err)
 		}
 	})

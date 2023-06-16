@@ -6,8 +6,8 @@ import (
 )
 
 var (
-	Viper    *viper.Viper
-	RaftConf *RaftConfig
+	Viper *viper.Viper
+	Conf  *Config
 )
 
 func Init() {
