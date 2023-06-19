@@ -31,6 +31,7 @@ type RaftLog struct {
 	entries []pb.Entry
 
 	// 待处理的快照
+
 	pendingSnapshot *pb.Snapshot
 }
 
