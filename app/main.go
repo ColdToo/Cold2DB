@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -19,7 +20,7 @@ func main() {
 
 	domain.Init()
 
-	proposeC := make(chan kv)
+	proposeC := make(chan bytes.Buffer)
 	defer close(proposeC)
 	confChangeC := make(chan pb.ConfChange)
 	defer close(confChangeC)

@@ -25,9 +25,7 @@ type Config struct {
 
 	peers []uint64  //peers ip
 
-	// That is, if a follower does not receive any message from the
-	// leader of current term before ElectionTick has elapsed, it will become
-	// candidate and start an election. ElectionTick must be greater than
+	//ElectionTick must be greater than
 	// HeartbeatTick. We suggest ElectionTick = 10 * HeartbeatTick to avoid
 	// unnecessary leader switching.
 	ElectionTick int
@@ -43,10 +41,6 @@ type Config struct {
 	// out of storage when restarting.
 	Storage Storage
 
-	// Applied is the last applied index. It should only be set when restarting
-	// raft. raft will not return entries to the application smaller or equal to
-	// Applied. If Applied is unset when restarting, raft might return previous
-	// applied entries. This is a very application dependent configuration.
 	Applied uint64
 }
 
@@ -75,7 +69,7 @@ type Raft struct {
 
 	CurrentTerm uint64
 
-	VoteFor uint64
+	VoteFor uint64   //
 
 	RaftLog *RaftLog
 

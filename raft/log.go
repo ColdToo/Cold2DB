@@ -3,7 +3,6 @@ package raft
 import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/pb"
-	"go.uber.org/zap"
 )
 
 // RaftLog manage the log entries, its struct look like:
@@ -12,7 +11,6 @@ import (
 //	--------|------------------------------------------------|
 //	                          log entries
 //
-// for simplify the RaftLog implement should manage all log entries
 
 type RaftLog struct {
 	// 持久化从first到stabled这一块的日志
@@ -22,27 +20,18 @@ type RaftLog struct {
 
 	last uint64
 
-	// committed is the highest log position that is known to be in
-	// stable storage on a quorum of nodes.
 	committed uint64
 
-	// applied is the highest log position that the application has
-	// been instructed to apply to its state machine.
 	// Invariant: applied <= committed
 	LastApplied uint64
 
-	// log entries with index <= stabled are persisted to storage.
-	// It is used to record the logs that are not persisted by storage yet.
-	// Everytime handling `Ready`, the unstabled logs will be included.
 	stabled uint64
 
 	// 所有还未压缩的日志
 	entries []pb.Entry
 
-	// the incoming unstable snapshot, if any.
+	// 待处理的快照
 	pendingSnapshot *pb.Snapshot
-
-	logger zap.Logger
 }
 
 // newLog returns log using the given storage. It recovers the log
