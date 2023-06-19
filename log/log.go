@@ -14,15 +14,15 @@ import (
 var log *zap.Logger
 
 func InitLog() {
-	if ok, _ := utils.PathExists(domain.RaftConf.ZapConf.Director); !ok { // 判断是否有Director文件夹
-		fmt.Printf("create %v directory\n", domain.RaftConf.ZapConf.Director)
-		_ = os.Mkdir(domain.RaftConf.ZapConf.Director, os.ModePerm)
+	if ok, _ := utils.PathExists(domain.Conf.ZapConf.Director); !ok { // 判断是否有Director文件夹
+		fmt.Printf("create %v directory\n", domain.Conf.ZapConf.Director)
+		_ = os.Mkdir(domain.Conf.ZapConf.Director, os.ModePerm)
 	}
 
-	cores := domain.RaftConf.ZapConf.GetZapCores()
+	cores := domain.Conf.ZapConf.GetZapCores()
 	log = zap.New(zapcore.NewTee(cores...))
 
-	if domain.RaftConf.ZapConf.ShowLine {
+	if domain.Conf.ZapConf.ShowLine {
 		log = log.WithOptions(zap.AddCaller())
 	}
 }
@@ -97,6 +97,7 @@ func (f *Fields) Strs(key string, val []string) *Fields {
 	if f.skip {
 		return f
 	}
+
 	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.StringType, Interface: val})
 	return f
 }
@@ -205,7 +206,7 @@ func (z *ZapConfig) TransportLevel() zapcore.Level {
 
 // GetEncoder 获取 zapcore.Encoder
 func (z *ZapConfig) GetEncoder() zapcore.Encoder {
-	if domain.RaftConf.ZapConf.Format == "json" {
+	if domain.Conf.ZapConf.Format == "json" {
 		return zapcore.NewJSONEncoder(z.GetEncoderConfig())
 	}
 	return zapcore.NewConsoleEncoder(z.GetEncoderConfig())
@@ -219,9 +220,9 @@ func (z *ZapConfig) GetEncoderConfig() zapcore.EncoderConfig {
 		TimeKey:        "time",
 		NameKey:        "logger",
 		CallerKey:      "caller",
-		StacktraceKey:  domain.RaftConf.ZapConf.StacktraceKey,
+		StacktraceKey:  domain.Conf.ZapConf.StacktraceKey,
 		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    domain.RaftConf.ZapConf.ZapEncodeLevel(),
+		EncodeLevel:    domain.Conf.ZapConf.ZapEncodeLevel(),
 		EncodeTime:     z.CustomTimeEncoder,
 		EncodeDuration: zapcore.SecondsDurationEncoder,
 		EncodeCaller:   zapcore.FullCallerEncoder,
@@ -241,13 +242,13 @@ func (z *ZapConfig) GetEncoderCore(l zapcore.Level, level zap.LevelEnablerFunc) 
 
 // CustomTimeEncoder 自定义日志输出时间格式
 func (z *ZapConfig) CustomTimeEncoder(t time.Time, encoder zapcore.PrimitiveArrayEncoder) {
-	encoder.AppendString(domain.RaftConf.ZapConf.Prefix + t.Format("2006/01/02 - 15:04:05.000"))
+	encoder.AppendString(domain.Conf.ZapConf.Prefix + t.Format("2006/01/02 - 15:04:05.000"))
 }
 
 // GetZapCores 根据配置文件的Level获取 []zapcore.Core
 func (z *ZapConfig) GetZapCores() []zapcore.Core {
 	cores := make([]zapcore.Core, 0, 7)
-	for level := domain.RaftConf.ZapConf.TransportLevel(); level <= zapcore.FatalLevel; level++ {
+	for level := domain.Conf.ZapConf.TransportLevel(); level <= zapcore.FatalLevel; level++ {
 		cores = append(cores, z.GetEncoderCore(level, z.GetLevelPriority(level)))
 	}
 	return cores
