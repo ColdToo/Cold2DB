@@ -8,12 +8,12 @@ import (
 	"go.etcd.io/etcd/raft/tracker"
 )
 
-type RoleType uint8
+type Role uint8
 
 const None uint64 = 0
 
 const (
-	Leader RoleType = iota
+	Leader Role = iota
 	Follower
 	Candidate
 )
@@ -23,22 +23,12 @@ type Config struct {
 	// ID is the identity of the local raft. ID cannot be 0.
 	ID uint64
 
-	peers []uint64  //peers ip
+	peers []uint64 //peers ip
 
-	//ElectionTick must be greater than
-	// HeartbeatTick. We suggest ElectionTick = 10 * HeartbeatTick to avoid
-	// unnecessary leader switching.
 	ElectionTick int
 
-	// HeartbeatTick is the number of Node.Tick invocations that must pass between
-	// heartbeats. That is, a leader sends heartbeat messages to maintain its
-	// leadership every HeartbeatTick ticks.
 	HeartbeatTick int
 
-	// Storage is the storage for raft. raft generates entries and states to be
-	// stored in storage. raft reads the persisted entries and states out of
-	// Storage when it needs. raft reads out the previous state and configuration
-	// out of storage when restarting.
 	Storage Storage
 
 	Applied uint64
@@ -69,16 +59,15 @@ type Raft struct {
 
 	CurrentTerm uint64
 
-	VoteFor uint64   //
+	VoteFor uint64 //
 
 	RaftLog *RaftLog
 
-	// log replication progress of each peers
 	// 对于每个节点，待发送到该节点的下一个日志条目的索引，初值为领导人最后的日志条目索引 + 1
 	// 对于每个节点，已知的已经同步到该节点的最高日志条目的索引，初值为0，表示没有
-	Prs map[uint64]*Progress
+	Progress map[uint64]*Progress
 
-	State RoleType
+	Role Role
 
 	// votes records
 	votes map[uint64]bool
@@ -96,10 +85,6 @@ type Raft struct {
 
 	electionElapsed int
 
-	// leadTransferee is id of the leader transfer target when its value is not zero.
-	// Follow the procedure defined in section 3.10 of Raft phd thesis.
-	// (https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf)
-	// (Used in 3A leader transfer)
 	// leader要维护或者从集群中删除。
 	// 有更适合当server的节点，比如说有更高的负载，更好的网络条件。
 	leadTransferee uint64
@@ -169,26 +154,47 @@ func (r *Raft) handleSnapshot(m *pb.Message) {
 // Step 该函数接收一个 Msg，然后根据节点的角色和 Msg 的类型调用不同的处理函数。
 // 上层 RawNode 发送 Msg 时，实际上就是将 Msg 传递给 Step()，然后进入 Msg 的处理模块，起到推进的作用。
 func (r *Raft) Step(m *pb.Message) error {
-	switch  {
-	case m.Term == 0: //本地发送的消息
-		switch  {
-		case m.MsgType == pb.MessageType_MsgHup:
+	switch {
+	//本地发送的消息
+	case m.Term == 0:
+		switch {
+		case m.Type == pb.MsgHup:
+			// 判断整个集群中是否只有自己一个节点若是，则直接成为leader
 			r.becomeCandidate()
-		case m.MsgType == pb.MessageType_MsgPropose:
-		case m.MsgType == pb.
+			// 向其他集群发起投票请求
+		case m.Type == pb.MsgBeat:
+			if r.LeaderID == r.id {
+				//向其他节点发送心跳
+			}
+		case m.Type == pb.MsgProp:
+			// prop只有leader节点能够处理，其他节点直接抛出ErrProposalDropped
+			// 集群leader若正在转移也直接drop
+			if r.leadTransferee != 0 {
+				return errors.New("ErrProposalDropped")
+			}
+			//把 m.Entries 追加到自己的 Entries 中
+			err := r.RaftLog.Append(m.Entries)
+			if err != nil {
+				return err
+			}
+
+			//向其他所有节点发送追加日志 RPC，即 MsgAppend，用于集群同步；
+			//如果集群中只有自己一个节点，则直接更新自己的 committedIndex；
 		}
+
 	case m.Term > r.CurrentTerm:
+
 	case m.Term < r.CurrentTerm:
+
 	}
 
-	switch r.State {
+	switch r.Role {
 	case Leader:
 	case Candidate:
 	case Follower:
 	}
 	return nil
 }
-
 
 type stepFunc func(r *Raft, m pb.Message) error
 
@@ -674,14 +680,13 @@ func stepFollower(r *Raft, m pb.Message) error {
 	return nil
 }
 
-
 // Raft 的时钟是一个逻辑时钟，上层通过不断调用 Tick() 来模拟时间的递增。每一次调用根据不同的角色从而调用不同的tick，节点都应该增加自己的r.electionElapsed，
 // 如果是 Leader，还应该增加自己的 r.heartbeatElapsed。接下来，根据节点的角色进行不同的处理。
 // tickElection is run by followers and candidates after r.electionTimeout.
 func (r *Raft) tickElection() {
 	r.electionElapsed++
 
-	if  r.electionElapsed > r.electionTimeout {
+	if r.electionElapsed > r.electionTimeout {
 		r.electionElapsed = 0
 		r.Step(&pb.Message{From: r.id, MsgType: pb.MessageType_MsgHup})
 	}
@@ -714,8 +719,6 @@ func (r *Raft) tickHeartbeat() {
 	}
 }
 
-
-
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.id = lead
@@ -727,8 +730,8 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
-	r.id=0
-	r.State=Candidate
+	r.LeaderID = 0
+	r.Role = Candidate
 	r.CurrentTerm++
 	r.stepFunc = stepCandidate
 	r.tick = r.tickElection
@@ -738,11 +741,10 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	r.State = Leader
 	r.LeaderID = r.id
-	r.stepFunc =stepLeader
-	r.tick=r.tickHeartbeat
+	r.stepFunc = stepLeader
+	r.tick = r.tickHeartbeat
 	// todo NOTE: Leader should propose a noop entry on its term
 }
-
 
 // addNode add a new node to raft group
 func (r *Raft) addNode(id uint64) {

@@ -78,7 +78,8 @@ func (an *AppNode) startRaft() {
 		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
 	}
 
-	//初始化raft配置
+	// 初始化raft配置
+	// todo 从配置文件获取参数
 	c := &raft.Config{
 		ID:            uint64(an.localId),
 		ElectionTick:  10,
