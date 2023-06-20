@@ -13,79 +13,66 @@ import (
 //
 
 type RaftLog struct {
-	// 持久化从first到stabled这一块的日志
-	storage Storage
-
 	first uint64
 
-	last uint64
+	Applied uint64
 
 	committed uint64
 
-	// Invariant: applied <= committed
-	LastApplied uint64
-
 	stabled uint64
 
+	last uint64
+
 	// 所有还未压缩的日志
-	entries []pb.Entry
+	allEntries []pb.Entry
 
-	// 待处理的快照
-
-	pendingSnapshot *pb.Snapshot
+	// 持久化从first到stabled这一块的日志
+	storage Storage
 }
 
-// newLog returns log using the given storage. It recovers the log
-// to the state that it just commits and applies the latest snapshot.
-func newLog(storage Storage) *RaftLog {
+func newRaftLog(storage Storage) (*RaftLog, error) {
 	firstIndex, err := storage.FirstIndex()
 	if err != nil {
 
-		return nil
+		return nil, err
 	}
 	lastIndex, err := storage.LastIndex()
 	if err != nil {
-		return nil
+		return nil, err
 	}
+	allEntrys, err := storage.Entries(firstIndex, lastIndex+1)
 
-	return &RaftLog{storage: storage, first: firstIndex, last: lastIndex}
+	return &RaftLog{storage: storage, first: firstIndex, last: lastIndex, allEntries: allEntrys}, nil
 }
 
-// We need to compact the log entries in some point of time like
-// storage compact stabled log entries prevent the log entries
-// grow unlimitedly in memory
-func (l *RaftLog) maybeCompact() {
-	if len(l.entries[:l.LastApplied+1]) > 1000 {
-		// todo compact
-	}
-}
-
-// allEntries return all the entries not compacted.
-// note, exclude any dummy entries from the return value.
-// note, this is one of the test stub functions you need to implement.
-func (l *RaftLog) allEntries() []pb.Entry {
-	return l.entries
+func (l *RaftLog) getAllEntries() []pb.Entry {
+	return l.allEntries
 }
 
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
-	return l.entries[:l.stabled+1]
+	return l.allEntries[l.stabled : l.last+1]
 }
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
-	return l.entries[l.committed:]
+	return l.allEntries[l.Applied : l.committed+1]
 }
 
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
-	return uint64(len(l.entries) - 1)
+	return l.last
 }
 
 // Term return the term of the entry in the given index
-func (l *RaftLog) Term(i uint64) (uint64, error) {
-	if uint64(len(l.entries)) < i {
+func (l *RaftLog) getTermByEntryIndex(i uint64) (uint64, error) {
+	if uint64(len(l.allEntries)) < i {
 		return 0, errors.New("not find the log entry")
 	}
-	return l.entries[i].Term, nil
+	return l.allEntries[i].Term, nil
+}
+
+// Term return the term of the entry in the given index
+func (l *RaftLog) Append(ents []pb.Entry) error {
+	return nil
 }
