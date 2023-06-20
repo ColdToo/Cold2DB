@@ -189,8 +189,11 @@ func (rn *RaftNode) run() {
 		case m := <-rn.recvc:
 			// 处理其他节点发送过来的提交值
 			// filter out response message from unknown From.
-			if pr := r.Prs[m.From]; pr != nil || !IsResponseMsg(m.MsgType) {
-				r.Step(&m)
+			if pr := r.Progress[m.From]; pr != nil || !IsResponseMsg(m.Type) {
+				err := r.Step(&m)
+				if err != nil {
+					return
+				}
 			}
 
 		case readyc <- rd:

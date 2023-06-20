@@ -140,7 +140,7 @@ func (an *AppNode) serveRaftLayer() {
 	}()
 
 	//AppNode 会启动一个定时器，每个 tick 默认为 100ms，然后定时调用 Node.Tick 方法驱动算法层执行定时函数：
-	//todo 应该做成可配置选项
+	//todo 定时器应该做成可配置选项
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
