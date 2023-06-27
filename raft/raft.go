@@ -2,12 +2,9 @@ package raft
 
 import (
 	"errors"
-	"fmt"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
-	"go.etcd.io/etcd/raft/quorum"
-	"go.etcd.io/etcd/raft/tracker"
 )
 
 type Role uint8
@@ -131,8 +128,9 @@ func (r *Raft) Step(m *pb.Message) error {
 type stepFunc func(r *Raft, m *pb.Message) error
 
 func stepLeader(r *Raft, m *pb.Message) error {
-	pr := r.Progress[m.From]
+	//pr := r.Progress[m.From]
 	switch m.Type {
+	// send msg
 	case pb.MsgBeat:
 		r.bcastHeartbeat()
 		return nil
@@ -147,369 +145,61 @@ func stepLeader(r *Raft, m *pb.Message) error {
 			return errors.New(code.ErrProposalDropped)
 		}
 		r.handlePropMsg(m)
+
 	case pb.MsgAppResp:
-		pr.RecentActive = true
-
-		if m.Reject {
-			// RejectHint is the suggested next base entry for appending (i.e.
-			// we try to append entry RejectHint+1 next), and LogTerm is the
-			// term that the follower has at index RejectHint. Older versions
-			// of this library did not populate LogTerm for rejections and it
-			// is zero for followers with an empty log.
-			//
-			// Under normal circumstances, the leader's log is longer than the
-			// follower's and the follower's log is a prefix of the leader's
-			// (i.e. there is no divergent uncommitted suffix of the log on the
-			// follower). In that case, the first probe reveals where the
-			// follower's log ends (RejectHint=follower's last index) and the
-			// subsequent probe succeeds.
-			//
-			// However, when networks are partitioned or systems overloaded,
-			// large divergent log tails can occur. The naive attempt, probing
-			// entry by entry in decreasing order, will be the product of the
-			// length of the diverging tails and the network round-trip latency,
-			// which can easily result in hours of time spent probing and can
-			// even cause outright outages. The probes are thus optimized as
-			// described below.
-			r.logger.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d",
-				r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
-			nextProbeIdx := m.RejectHint
-			if m.LogTerm > 0 {
-				// If the follower has an uncommitted log tail, we would end up
-				// probing one by one until we hit the common prefix.
-				//
-				// For example, if the leader has:
-				//
-				//   idx        1 2 3 4 5 6 7 8 9
-				//              -----------------
-				//   term (L)   1 3 3 3 5 5 5 5 5
-				//   term (F)   1 1 1 1 2 2
-				//
-				// Then, after sending an append anchored at (idx=9,term=5) we
-				// would receive a RejectHint of 6 and LogTerm of 2. Without the
-				// code below, we would try an append at index 6, which would
-				// fail again.
-				//
-				// However, looking only at what the leader knows about its own
-				// log and the rejection hint, it is clear that a probe at index
-				// 6, 5, 4, 3, and 2 must fail as well:
-				//
-				// For all of these indexes, the leader's log term is larger than
-				// the rejection's log term. If a probe at one of these indexes
-				// succeeded, its log term at that index would match the leader's,
-				// i.e. 3 or 5 in this example. But the follower already told the
-				// leader that it is still at term 2 at index 9, and since the
-				// log term only ever goes up (within a log), this is a contradiction.
-				//
-				// At index 1, however, the leader can draw no such conclusion,
-				// as its term 1 is not larger than the term 2 from the
-				// follower's rejection. We thus probe at 1, which will succeed
-				// in this example. In general, with this approach we probe at
-				// most once per term found in the leader's log.
-				//
-				// There is a similar mechanism on the follower (implemented in
-				// handleAppendEntries via a call to findConflictByTerm) that is
-				// useful if the follower has a large divergent uncommitted log
-				// tail[1], as in this example:
-				//
-				//   idx        1 2 3 4 5 6 7 8 9
-				//              -----------------
-				//   term (L)   1 3 3 3 3 3 3 3 7
-				//   term (F)   1 3 3 4 4 5 5 5 6
-				//
-				// Naively, the leader would probe at idx=9, receive a rejection
-				// revealing the log term of 6 at the follower. Since the leader's
-				// term at the previous index is already smaller than 6, the leader-
-				// side optimization discussed above is ineffective. The leader thus
-				// probes at index 8 and, naively, receives a rejection for the same
-				// index and log term 5. Again, the leader optimization does not improve
-				// over linear probing as term 5 is above the leader's term 3 for that
-				// and many preceding indexes; the leader would have to probe linearly
-				// until it would finally hit index 3, where the probe would succeed.
-				//
-				// Instead, we apply a similar optimization on the follower. When the
-				// follower receives the probe at index 8 (log term 3), it concludes
-				// that all of the leader's log preceding that index has log terms of
-				// 3 or below. The largest index in the follower's log with a log term
-				// of 3 or below is index 3. The follower will thus return a rejection
-				// for index=3, log term=3 instead. The leader's next probe will then
-				// succeed at that index.
-				//
-				// [1]: more precisely, if the log terms in the large uncommitted
-				// tail on the follower are larger than the leader's. At first,
-				// it may seem unintuitive that a follower could even have such
-				// a large tail, but it can happen:
-				//
-				// 1. Leader appends (but does not commit) entries 2 and 3, crashes.
-				//   idx        1 2 3 4 5 6 7 8 9
-				//              -----------------
-				//   term (L)   1 2 2     [crashes]
-				//   term (F)   1
-				//   term (F)   1
-				//
-				// 2. a follower becomes leader and appends entries at term 3.
-				//              -----------------
-				//   term (x)   1 2 2     [down]
-				//   term (F)   1 3 3 3 3
-				//   term (F)   1
-				//
-				// 3. term 3 leader goes down, term 2 leader returns as term 4
-				//    leader. It commits the log & entries at term 4.
-				//
-				//              -----------------
-				//   term (L)   1 2 2 2
-				//   term (x)   1 3 3 3 3 [down]
-				//   term (F)   1
-				//              -----------------
-				//   term (L)   1 2 2 2 4 4 4
-				//   term (F)   1 3 3 3 3 [gets probed]
-				//   term (F)   1 2 2 2 4 4 4
-				//
-				// 4. the leader will now probe the returning follower at index
-				//    7, the rejection points it at the end of the follower's log
-				//    which is at a higher log term than the actually committed
-				//    log.
-				nextProbeIdx = r.raftLog.findConflictByTerm(m.RejectHint, m.LogTerm)
-			}
-			if pr.MaybeDecrTo(m.Index, nextProbeIdx) {
-				r.logger.Debugf("%x decreased progress of %x to [%s]", r.id, m.From, pr)
-				if pr.State == tracker.StateReplicate {
-					pr.BecomeProbe()
-				}
-				r.sendAppend(m.From)
-			}
-		} else {
-			oldPaused := pr.IsPaused()
-			if pr.MaybeUpdate(m.Index) {
-				switch {
-				case pr.State == tracker.StateProbe:
-					pr.BecomeReplicate()
-				case pr.State == tracker.StateSnapshot && pr.Match >= pr.PendingSnapshot:
-					// TODO(tbg): we should also enter this branch if a snapshot is
-					// received that is below pr.PendingSnapshot but which makes it
-					// possible to use the log again.
-					r.logger.Debugf("%x recovered from needing snapshot, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
-					// Transition back to replicating state via probing state
-					// (which takes the snapshot into account). If we didn't
-					// move to replicating state, that would only happen with
-					// the next round of appends (but there may not be a next
-					// round for a while, exposing an inconsistent RaftStatus).
-					pr.BecomeProbe()
-					pr.BecomeReplicate()
-				case pr.State == tracker.StateReplicate:
-					pr.Inflights.FreeLE(m.Index)
-				}
-
-				if r.maybeCommit() {
-					// committed index has progressed for the term, so it is safe
-					// to respond to pending read index requests
-					releasePendingReadIndexMessages(r)
-					r.bcastAppend()
-				} else if oldPaused {
-					// If we were paused before, this node may be missing the
-					// latest commit index, so send it.
-					r.sendAppend(m.From)
-				}
-				// We've updated flow control information above, which may
-				// allow us to send multiple (size-limited) in-flight messages
-				// at once (such as when transitioning from probe to
-				// replicate, or when freeTo() covers multiple messages). If
-				// we have more entries to send, send as many messages as we
-				// can (without sending empty messages for the commit index)
-				for r.maybeSendAppend(m.From, false) {
-				}
-				// Transfer leadership is in progress.
-				if m.From == r.leadTransferee && pr.Match == r.raftLog.lastIndex() {
-					r.logger.Infof("%x sent MsgTimeoutNow to %x after received MsgAppResp", r.id, m.From)
-					r.sendTimeoutNow(m.From)
-				}
-			}
-		}
+		// todo 如果append被拒绝那么应该有probe行为 这段代码后续补充
 	case pb.MsgHeartbeatResp:
-		pr.RecentActive = true
-		pr.ProbeSent = false
-
-		// free one slot for the full inflights window to allow progress.
-		if pr.State == tracker.StateReplicate && pr.Inflights.Full() {
-			pr.Inflights.FreeFirstOne()
-		}
-		if pr.Match < r.raftLog.lastIndex() {
-			r.sendAppend(m.From)
-		}
-
-		if r.readOnly.option != ReadOnlySafe || len(m.Context) == 0 {
-			return nil
-		}
-
-		if r.prs.Voters.VoteResult(r.readOnly.recvAck(m.From, m.Context)) != quorum.VoteWon {
-			return nil
-		}
-
-		rss := r.readOnly.advance(m)
-		for _, rs := range rss {
-			if resp := r.responseToReadIndexReq(rs.req, rs.index); resp.To != None {
-				r.send(resp)
-			}
-		}
+		r.handleHeartbeatResponse(*m)
 	case pb.MsgSnapStatus:
-		if pr.State != tracker.StateSnapshot {
-			return nil
-		}
-		// TODO(tbg): this code is very similar to the snapshot handling in
-		// MsgAppResp above. In fact, the code there is more correct than the
-		// code here and should likely be updated to match (or even better, the
-		// logic pulled into a newly created Progress state machine handler).
-		if !m.Reject {
-			pr.BecomeProbe()
-			r.logger.Debugf("%x snapshot succeeded, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
-		} else {
-			// NB: the order here matters or we'll be probing erroneously from
-			// the snapshot index, but the snapshot never applied.
-			pr.PendingSnapshot = 0
-			pr.BecomeProbe()
-			r.logger.Debugf("%x snapshot failed, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
-		}
-		// If snapshot finish, wait for the MsgAppResp from the remote node before sending
-		// out the next MsgApp.
-		// If snapshot failure, wait for a heartbeat interval before next try
-		pr.ProbeSent = true
+		// todo 获取snap是否传输成功后续需要补充这段逻辑
 	case pb.MsgUnreachable:
 		// During optimistic replication, if the remote becomes unreachable,
 		// there is huge probability that a MsgApp is lost.
-		if pr.State == tracker.StateReplicate {
-			pr.BecomeProbe()
-		}
-		r.logger.Debugf("%x failed to send message to %x because it is unreachable [%s]", r.id, m.From, pr)
 	case pb.MsgTransferLeader:
-		if pr.IsLearner {
-			r.logger.Debugf("%x is learner. Ignored transferring leadership", r.id)
-			return nil
-		}
-		leadTransferee := m.From
-		lastLeadTransferee := r.leadTransferee
-		if lastLeadTransferee != None {
-			if lastLeadTransferee == leadTransferee {
-				r.logger.Infof("%x [term %d] transfer leadership to %x is in progress, ignores request to same node %x",
-					r.id, r.Term, leadTransferee, leadTransferee)
-				return nil
-			}
-			r.abortLeaderTransfer()
-			r.logger.Infof("%x [term %d] abort previous transferring leadership to %x", r.id, r.Term, lastLeadTransferee)
-		}
-		if leadTransferee == r.id {
-			r.logger.Debugf("%x is already leader. Ignored transferring leadership to self", r.id)
-			return nil
-		}
-		// Transfer leadership to third party.
-		r.logger.Infof("%x [term %d] starts to transfer leadership to %x", r.id, r.Term, leadTransferee)
-		// Transfer leadership should be finished in one electionTimeout, so reset r.electionElapsed.
-		r.electionElapsed = 0
-		r.leadTransferee = leadTransferee
-		if pr.Match == r.raftLog.lastIndex() {
-			r.sendTimeoutNow(leadTransferee)
-			r.logger.Infof("%x sends MsgTimeoutNow to %x immediately as %x already has up-to-date log", r.id, leadTransferee, leadTransferee)
-		} else {
-			r.sendAppend(leadTransferee)
-		}
-	}
-	return nil
-}
-
-func stepCandidate(r *Raft, m *pb.Message) error {
-	// Only handle vote responses corresponding to our candidacy (while in
-	// StateCandidate, we may get stale MsgPreVoteResp messages in this term from
-	// our pre-candidate state).
-	var myVoteRespType pb.MessageType
-	if r.state == StatePreCandidate {
-		myVoteRespType = pb.MsgPreVoteResp
-	} else {
-		myVoteRespType = pb.MsgVoteResp
-	}
-	switch m.Type {
-	case pb.MsgProp:
-		r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
-		return ErrProposalDropped
-	case pb.MsgApp:
-		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
-		r.handleAppendEntries(m)
-	case pb.MsgHeartbeat:
-		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
-		r.handleHeartbeat(m)
-	case pb.MsgSnap:
-		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
-		r.handleSnapshot(m)
-	case myVoteRespType:
-		gr, rj, res := r.poll(m.From, m.Type, !m.Reject)
-		r.logger.Infof("%x has received %d %s votes and %d vote rejections", r.id, gr, m.Type, rj)
-		switch res {
-		case quorum.VoteWon:
-			if r.state == StatePreCandidate {
-				r.campaign(campaignElection)
-			} else {
-				r.becomeLeader()
-				r.bcastAppend()
-			}
-		case quorum.VoteLost:
-			// pb.MsgPreVoteResp contains future term of pre-candidate
-			// m.Term > r.Term; reuse r.Term
-			r.becomeFollower(r.Term, None)
-		}
-	case pb.MsgTimeoutNow:
-		r.logger.Debugf("%x [term %d state %v] ignored MsgTimeoutNow from %x", r.id, r.Term, r.state, m.From)
+		// 暂时不做leader转移
 	}
 	return nil
 }
 
 func stepFollower(r *Raft, m *pb.Message) error {
 	switch m.Type {
+	// 日志提议直接转发给leader节点
 	case pb.MsgProp:
-		if r.lead == None {
-			r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
-			return ErrProposalDropped
-		} else if r.disableProposalForwarding {
-			r.logger.Infof("%x not forwarding to leader %x at term %d; dropping proposal", r.id, r.lead, r.Term)
-			return ErrProposalDropped
+		if r.LeaderID == None {
+			// todo zap应该格式化的就格式化，不应该所有的使用json方法格式
+			// r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
+			return errors.New(code.ErrProposalDropped)
 		}
-		m.To = r.lead
-		r.send(m)
+		m.To = r.LeaderID
+		//r.send(m)
 	case pb.MsgApp:
 		r.electionElapsed = 0
-		r.lead = m.From
-		r.handleAppendEntries(m)
+		r.LeaderID = m.From
+		r.handleAppendEntries(*m)
 	case pb.MsgHeartbeat:
 		r.electionElapsed = 0
-		r.lead = m.From
-		r.handleHeartbeat(m)
+		r.LeaderID = m.From
+		r.handleHeartbeat(*m)
 	case pb.MsgSnap:
 		r.electionElapsed = 0
-		r.lead = m.From
-		r.handleSnapshot(m)
-	case pb.MsgTransferLeader:
-		if r.lead == None {
-			r.logger.Infof("%x no leader at term %d; dropping leader transfer msg", r.id, r.Term)
-			return nil
-		}
-		m.To = r.lead
-		r.send(m)
-	case pb.MsgTimeoutNow:
-		r.logger.Infof("%x [term %d] received MsgTimeoutNow from %x and starts an election to get leadership.", r.id, r.Term, m.From)
-		// Leadership transfers never use pre-vote even if r.preVote is true; we
-		// know we are not recovering from a partition so there is no need for the
-		// extra round trip.
-		r.hup(campaignTransfer)
-	case pb.MsgReadIndex:
-		if r.lead == None {
-			r.logger.Infof("%x no leader at term %d; dropping index reading msg", r.id, r.Term)
-			return nil
-		}
-		m.To = r.lead
-		r.send(m)
-	case pb.MsgReadIndexResp:
-		if len(m.Entries) != 1 {
-			r.logger.Errorf("%x invalid format of MsgReadIndexResp from %x, entries count: %d", r.id, m.From, len(m.Entries))
-			return nil
-		}
-		r.readStates = append(r.readStates, ReadState{Index: m.Index, RequestCtx: m.Entries[0].Data})
+		r.LeaderID = m.From
+		r.handleSnapshot(*m)
+	}
+	return nil
+}
+
+func stepCandidate(r *Raft, m *pb.Message) error {
+	switch m.Type {
+	case pb.MsgHup:
+		r.campaign()
+	case pb.MsgVoteResp:
+		r.handleVoteResponse(*m)
+	case pb.MsgVote:
+		r.handleVoteRequest(*m)
+	case pb.MsgApp:
+		r.handleAppendEntries(*m)
+	case pb.MsgSnap:
+		r.handleSnapshot(*m)
 	}
 	return nil
 }
@@ -574,7 +264,7 @@ func (r *Raft) becomeLeader() {
 	r.tick = r.tickHeartbeat
 }
 
-// ------------------- leader methods -------------------
+// ------------------- leader behavior -------------------
 
 func (r *Raft) handlePropMsg(m *pb.Message)(err error){
 	lastIndex := r.RaftLog.LastIndex()
@@ -729,16 +419,21 @@ func (r *Raft) handleAppendResponse(m pb.Message) {
 	}
 }
 
+func (r *Raft) handleHeartbeatResponse(m pb.Message) {
+	if m.Term > r.Term {
+		r.becomeFollower(m.Term, None)
+		return
+	}
+	// leader can send log to follower when
+	// it received a heartbeat response which
+	// indicate it doesn't have update-to-date log
+	if r.isMoreUpToDateThan(m.LogTerm, m.Index) {
+		r.sendAppend(m.From)
+	}
+}
 
 
-
-
-
-
-
-
-
-// ------------------ candidate methods ------------------
+// ------------------ candidate behavior ------------------
 
 // campaign becomes a candidate and start to request vote
 func (r *Raft) campaign() {
@@ -801,58 +496,9 @@ func (r *Raft) abortLeaderTransfer() {
 	r.leadTransferee = None
 }
 
-// updateCommit ...
-func (r *Raft) updateCommit() {
-	commitUpdated := false
-	for i := r.RaftLog.committed; i <= r.RaftLog.LastIndex(); i += 1 {
-		if i <= r.RaftLog.committed {
-			continue
-		}
-		matchCnt := 0
-		for _, p := range r.Progress {
-			if p.Match >= i {
-				matchCnt += 1
-			}
-		}
-		// leader only commit on it's current term (§5.4.2)
-		term, _ := r.RaftLog.getTermByEntryIndex(i)
-		if matchCnt > len(r.Progress)/2 && term == r.Term && r.RaftLog.committed != i {
-			r.RaftLog.committed = i
-			commitUpdated = true
-		}
-	}
-	if commitUpdated {
-		r.bcastAppendEntries()
-	}
-}
 
-func (r *Raft) handleLeaderTransfer(m pb.Message) {
-	if m.From == r.id {
-		return
-	}
-	if r.leadTransferee == m.From {
-		return
-	}
-	if _, ok := r.Prs[m.From]; !ok {
-		return
-	}
-	r.leadTransferee = m.From
-	if r.Prs[m.From].Match != r.RaftLog.LastIndex() {
-		r.sendAppend(m.From)
-	} else {
-		r.sendTimeoutNow(m.From)
-	}
-}
 
-func (r *Raft) sendTimeoutNow(to uint64) {
-	r.msgs = append(r.msgs, pb.Message{
-		MsgType: pb.MessageType_MsgTimeoutNow,
-		To:      to,
-		From:    r.id,
-	})
-}
-
-// ------------------ follower methods ------------------
+// ------------------ follower behavior ------------------
 
 // sendVoteResponse send vote response
 func (r *Raft) sendVoteResponse(nvote uint64, reject bool) {
@@ -944,7 +590,53 @@ func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
 	r.msgs = append(r.msgs, msg)
 }
 
+// handleHeartbeat handle Heartbeat RPC request
+func (r *Raft) handleHeartbeat(m pb.Message) {
+	// Your Code Here (2A).
+	// most logic is same as `AppendEntries`
+	// Reply false if term < currentTerm (§5.1)
+	if m.Term < r.Term {
+		r.sendHeartbeatResponse(m.From, true)
+		return
+	}
+	r.becomeFollower(m.Term, m.From)
+	// Reply false if log doesn’t contain an entry at prevLogIndex
+	// whose term matches prevLogTerm (§5.3)
+	term, err := r.RaftLog.Term(m.Index)
+	if err != nil || term != m.LogTerm {
+		r.sendHeartbeatResponse(m.From, true)
+		return
+	}
+	if m.Commit > r.RaftLog.committed {
+		r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
+	}
+	r.sendHeartbeatResponse(m.From, false)
+}
 
+// handleSnapshot handle Snapshot RPC request
+func (r *Raft) handleSnapshot(m pb.Message) {
+	// Your Code Here (2C).
+	meta := m.Snapshot.Metadata
+	if meta.Index <= r.RaftLog.committed {
+		r.sendAppendResponse(m.From, false)
+		return
+	}
+	r.becomeFollower(max(r.Term, m.Term), m.From)
+	// clear log
+	r.RaftLog.entries = nil
+	// install snapshot
+	r.RaftLog.firstIndex = meta.Index + 1
+	r.RaftLog.applied = meta.Index
+	r.RaftLog.committed = meta.Index
+	r.RaftLog.stabled = meta.Index
+	r.RaftLog.pendingSnapshot = m.Snapshot
+	// update conf
+	r.Prs = make(map[uint64]*Progress)
+	for _, p := range meta.ConfState.Nodes {
+		r.Prs[p] = &Progress{}
+	}
+	r.sendAppendResponse(m.From, false)
+}
 
 // Only leader can recive vote handleVoteRequest handle vote request
 func (r *Raft) handleVoteRequest(m pb.Message) {
@@ -987,4 +679,56 @@ func (l *RaftLog) RemoveEntriesAfter(lo uint64) {
 		return
 	}
 	l.entries = l.entries[:lo-l.firstIndex]
+}
+
+
+// public behavior
+func (r *Raft) updateCommit() {
+	commitUpdated := false
+	for i := r.RaftLog.committed; i <= r.RaftLog.LastIndex(); i += 1 {
+		if i <= r.RaftLog.committed {
+			continue
+		}
+		matchCnt := 0
+		for _, p := range r.Progress {
+			if p.Match >= i {
+				matchCnt += 1
+			}
+		}
+		// leader only commit on it's current term (§5.4.2)
+		term, _ := r.RaftLog.getTermByEntryIndex(i)
+		if matchCnt > len(r.Progress)/2 && term == r.Term && r.RaftLog.committed != i {
+			r.RaftLog.committed = i
+			commitUpdated = true
+		}
+	}
+	if commitUpdated {
+		r.bcastAppendEntries()
+	}
+}
+
+func (r *Raft) handleLeaderTransfer(m pb.Message) {
+	if m.From == r.id {
+		return
+	}
+	if r.leadTransferee == m.From {
+		return
+	}
+	if _, ok := r.Prs[m.From]; !ok {
+		return
+	}
+	r.leadTransferee = m.From
+	if r.Prs[m.From].Match != r.RaftLog.LastIndex() {
+		r.sendAppend(m.From)
+	} else {
+		r.sendTimeoutNow(m.From)
+	}
+}
+
+func (r *Raft) sendTimeoutNow(to uint64) {
+	r.msgs = append(r.msgs, pb.Message{
+		MsgType: pb.MessageType_MsgTimeoutNow,
+		To:      to,
+		From:    r.id,
+	})
 }
