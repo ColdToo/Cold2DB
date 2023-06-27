@@ -3,6 +3,7 @@ package raft
 import (
 	"errors"
 	"fmt"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"go.etcd.io/etcd/raft/quorum"
 	"go.etcd.io/etcd/raft/tracker"
@@ -132,7 +133,6 @@ func (r *Raft) Step(m *pb.Message) error {
 	return r.stepFunc(r, m)
 }
 
-//  不同的message使用不同的stepFunc进行处理
 type stepFunc func(r *Raft, m *pb.Message) error
 
 func stepLeader(r *Raft, m *pb.Message) error {
@@ -617,9 +617,6 @@ func stepFollower(r *Raft, m *pb.Message) error {
 	return nil
 }
 
-// Raft 的时钟是一个逻辑时钟，上层通过不断调用 Tick() 来模拟时间的递增。每一次调用根据不同的角色从而调用不同的tick，节点都应该增加自己的r.electionElapsed，
-// 如果是 Leader，还应该增加自己的 r.heartbeatElapsed。接下来，根据节点的角色进行不同的处理。
-
 // tickElection is run by followers and candidates after r.electionTimeout.
 func (r *Raft) tickElection() {
 	r.electionElapsed++
@@ -704,45 +701,55 @@ func (r *Raft) bcastHeartbeat() {
 	}
 }
 
-func (r *Raft) sendAppend(to uint64) bool {
+func (r *Raft) sendAppend(to uint64) error {
 	lastIndex := r.RaftLog.LastIndex()
 	preLogIndex := r.Progress[to].Next - 1
+
+	// 这种情况不用追加日志
 	if lastIndex < preLogIndex {
-		return true
+		log.Info("do not need send app msg").Record()
+		return errors.New("dont need  to send")
 	}
+
 	preLogTerm, err := r.RaftLog.getTermByEntryIndex(preLogIndex)
 	if err != nil {
+		//如果这条日志已经被compacted那么发送日志
 		if err == ErrCompacted {
 			r.sendSnapshot(to)
-			return false
+			return err
 		}
-		return false
+		return err
 	}
-	entries := r.RaftLog.Entries(preLogIndex+1, lastIndex+1)
+
+	entries, err := r.RaftLog.storage.Entries(preLogIndex+1, lastIndex+1)
 	if err != nil {
-		return false
+		return err
 	}
-	sendEntreis := make([]*pb.Entry, 0)
+
+	sendEntries := make([]*pb.Entry, 0)
 	for _, en := range entries {
-		sendEntreis = append(sendEntreis, &pb.Entry{
+		sendEntries = append(sendEntries, &pb.Entry{
 			Type:  en.Type,
 			Term:  en.Term,
 			Index: en.Index,
 			Data:  en.Data,
 		})
 	}
+
 	msg := pb.Message{
-		MsgType: pb.MessageType_MsgAppend,
+		Type:    pb.MsgApp,
 		To:      to,
 		From:    r.id,
 		Term:    r.Term,
 		LogTerm: preLogTerm,
 		Index:   preLogIndex,
-		Entries: sendEntreis,
+		Entries: sendEntries,
 		Commit:  r.RaftLog.committed,
 	}
+
 	r.msgs = append(r.msgs, msg)
-	return true
+
+	return nil
 }
 
 func (r *Raft) sendHeartbeat(to uint64) {
@@ -756,18 +763,18 @@ func (r *Raft) sendHeartbeat(to uint64) {
 }
 
 func (r *Raft) sendSnapshot(to uint64) {
-	snap, err := r.RaftLog.storage.Snapshot()
+	snap, err := r.RaftLog.storage.GetSnapshot()
 	if err != nil {
 		return
 	}
 	r.msgs = append(r.msgs, pb.Message{
-		MsgType:  pb.MessageType_MsgSnapshot,
+		Type:     pb.,
 		From:     r.id,
 		To:       to,
 		Term:     r.Term,
-		Snapshot: &snap,
+		Snapshot: snap,
 	})
-	r.Prs[to].Next = snap.Metadata.Index + 1
+	r.Progress[to].Next = snap.Metadata.Index + 1
 }
 
 // ------------------ candidate methods ------------------
@@ -882,4 +889,44 @@ func (r *Raft) sendTimeoutNow(to uint64) {
 		To:      to,
 		From:    r.id,
 	})
+}
+
+// ------------------ follower methods ------------------
+
+// sendVoteResponse send vote response
+func (r *Raft) sendVoteResponse(nvote uint64, reject bool) {
+	msg := pb.Message{
+		MsgType: pb.MessageType_MsgRequestVoteResponse,
+		From:    r.id,
+		To:      nvote,
+		Term:    r.Term,
+		Reject:  reject,
+	}
+	r.msgs = append(r.msgs, msg)
+}
+
+// sendAppendResponse send append response
+func (r *Raft) sendAppendResponse(to uint64, reject bool) {
+	msg := pb.Message{
+		MsgType: pb.MessageType_MsgAppendResponse,
+		From:    r.id,
+		To:      to,
+		Term:    r.Term,
+		Reject:  reject,
+		Index:   r.RaftLog.LastIndex(),
+	}
+	r.msgs = append(r.msgs, msg)
+}
+
+// sendHeartbeatResponse send heartbeat response
+func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
+	msg := pb.Message{
+		MsgType: pb.MessageType_MsgHeartbeatResponse,
+		From:    r.id,
+		To:      to,
+		Term:    r.Term,
+		Reject:  reject,
+		Index:   r.RaftLog.LastIndex(),
+	}
+	r.msgs = append(r.msgs, msg)
 }

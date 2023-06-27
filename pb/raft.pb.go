@@ -401,7 +401,7 @@ type Message struct {
 	LogTerm uint64 `protobuf:"varint,5,opt,name=logTerm" json:"logTerm"`
 	Index   uint64 `protobuf:"varint,6,opt,name=index" json:"index"`
 	//需要被其他节点认可的日志
-	Entries []Entry `protobuf:"bytes,7,rep,name=entries" json:"entries"`
+	Entries []*Entry `protobuf:"bytes,7,rep,name=entries" json:"entries"`
 
 	//已提交索引的日志
 	Commit   uint64   `protobuf:"varint,8,opt,name=commit" json:"commit"`
