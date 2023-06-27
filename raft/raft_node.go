@@ -15,7 +15,7 @@ var ErrStepPeerNotFound = errors.New("raft: cannot step as peer not found")
 
 type SoftState struct {
 	LeaderID  uint64
-	RaftState RoleType
+	RaftState Role
 }
 
 type msgWithResult struct {
@@ -83,19 +83,21 @@ func (rn *RaftNode) Campaign() error {
 // Propose proposes data be appended to the raft log.
 func (rn *RaftNode) Propose(buffer bytes.Buffer) error {
 	ent := pb.Entry{Data: buffer.Bytes()}
+	ents := make([]*pb.Entry, 0)
+	ents = append(ents, &ent)
 	return rn.Raft.Step(&pb.Message{
 		Type:    pb.MsgProp,
 		From:    rn.Raft.id,
-		Entries: []pb.Entry{ent}})
+		Entries: ents})
 }
 
-// Step advances the state machine using the given message.
+// Step 驱动raft层
 func (rn *RaftNode) Step(m *pb.Message) error {
 	// ignore unexpected local messages receiving over network
 	if IsLocalMsg(m.Type) {
 		return ErrStepLocalMsg
 	}
-	if pr := rn.Raft.Prs[m.From]; pr != nil || !IsResponseMsg(m.Type) {
+	if pr := rn.Raft.Progress[m.From]; pr != nil || !IsResponseMsg(m.Type) {
 		return rn.Raft.Step(m)
 	}
 	return ErrStepPeerNotFound
@@ -106,7 +108,7 @@ func (rn *RaftNode) Step(m *pb.Message) error {
 func (rn *RaftNode) GetProgress() map[uint64]Progress {
 	prs := make(map[uint64]Progress)
 	if rn.Raft.State == Leader {
-		for id, p := range rn.Raft.Prs {
+		for id, p := range rn.Raft.Progress {
 			prs[id] = *p
 		}
 	}
@@ -210,38 +212,6 @@ func (rn *RaftNode) run() {
 
 }
 
-// Ready returns the current point-in-time state of this RaftNode.
-func (rn *RaftNode) Ready() Ready {
-	// Your Code Here (2A).
-	return Ready{}
-}
-
-// HasReady 由应用层调用该方法，如果发现由Ready则进行处理，然后再调用Advance方法表示该轮已经处理完成
-func (rn *RaftNode) HasReady() bool {
-	r := rn.Raft
-	if !r.softState().equal(rn.prevSoftSt) {
-		return true
-	}
-	if hardSt := r.hardState(); !IsEmptyHardState(hardSt) && !isHardStateEqual(hardSt, rn.prevHardSt) {
-		return true
-	}
-	if r.raftLog.hasPendingSnapshot() {
-		return true
-	}
-	if len(r.msgs) > 0 || len(r.raftLog.unstableEntries()) > 0 || r.raftLog.hasNextEnts() {
-		return true
-	}
-	if len(r.readStates) != 0 {
-		return true
-	}
-	return false
-}
-
-// Advance notifies the RaftNode that the application has applied and saved progress in the last Ready results.
-func (rn *RaftNode) Advance(rd Ready) {
-	// Your Code Here (2A).
-}
-
 func (rn *RaftNode) newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	rd := Ready{
 		Entries:          r.raftLog.unstableEntries(),
@@ -284,4 +254,72 @@ func (rn *RaftNode) ReportUnreachable(id uint64) {
 
 func (rn *RaftNode) ReportSnapshot(id uint64, status SnapshotStatus) {
 	return
+}
+
+// Ready returns the current point-in-time state of this RawNode.
+func (rn *RaftNode) Ready() Ready {
+	rd := Ready{
+		Entries:          rn.Raft.RaftLog.unstableEntries(),
+		CommittedEntries: rn.Raft.RaftLog.nextEnts(),
+	}
+	if len(rn.Raft.msgs) > 0 {
+		rd.Messages = rn.Raft.msgs
+	}
+	if rn.prevSoftState.Lead != rn.Raft.Lead ||
+		rn.prevSoftState.RaftState != rn.Raft.State {
+		rn.prevSoftState.Lead = rn.Raft.Lead
+		rn.prevSoftState.RaftState = rn.Raft.State
+		rd.SoftState = rn.prevSoftState
+	}
+	hardState := pb.HardState{
+		Term:   rn.Raft.Term,
+		Vote:   rn.Raft.Vote,
+		Commit: rn.Raft.RaftLog.committed,
+	}
+	if !isHardStateEqual(rn.prevHardState, hardState) {
+		rd.HardState = hardState
+	}
+	// clear msg
+	rn.Raft.msgs = make([]pb.Message, 0)
+	if !IsEmptySnap(rn.Raft.RaftLog.pendingSnapshot) {
+		rd.Snapshot = *rn.Raft.RaftLog.pendingSnapshot
+		rn.Raft.RaftLog.pendingSnapshot = nil
+	}
+	return rd
+}
+
+// HasReady called when RawNode user need to check if any Ready pending.
+func (rn *RaftNode) HasReady() bool {
+	// Your Code Here (2A).
+	hardState := pb.HardState{
+		Term:   rn.Raft.Term,
+		Vote:   rn.Raft.Vote,
+		Commit: rn.Raft.RaftLog.committed,
+	}
+	if !IsEmptyHardState(hardState) && !isHardStateEqual(rn.prevHardState, hardState) {
+		return true
+	}
+	if len(rn.Raft.msgs) > 0 || len(rn.Raft.RaftLog.nextEnts()) > 0 || len(rn.Raft.RaftLog.unstableEntries()) > 0 {
+		return true
+	}
+	if !IsEmptySnap(rn.Raft.RaftLog.pendingSnapshot) {
+		return true
+	}
+	return false
+}
+
+// Advance notifies the RawNode that the application has applied and saved progress in the
+// last Ready results.
+func (rn *RaftNode) Advance(rd Ready) {
+	// Your Code Here (2A).
+	if len(rd.Entries) > 0 {
+		rn.Raft.RaftLog.stabled = rd.Entries[len(rd.Entries)-1].Index
+	}
+	if len(rd.CommittedEntries) > 0 {
+		rn.Raft.RaftLog.applied = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
+	}
+	if !IsEmptyHardState(rd.HardState) {
+		rn.prevHardState = rd.HardState
+	}
+	rn.Raft.RaftLog.maybeCompact()
 }

@@ -121,8 +121,12 @@ func NewRaft(c *Config) (raft *Raft, err error) {
 }
 
 // Step 该函数接收一个 Msg，然后根据节点的角色和 Msg 的类型调用不同的处理函数。
+// raft层都是通过Step函数和Tick函数驱动的
 func (r *Raft) Step(m *pb.Message) error {
 	return r.stepFunc(r, m)
+}
+func (r *Raft) Tick(){
+	r.tick()
 }
 
 type stepFunc func(r *Raft, m *pb.Message) error
@@ -204,10 +208,6 @@ func stepCandidate(r *Raft, m *pb.Message) error {
 	return nil
 }
 
-func (r *Raft) Tick(){
-	r.tick()
-}
-
 // tickElection is run by followers and candidates after r.electionTimeout.
 func (r *Raft) tickElection() {
 	r.electionElapsed++
@@ -263,6 +263,7 @@ func (r *Raft) becomeLeader() {
 	r.stepFunc = stepLeader
 	r.tick = r.tickHeartbeat
 }
+
 
 // ------------------- leader behavior -------------------
 
@@ -681,8 +682,34 @@ func (l *RaftLog) RemoveEntriesAfter(lo uint64) {
 	l.entries = l.entries[:lo-l.firstIndex]
 }
 
+func (r *Raft) handleLeaderTransfer(m pb.Message) {
+	if m.From == r.id {
+		return
+	}
+	if r.leadTransferee == m.From {
+		return
+	}
+	if _, ok := r.Prs[m.From]; !ok {
+		return
+	}
+	r.leadTransferee = m.From
+	if r.Prs[m.From].Match != r.RaftLog.LastIndex() {
+		r.sendAppend(m.From)
+	} else {
+		r.sendTimeoutNow(m.From)
+	}
+}
 
-// public behavior
+//当Follower节点接收到MsgTimeoutNow消息时，会立刻切换成Candidate状态，然后创建MsgHup消息并发起选举。
+func (r *Raft) sendTimeoutNow(to uint64) {
+	r.msgs = append(r.msgs, pb.Message{
+		MsgType: pb.MsgTimeoutNow,
+		To:      to,
+		From:    r.id,
+	})
+}
+
+// ------------------ public behavior ------------------
 func (r *Raft) updateCommit() {
 	commitUpdated := false
 	for i := r.RaftLog.committed; i <= r.RaftLog.LastIndex(); i += 1 {
@@ -705,30 +732,4 @@ func (r *Raft) updateCommit() {
 	if commitUpdated {
 		r.bcastAppendEntries()
 	}
-}
-
-func (r *Raft) handleLeaderTransfer(m pb.Message) {
-	if m.From == r.id {
-		return
-	}
-	if r.leadTransferee == m.From {
-		return
-	}
-	if _, ok := r.Prs[m.From]; !ok {
-		return
-	}
-	r.leadTransferee = m.From
-	if r.Prs[m.From].Match != r.RaftLog.LastIndex() {
-		r.sendAppend(m.From)
-	} else {
-		r.sendTimeoutNow(m.From)
-	}
-}
-
-func (r *Raft) sendTimeoutNow(to uint64) {
-	r.msgs = append(r.msgs, pb.Message{
-		MsgType: pb.MessageType_MsgTimeoutNow,
-		To:      to,
-		From:    r.id,
-	})
 }
