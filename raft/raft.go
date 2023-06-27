@@ -3,6 +3,7 @@ package raft
 import (
 	"errors"
 	"fmt"
+	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"go.etcd.io/etcd/raft/quorum"
@@ -19,9 +20,8 @@ const (
 	Candidate
 )
 
-// Config contains the parameters to start a raft.
 type Config struct {
-	// ID is the identity of the local raft. ID cannot be 0.
+	// local raft id
 	ID uint64
 
 	peers []uint64 //peers ip
@@ -60,12 +60,11 @@ type Raft struct {
 
 	Term uint64
 
-	VoteFor uint64 //
+	//记录所投票给的节点id
+	VoteFor uint64
 
 	RaftLog *RaftLog
 
-	// 对于每个节点，待发送到该节点的下一个日志条目的索引，初值为领导人最后的日志条目索引 + 1
-	// 对于每个节点，已知的已经同步到该节点的最高日志条目的索引，初值为0，表示没有
 	Progress    map[uint64]*Progress
 	voteCount   int
 	rejectCount int
@@ -92,17 +91,12 @@ type Raft struct {
 	// 有更适合当server的节点，比如说有更高的负载，更好的网络条件。
 	leadTransferee uint64
 
-	// Only one conf change may be pending (in the log, but not yet
-	// applied) at a time. This is enforced via PendingConfIndex, which
-	// is set to a value >= the log index of the latest pending
-	// configuration change (if any). Config changes are only allowed to
-	// be proposed if the leader's applied index is greater than this
-	// value.
-	// (Used in 3A conf change)
 	PendingConfIndex uint64
 
+	//不同的角色指向不同的stepFunc
 	stepFunc stepFunc
 
+	//不同的角色指向不同的tick驱动函数
 	tick func()
 
 	//Check Quorum 是针对这种情况：当 Leader 被网络分区的时，其他实例已经选举出了新的 Leader，旧 Leader 不能收到新 Leader 的消息，
@@ -111,6 +105,8 @@ type Raft struct {
 	checkQuorum bool
 }
 
+// match:当前log lastindex
+// next:当前log lastindex+1
 type Progress struct {
 	Match, Next uint64
 }
@@ -128,7 +124,6 @@ func NewRaft(c *Config) (raft *Raft, err error) {
 }
 
 // Step 该函数接收一个 Msg，然后根据节点的角色和 Msg 的类型调用不同的处理函数。
-// 上层 RawNode 发送 Msg 时，实际上就是将 Msg 传递给 Step()，然后进入 Msg 的处理模块，起到推进的作用。
 func (r *Raft) Step(m *pb.Message) error {
 	return r.stepFunc(r, m)
 }
@@ -136,120 +131,22 @@ func (r *Raft) Step(m *pb.Message) error {
 type stepFunc func(r *Raft, m *pb.Message) error
 
 func stepLeader(r *Raft, m *pb.Message) error {
-	// These message types do not require any progress for m.From.
+	pr := r.Progress[m.From]
 	switch m.Type {
 	case pb.MsgBeat:
 		r.bcastHeartbeat()
 		return nil
-	case pb.MsgCheckQuorum:
-		// The leader should always see itself as active. As a precaution, handle
-		// the case in which the leader isn't in the configuration any more (for
-		// example if it just removed itself).
-		//
-		// TODO(tbg): I added a TODO in removeNode, it doesn't seem that the
-		// leader steps down when removing itself. I might be missing something.
-		if pr := r.prs.Progress[r.id]; pr != nil {
-			pr.RecentActive = true
-		}
-		if !r.prs.QuorumActive() {
-			r.logger.Warningf("%x stepped down to follower since quorum is not active", r.id)
-			r.becomeFollower(r.Term, None)
-		}
-		// Mark everyone (but ourselves) as inactive in preparation for the next
-		// CheckQuorum.
-		r.prs.Visit(func(id uint64, pr *tracker.Progress) {
-			if id != r.id {
-				pr.RecentActive = false
-			}
-		})
-		return nil
 	case pb.MsgProp:
 		if len(m.Entries) == 0 {
-			r.logger.Panicf("%x stepped empty MsgProp", r.id)
+			log.Panic("%x stepped empty MsgProp").Record()
 		}
-		if r.prs.Progress[r.id] == nil {
-			// If we are not currently a member of the range (i.e. this node
-			// was removed from the configuration while serving as leader),
-			// drop any new proposals.
-			return ErrProposalDropped
+		if r.Progress[r.id] == nil {
+			return errors.New(code.ErrProposalDropped)
 		}
 		if r.leadTransferee != None {
-			r.logger.Debugf("%x [term %d] transfer leadership to %x is in progress; dropping proposal", r.id, r.Term, r.leadTransferee)
-			return ErrProposalDropped
+			return errors.New(code.ErrProposalDropped)
 		}
-
-		for i := range m.Entries {
-			e := &m.Entries[i]
-			var cc pb.ConfChangeI
-			if e.Type == pb.EntryConfChange {
-				var ccc pb.ConfChange
-				if err := ccc.Unmarshal(e.Data); err != nil {
-					panic(err)
-				}
-				cc = ccc
-			} else if e.Type == pb.EntryConfChangeV2 {
-				var ccc pb.ConfChangeV2
-				if err := ccc.Unmarshal(e.Data); err != nil {
-					panic(err)
-				}
-				cc = ccc
-			}
-			if cc != nil {
-				alreadyPending := r.pendingConfIndex > r.raftLog.applied
-				alreadyJoint := len(r.prs.Config.Voters[1]) > 0
-				wantsLeaveJoint := len(cc.AsV2().Changes) == 0
-
-				var refused string
-				if alreadyPending {
-					refused = fmt.Sprintf("possible unapplied conf change at index %d (applied to %d)", r.pendingConfIndex, r.raftLog.applied)
-				} else if alreadyJoint && !wantsLeaveJoint {
-					refused = "must transition out of joint config first"
-				} else if !alreadyJoint && wantsLeaveJoint {
-					refused = "not in joint state; refusing empty conf change"
-				}
-
-				if refused != "" {
-					r.logger.Infof("%x ignoring conf change %v at config %s: %s", r.id, cc, r.prs.Config, refused)
-					m.Entries[i] = pb.Entry{Type: pb.EntryNormal}
-				} else {
-					r.pendingConfIndex = r.raftLog.lastIndex() + uint64(i) + 1
-				}
-			}
-		}
-
-		if !r.appendEntry(m.Entries...) {
-			return ErrProposalDropped
-		}
-		r.bcastAppend()
-		return nil
-	case pb.MsgReadIndex:
-		// only one voting member (the leader) in the cluster
-		if r.prs.IsSingleton() {
-			if resp := r.responseToReadIndexReq(m, r.raftLog.committed); resp.To != None {
-				r.send(resp)
-			}
-			return nil
-		}
-
-		// Postpone read only request when this leader has not committed
-		// any log entry at its term.
-		if !r.committedEntryInCurrentTerm() {
-			r.pendingReadIndexMessages = append(r.pendingReadIndexMessages, m)
-			return nil
-		}
-
-		sendMsgReadIndexResponse(r, m)
-
-		return nil
-	}
-
-	// All other message types require a progress for m.From (pr).
-	pr := r.prs.Progress[m.From]
-	if pr == nil {
-		r.logger.Debugf("%x no progress available for %x", r.id, m.From)
-		return nil
-	}
-	switch m.Type {
+		r.handlePropMsg(m)
 	case pb.MsgAppResp:
 		pr.RecentActive = true
 
@@ -617,13 +514,18 @@ func stepFollower(r *Raft, m *pb.Message) error {
 	return nil
 }
 
+func (r *Raft) Tick(){
+	r.tick()
+}
+
 // tickElection is run by followers and candidates after r.electionTimeout.
 func (r *Raft) tickElection() {
 	r.electionElapsed++
-	if r.electionElapsed > r.electionTimeout {
+	if r.electionElapsed >= r.electionTimeout {
 		r.electionElapsed = 0
 		err := r.Step(&pb.Message{From: r.id, Type: pb.MsgHup})
 		if err != nil {
+			log.Error("msg").Err(code.TickErr,err).Record()
 			return
 		}
 	}
@@ -631,28 +533,18 @@ func (r *Raft) tickElection() {
 
 // tickHeartbeat is run by leaders to send a MsgBeat after r.heartbeatTimeout.
 func (r *Raft) tickHeartbeat() {
-	r.heartbeatElapsed++
-	r.electionElapsed++
-
-	if r.electionElapsed >= r.electionTimeout {
-		r.electionElapsed = 0
-		if r.checkQuorum {
-			//检查网络分区
-			r.Step(&pb.Message{From: r.id, MsgType: pb.MsgCheckQuorum})
-		}
-		// If current leader cannot transfer leadership in electionTimeout, it becomes leader again.
-		if r.State == Leader && r.leadTransferee != None {
-			r.abortLeaderTransfer()
-		}
-	}
-
 	if r.Role != Leader {
+		log.Panic("only leader can increase beat").Record()
 		return
 	}
-
+	r.heartbeatElapsed++
 	if r.heartbeatElapsed >= r.heartbeatTimeout {
 		r.heartbeatElapsed = 0
-		r.Step(&pb.Message{From: r.id, Type: pb.MsgBeat})
+		err := r.Step(&pb.Message{From: r.id, Type: pb.MsgBeat})
+		if err != nil {
+			log.Error("msg").Err(code.TickErr,err).Record()
+			return
+		}
 	}
 }
 
@@ -662,14 +554,14 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.Role = Follower
 	r.tick = r.tickHeartbeat
 	r.stepFunc = stepFollower
-	r.CurrentTerm = term
+	r.Term = term
 }
 
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	r.LeaderID = 0
 	r.Role = Candidate
-	r.CurrentTerm++
+	r.Term++
 	r.stepFunc = stepCandidate
 	r.tick = r.tickElection
 }
@@ -680,28 +572,37 @@ func (r *Raft) becomeLeader() {
 	r.LeaderID = r.id
 	r.stepFunc = stepLeader
 	r.tick = r.tickHeartbeat
-	// todo NOTE: Leader should propose a noop entry on its term
 }
 
 // ------------------- leader methods -------------------
 
-func (r *Raft) bcastAppend() {
+func (r *Raft) handlePropMsg(m *pb.Message)(err error){
+	lastIndex := r.RaftLog.LastIndex()
+	ents := make([]*pb.Entry, 0)
+	for _, e := range m.Entries {
+		ents = append(ents, &pb.Entry{
+			Type:      e.Type,
+			Term:      r.Term,
+			Index:     lastIndex + 1,
+			Data:      e.Data,
+		})
+		lastIndex += 1
+	}
+	r.appendEntries(ents...)
+	r.bcastAppendEntries()
+	r.updateCommit()
+	return
+}
+
+func (r *Raft) bcastAppendEntries() {
 	for peer := range r.Progress {
 		if peer != r.id {
-			r.sendAppend(peer)
+			r.sendAppendEntries(peer)
 		}
 	}
 }
 
-func (r *Raft) bcastHeartbeat() {
-	for peer := range r.Progress {
-		if peer != r.id {
-			r.sendHeartbeat(peer)
-		}
-	}
-}
-
-func (r *Raft) sendAppend(to uint64) error {
+func (r *Raft) sendAppendEntries(to uint64) error {
 	lastIndex := r.RaftLog.LastIndex()
 	preLogIndex := r.Progress[to].Next - 1
 
@@ -752,6 +653,14 @@ func (r *Raft) sendAppend(to uint64) error {
 	return nil
 }
 
+func (r *Raft) bcastHeartbeat() {
+	for peer := range r.Progress {
+		if peer != r.id {
+			r.sendHeartbeat(peer)
+		}
+	}
+}
+
 func (r *Raft) sendHeartbeat(to uint64) {
 	msg := pb.Message{
 		Type: pb.MsgBeat,
@@ -777,6 +686,58 @@ func (r *Raft) sendSnapshot(to uint64) {
 	r.Progress[to].Next = snap.Metadata.Index + 1
 }
 
+// appendEntries append entry to raft log
+func (r *Raft) appendEntries(entries ...*pb.Entry) {
+	ents := make([]pb.Entry, 0)
+	for _, e := range entries {
+		// todo
+		// 配置变更的提议是不是应该单独处理
+		if e.Type == pb.EntryConfChange {
+			if r.PendingConfIndex != None {
+				continue
+			}
+			r.PendingConfIndex = e.Index
+		}
+		ents = append(ents, pb.Entry{
+			Type: 	   e.Type,
+			Term:      e.Term,
+			Index:     e.Index,
+			Data:      e.Data,
+		})
+	}
+	r.RaftLog.AppendEntries(ents)
+	r.Progress[r.id].Match = r.RaftLog.LastIndex()
+	r.Progress[r.id].Next = r.RaftLog.LastIndex() + 1
+}
+
+func (r *Raft) handleAppendResponse(m pb.Message) {
+	if m.Term > r.Term {
+		r.becomeFollower(m.Term, None)
+		return
+	}
+	if !m.Reject {
+		r.Prs[m.From].Next = m.Index + 1
+		r.Prs[m.From].Match = m.Index
+	} else if r.Prs[m.From].Next > 0 {
+		r.Prs[m.From].Next -= 1
+		r.sendAppend(m.From)
+		return
+	}
+	r.updateCommit()
+	if m.From == r.leadTransferee && m.Index == r.RaftLog.LastIndex() {
+		r.sendTimeoutNow(m.From)
+	}
+}
+
+
+
+
+
+
+
+
+
+
 // ------------------ candidate methods ------------------
 
 // campaign becomes a candidate and start to request vote
@@ -795,7 +756,7 @@ func (r *Raft) bcastVoteRequest() {
 				Type:    pb.MsgVote,
 				From:    r.id,
 				To:      peer,
-				Term:    r.CurrentTerm,
+				Term:    r.Term,
 				LogTerm: lastTerm,
 				Index:   lastIndex,
 			}
@@ -848,20 +809,20 @@ func (r *Raft) updateCommit() {
 			continue
 		}
 		matchCnt := 0
-		for _, p := range r.Prs {
+		for _, p := range r.Progress {
 			if p.Match >= i {
 				matchCnt += 1
 			}
 		}
 		// leader only commit on it's current term (§5.4.2)
-		term, _ := r.RaftLog.Term(i)
-		if matchCnt > len(r.Prs)/2 && term == r.Term && r.RaftLog.committed != i {
+		term, _ := r.RaftLog.getTermByEntryIndex(i)
+		if matchCnt > len(r.Progress)/2 && term == r.Term && r.RaftLog.committed != i {
 			r.RaftLog.committed = i
 			commitUpdated = true
 		}
 	}
 	if commitUpdated {
-		r.bcastAppend()
+		r.bcastAppendEntries()
 	}
 }
 
@@ -905,6 +866,58 @@ func (r *Raft) sendVoteResponse(nvote uint64, reject bool) {
 	r.msgs = append(r.msgs, msg)
 }
 
+// handleAppendEntries handle AppendEntries  request
+func (r *Raft) handleAppendEntries(m pb.Message) {
+	if m.Term < r.Term {
+		r.sendAppendResponse(m.From, true)
+		return
+	}
+
+	term, err := r.RaftLog.getTermByEntryIndex(m.Index)
+	if err != nil || term != m.LogTerm {
+		r.sendAppendResponse(m.From, true)
+		return
+	}
+
+
+	if len(m.Entries) > 0 {
+		appendStart := 0
+
+		// check is has existing entry conflicts with a new one delete the existing entry and all that
+		//	// follow it
+		for i, ent := range m.Entries {
+			if ent.Index > r.RaftLog.LastIndex() {
+				appendStart = i
+				break
+			}
+			validTerm, _ := r.RaftLog.getTermByEntryIndex(ent.Index)
+			if validTerm != ent.Term {
+				r.RaftLog.RemoveEntriesAfter(ent.Index)
+				break
+			}
+			appendStart = i
+		}
+
+		if m.Entries[appendStart].Index > r.RaftLog.LastIndex() {
+			for _, e := range m.Entries[appendStart:] {
+				r.RaftLog.entries = append(r.RaftLog.entries, *e)
+			}
+		}
+	}
+	//  If leaderCommit > commitIndex,
+	// set commitIndex = min(leaderCommit, index of last new entry)
+	// 更新commit
+	if m.Commit > r.RaftLog.committed {
+		lastNewEntry := m.Index
+		if len(m.Entries) > 0 {
+			lastNewEntry = m.Entries[len(m.Entries)-1].Index
+		}
+		r.RaftLog.committed = min(m.Commit, lastNewEntry)
+	}
+
+	r.sendAppendResponse(m.From, false)
+}
+
 // sendAppendResponse send append response
 func (r *Raft) sendAppendResponse(to uint64, reject bool) {
 	msg := pb.Message{
@@ -929,4 +942,49 @@ func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
 		Index:   r.RaftLog.LastIndex(),
 	}
 	r.msgs = append(r.msgs, msg)
+}
+
+
+
+// Only leader can recive vote handleVoteRequest handle vote request
+func (r *Raft) handleVoteRequest(m pb.Message) {
+	lastTerm, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
+	if r.Term > m.Term {
+		r.sendVoteResponse(m.From, true)
+		return
+	}
+	if r.isMoreUpToDateThan(m.LogTerm, m.Index) {
+		if r.Term < m.Term {
+			r.becomeFollower(m.Term, None)
+		}
+		r.sendVoteResponse(m.From, true)
+		return
+	}
+	if r.Term < m.Term {
+		r.becomeFollower(m.Term, None)
+		r.Vote = m.From
+		r.sendVoteResponse(m.From, false)
+		return
+	}
+	if r.Vote == m.From {
+		r.sendVoteResponse(m.From, false)
+		return
+	}
+	if r.isFollower() &&
+		r.Vote == None &&
+		(lastTerm < m.LogTerm || (lastTerm == m.LogTerm && m.Index >= r.RaftLog.LastIndex())) {
+		r.sendVoteResponse(m.From, false)
+		return
+	}
+	r.resetRealElectionTimeout()
+	r.sendVoteResponse(m.From, true)
+}
+
+// RemoveEntriesAfter remove entries from index lo to the last
+func (l *RaftLog) RemoveEntriesAfter(lo uint64) {
+	l.stabled = min(l.stabled, lo-1)
+	if lo-l.firstIndex >= uint64(len(l.entries)) {
+		return
+	}
+	l.entries = l.entries[:lo-l.firstIndex]
 }

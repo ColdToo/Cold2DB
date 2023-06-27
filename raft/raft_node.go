@@ -70,7 +70,7 @@ func NewRaftNode(config *Config) (*RaftNode, error) {
 
 // Tick 由应用层定时触发Tick
 func (rn *RaftNode) Tick() {
-	rn.Raft.tick()
+	rn.Raft.Tick()
 }
 
 // Campaign causes this RaftNode to transition to candidate state.

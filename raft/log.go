@@ -24,7 +24,7 @@ type RaftLog struct {
 	last uint64
 
 	// 所有还未压缩的日志
-	allEntries []pb.Entry
+	entries []pb.Entry
 
 	// 持久化从first到stabled这一块的日志
 	storage Storage
@@ -42,21 +42,21 @@ func newRaftLog(storage Storage) (*RaftLog, error) {
 	}
 	allEntrys, err := storage.Entries(firstIndex, lastIndex+1)
 
-	return &RaftLog{storage: storage, first: firstIndex, last: lastIndex, allEntries: allEntrys}, nil
+	return &RaftLog{storage: storage, first: firstIndex, last: lastIndex, Entries: allEntrys}, nil
 }
 
 func (l *RaftLog) getAllEntries() []pb.Entry {
-	return l.allEntries
+	return l.Entries
 }
 
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
-	return l.allEntries[l.stabled : l.last+1]
+	return l.Entries[l.stabled : l.last+1]
 }
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
-	return l.allEntries[l.Applied : l.committed+1]
+	return l.Entries[l.Applied : l.committed+1]
 }
 
 // LastIndex return the last index of the log entries
@@ -66,13 +66,12 @@ func (l *RaftLog) LastIndex() uint64 {
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) getTermByEntryIndex(i uint64) (uint64, error) {
-	if uint64(len(l.allEntries)) < i {
+	if uint64(len(l.Entries)) < i {
 		return 0, errors.New("not find the log entry")
 	}
-	return l.allEntries[i].Term, nil
+	return l.Entries[i].Term, nil
 }
 
-// Term return the term of the entry in the given index
-func (l *RaftLog) Append(ents []pb.Entry) error {
-	return nil
+func (l *RaftLog) AppendEntries(ents []pb.Entry) {
+	l.Entries = append(l.Entries, ents...)
 }

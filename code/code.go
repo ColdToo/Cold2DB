@@ -11,5 +11,7 @@ const (
 
 	MessageProcErr = "MessageProcErr"
 
-	FailedReadMessage = "FailedReadMessage"
+	FailedReadMessage  = "FailedReadMessage"
+	TickErr            = "TickErr"
+	ErrProposalDropped = "ErrProposalDropped"
 )
