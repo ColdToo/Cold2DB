@@ -10,7 +10,6 @@ import (
 	"github.com/ColdToo/Cold2DB/transport"
 	types "github.com/ColdToo/Cold2DB/transport/types"
 	"github.com/ColdToo/Cold2DB/wal"
-	"go.uber.org/zap"
 	"net/http"
 	"net/url"
 	"time"
@@ -44,8 +43,6 @@ type AppNode struct {
 	httpdonec   chan struct{}        // signals http server shutdown complete
 
 	TickTime int //定时触发定时器的时间
-
-	logger *zap.Logger
 }
 
 func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan bytes.Buffer, confChangeC <-chan pb.ConfChange, commitC chan<- *commit, errorC chan<- error) {
@@ -60,7 +57,6 @@ func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan byt
 		stopc:       make(chan struct{}),
 		httpstopc:   make(chan struct{}),
 		httpdonec:   make(chan struct{}),
-		logger:      zap.NewExample(),
 	}
 	an.startRaftNode()
 
@@ -143,11 +139,11 @@ func (an *AppNode) serveRaftLayer() {
 		//当应用层通过 Node.Ready 方法接收到来自算法层的处理结果后，AppNode 需要将待持久化的预写日志（Ready.Entries）进行持久化，
 		//需要调用通信模块为算法层执行消息发送动作（Ready.Messages），需要与数据状态机应用算法层已确认提交的预写日志.
 		//当以上步骤处理完成时，AppNode 会调用 Node.Advance 方法对算法层进行响应.
-		case rd := <-an.raftNode.Ready():
+		case rd := <-an.raftNode.ReadyC:
 			an.wal.Save(&rd.HardState, rd.Entries)
 			an.raftStorage.Append(rd.Entries)
 			an.transport.Send(rd.Messages)
-			applyDoneC, ok := an.commitEntries(an.checkEntrys(rd.CommittedEntries))
+			applyDoneC, ok := an.commitEntries(an.checkEntries(rd.CommittedEntries))
 			if !ok {
 				an.stop()
 				return
@@ -284,13 +280,11 @@ func (an *AppNode) openWAL() (w *wal.WAL) {
 	return w
 }
 
-// 回放可能存在的wal到内存中
 func (an *AppNode) replayWAL() {
 	log.Info("replaying WAL of member %d").Record()
 }
 
 //  实现Rat网络层接口,网络层通过该接口与RaftNode交互
-//	当transport模块接收到其他节点的信息时调用如下方法让raft算法层进行处理
 
 func (an *AppNode) Process(ctx context.Context, m *pb.Message) error {
 	return an.raftNode.Step(m)

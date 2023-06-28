@@ -14,8 +14,8 @@ var ErrStepLocalMsg = errors.New("raft: cannot step raft local message")
 var ErrStepPeerNotFound = errors.New("raft: cannot step as peer not found")
 
 type SoftState struct {
-	LeaderID  uint64
-	RaftState Role
+	LeaderID uint64
+	RaftRole Role
 }
 
 type msgWithResult struct {
@@ -44,15 +44,14 @@ type Ready struct {
 type RaftNode struct {
 	Raft *Raft
 
-	propC      chan msgWithResult
-	recvC      chan pb.Message
-	confC      chan pb.ConfChange
-	confstateC chan pb.ConfState
-	readyC     chan Ready
-	advanceC   chan struct{}
-	tickC      chan struct{}
-	done       chan struct{}
-	stop       chan struct{}
+	propC    chan msgWithResult
+	recvC    chan pb.Message
+	confC    chan pb.ConfChange
+	ReadyC   chan Ready
+	advanceC chan struct{}
+	tickC    chan struct{}
+	done     chan struct{}
+	stop     chan struct{}
 
 	prevSoftSt *SoftState
 	prevHardSt pb.HardState
@@ -64,13 +63,44 @@ func NewRaftNode(config *Config) (*RaftNode, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	return &RaftNode{Raft: raft}, nil
+	ReadyC := make(chan Ready, 0)
+	return &RaftNode{Raft: raft, ReadyC: ReadyC}, nil
 }
 
-// Tick 由应用层定时触发Tick
+func StartRaftNode(c *Config, peers []Peer) *RaftNode {
+	if len(peers) == 0 {
+		panic("no peers given; use RestartNode instead")
+	}
+	rn, err := NewRaftNode(c)
+	if err != nil {
+		panic(err)
+	}
+	go rn.run()
+	return rn
+}
+
+func RestartRaftNode(c *Config) *RaftNode {
+	rn, err := NewRaftNode(c)
+	if err != nil {
+		panic(err)
+	}
+	go rn.run()
+	return rn
+}
+
 func (rn *RaftNode) Tick() {
 	rn.Raft.Tick()
+}
+
+func (rn *RaftNode) Step(m *pb.Message) error {
+	// ignore unexpected local messages receiving over network
+	if IsLocalMsg(m.Type) {
+		return ErrStepLocalMsg
+	}
+	if pr := rn.Raft.Progress[m.From]; pr != nil || !IsResponseMsg(m.Type) {
+		return rn.Raft.Step(m)
+	}
+	return ErrStepPeerNotFound
 }
 
 // Campaign causes this RaftNode to transition to candidate state.
@@ -91,33 +121,9 @@ func (rn *RaftNode) Propose(buffer bytes.Buffer) error {
 		Entries: ents})
 }
 
-// Step 驱动raft层
-func (rn *RaftNode) Step(m *pb.Message) error {
-	// ignore unexpected local messages receiving over network
-	if IsLocalMsg(m.Type) {
-		return ErrStepLocalMsg
-	}
-	if pr := rn.Raft.Progress[m.From]; pr != nil || !IsResponseMsg(m.Type) {
-		return rn.Raft.Step(m)
-	}
-	return ErrStepPeerNotFound
-}
-
 // TransferLeader tries to transfer leadership to the given transferee.
 func (rn *RaftNode) TransferLeader(transferee uint64) {
 	_ = rn.Raft.Step(&pb.Message{MsgType: pb.MessageType_MsgTransferLeader, From: transferee})
-}
-
-// GetProgress return the Progress of this node and its peers, if this
-// node is leader.
-func (rn *RaftNode) GetProgress() map[uint64]Progress {
-	prs := make(map[uint64]Progress)
-	if rn.Raft.State == Leader {
-		for id, p := range rn.Raft.Progress {
-			prs[id] = *p
-		}
-	}
-	return prs
 }
 
 // ProposeConfChange proposes a config change.
@@ -149,26 +155,18 @@ func (rn *RaftNode) ApplyConfChange(cc *pb.ConfChange) *pb.ConfState {
 	return &pb.ConfState{Nodes: nodes(rn.Raft)}
 }
 
-func StartRaftNode(c *Config, peers []Peer) *RaftNode {
-	if len(peers) == 0 {
-		panic("no peers given; use RestartNode instead")
+// GetProgress return the Progress of this node and its peers, if this node is leader.
+func (rn *RaftNode) GetProgress() map[uint64]Progress {
+	prs := make(map[uint64]Progress)
+	if rn.Raft.Role == Leader {
+		for id, p := range rn.Raft.Progress {
+			prs[id] = *p
+		}
 	}
-	rn, err := NewRaftNode(c)
-	if err != nil {
-		panic(err)
-	}
-	go rn.run()
-	return rn
+	return prs
 }
 
-func RestartRaftNode(c *Config) *RaftNode {
-	rn, err := NewRaftNode(c)
-	if err != nil {
-		panic(err)
-	}
-	go rn.run()
-	return rn
-}
+//
 
 func (rn *RaftNode) run() {
 	var readyC chan Ready
@@ -182,7 +180,7 @@ func (rn *RaftNode) run() {
 		if advanceC != nil {
 			readyC = nil
 		} else if rn.HasReady() {
-			rd = rn.newReady(rn.Raft, rn.prevSoftSt, rn.prevHardSt)
+			rd = rn.newReady()
 			readyC = rn.readyC
 		}
 
@@ -211,39 +209,31 @@ func (rn *RaftNode) run() {
 
 }
 
-func (rn *RaftNode) newReady(r *Raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
+func (rn *RaftNode) newReady() Ready {
 	rd := Ready{
-		Entries:          r.RaftLog.unstableEntries(),
-		CommittedEntries: r.RaftLog.nextEnts(),
-		Messages:         r.msgs,
+		Entries:          rn.Raft.RaftLog.unstableEntries(),
+		CommittedEntries: rn.Raft.RaftLog.nextEnts(),
 	}
-	if softSt := r.softState(); !softSt.equal(prevSoftSt) {
-		rd.SoftState = softSt
+	if len(rn.Raft.msgs) > 0 {
+		rd.Messages = rn.Raft.msgs
 	}
-	if hardSt := r.hardState(); !isHardStateEqual(hardSt, prevHardSt) {
-		rd.HardState = hardSt
+	if rn.prevSoftSt.LeaderID != rn.Raft.LeaderID || rn.prevSoftSt.RaftRole != rn.Raft.Role {
+		rn.prevSoftSt.LeaderID = rn.Raft.LeaderID
+		rn.prevSoftSt.RaftRole = rn.Raft.Role
+		rd.SoftState = rn.prevSoftSt
 	}
-	if r.raftLog.unstable.snapshot != nil {
-		rd.Snapshot = *r.raftLog.unstable.snapshot
+	hardState := pb.HardState{
+		Term:   rn.Raft.Term,
+		Vote:   rn.Raft.VoteFor,
+		Commit: rn.Raft.RaftLog.committed,
 	}
-	if len(r.readStates) != 0 {
-		rd.ReadStates = r.readStates
+	if !isHardStateEqual(rn.prevHardSt, hardState) {
+		rd.HardState = hardState
 	}
-	rd.MustSync = MustSync(r.hardState(), prevHardSt, len(rd.Entries))
+
+	// clear msg
+	rn.Raft.msgs = make([]pb.Message, 0)
 	return rd
-}
-
-//关闭raft层（相关数据结构）
-func (rn *RaftNode) Stop() {
-
-}
-
-func (rn *RaftNode) ReportUnreachable(id uint64) {
-	return
-}
-
-func (rn *RaftNode) ReportSnapshot(id uint64, status SnapshotStatus) {
-	return
 }
 
 func (rn *RaftNode) Ready() Ready {
@@ -254,11 +244,11 @@ func (rn *RaftNode) Ready() Ready {
 	if len(rn.Raft.msgs) > 0 {
 		rd.Messages = rn.Raft.msgs
 	}
-	if rn.prevSoftState.Lead != rn.Raft.Lead ||
-		rn.prevSoftState.RaftState != rn.Raft.State {
-		rn.prevSoftState.Lead = rn.Raft.Lead
-		rn.prevSoftState.RaftState = rn.Raft.State
-		rd.SoftState = rn.prevSoftState
+	if rn.prevSoftSt.Lead != rn.Raft.Lead ||
+		rn.prevSoftSt.RaftState != rn.Raft.State {
+		rn.prevSoftSt.Lead = rn.Raft.Lead
+		rn.prevSoftSt.RaftState = rn.Raft.State
+		rd.SoftState = rn.prevSoftSt
 	}
 	hardState := pb.HardState{
 		Term:   rn.Raft.Term,
@@ -311,4 +301,21 @@ func (rn *RaftNode) alterRaftStatus(rd Ready) {
 	}
 	//每一轮算法层投递完 Ready 后，会把 raft.msgs 置为空，保证消息不被重复发送到应用层：
 	rn.Raft.msgs = nil
+}
+
+//
+
+//网络层报告接口
+
+func (rn *RaftNode) ReportUnreachable(id uint64) {
+	return
+}
+
+func (rn *RaftNode) ReportSnapshot(id uint64, status SnapshotStatus) {
+	return
+}
+
+//关闭raft层（相关数据结构）
+func (rn *RaftNode) Stop() {
+
 }
