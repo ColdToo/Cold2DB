@@ -48,7 +48,7 @@ type AppNode struct {
 	logger *zap.Logger
 }
 
-func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan kv, confChangeC <-chan pb.ConfChange, commitC chan<- *commit, errorC chan<- error) {
+func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan bytes.Buffer, confChangeC <-chan pb.ConfChange, commitC chan<- *commit, errorC chan<- error) {
 	an := &AppNode{
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
@@ -62,11 +62,17 @@ func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan kv,
 		httpdonec:   make(chan struct{}),
 		logger:      zap.NewExample(),
 	}
-	an.startRaft()
+	an.startRaftNode()
+
+	// 启动一个goroutine,监听当前节点与集群中其他节点之间的网络连接
+	go an.servePeerRaft()
+	// 启动一个goroutine,处理appLayer与raftLayer的交互
+	go an.serveRaftLayer()
+
 	return
 }
 
-func (an *AppNode) startRaft() {
+func (an *AppNode) startRaftNode() {
 	//是否存在旧的WAL日志,用于判断该节点是首次加入还是重启的节点
 	oldwal := wal.Exist(an.wal.Dir)
 
@@ -94,23 +100,9 @@ func (an *AppNode) startRaft() {
 	} else {
 		an.raftNode = raft.StartRaftNode(c, rpeers)
 	}
-
-	// 启动一个goroutine,监听当前节点与集群中其他节点之间的网络连接
-	go an.servePeerRaft()
-	// 启动一个goroutine,处理appLayer与raftLayer的交互
-	go an.serveRaftLayer()
 }
 
 func (an *AppNode) serveRaftLayer() {
-	// 获取快照的一些信息
-	snap, err := an.raftStorage.Snapshot()
-	if err != nil {
-		panic(err)
-	}
-	//an.confState = snap.Metadata.ConfState
-	an.snapshotIndex = snap.Metadata.Index
-	an.appliedIndex = snap.Metadata.Index
-
 	//处理配置变更以及日志提议
 	go func() {
 		confChangeCount := uint64(0)
@@ -121,7 +113,6 @@ func (an *AppNode) serveRaftLayer() {
 				if !ok {
 					an.proposeC = nil
 				} else {
-					// blocks until accepted by raft state machine
 					an.raftNode.Propose(prop)
 				}
 
@@ -152,7 +143,6 @@ func (an *AppNode) serveRaftLayer() {
 		//当应用层通过 Node.Ready 方法接收到来自算法层的处理结果后，AppNode 需要将待持久化的预写日志（Ready.Entries）进行持久化，
 		//需要调用通信模块为算法层执行消息发送动作（Ready.Messages），需要与数据状态机应用算法层已确认提交的预写日志.
 		//当以上步骤处理完成时，AppNode 会调用 Node.Advance 方法对算法层进行响应.
-		//处理Ready，应该是个channel,看能否获取到ready如果能获取到ready那么应用层根据该ready进行
 		case rd := <-an.raftNode.Ready():
 			an.wal.Save(&rd.HardState, rd.Entries)
 			an.raftStorage.Append(rd.Entries)
@@ -222,7 +212,7 @@ func (an *AppNode) listenAndServePeerRaft() {
 	close(an.httpdonec)
 }
 
-func (an *AppNode) checkEntrys(ents []pb.Entry) (nents []pb.Entry) {
+func (an *AppNode) checkEntries(ents []pb.Entry) (nents []pb.Entry) {
 	if len(ents) == 0 {
 		return ents
 	}
@@ -299,7 +289,7 @@ func (an *AppNode) replayWAL() {
 	log.Info("replaying WAL of member %d").Record()
 }
 
-//  实现Rat接口,网络层通过该接口与RaftNode交互
+//  实现Rat网络层接口,网络层通过该接口与RaftNode交互
 //	当transport模块接收到其他节点的信息时调用如下方法让raft算法层进行处理
 
 func (an *AppNode) Process(ctx context.Context, m *pb.Message) error {

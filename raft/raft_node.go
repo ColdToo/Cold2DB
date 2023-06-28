@@ -44,13 +44,13 @@ type Ready struct {
 type RaftNode struct {
 	Raft *Raft
 
-	propc      chan msgWithResult
-	recvc      chan pb.Message
-	confc      chan pb.ConfChange
-	confstatec chan pb.ConfState
-	readyc     chan Ready
-	advancec   chan struct{}
-	tickc      chan struct{}
+	propC      chan msgWithResult
+	recvC      chan pb.Message
+	confC      chan pb.ConfChange
+	confstateC chan pb.ConfState
+	readyC     chan Ready
+	advanceC   chan struct{}
+	tickC      chan struct{}
 	done       chan struct{}
 	stop       chan struct{}
 
@@ -103,6 +103,11 @@ func (rn *RaftNode) Step(m *pb.Message) error {
 	return ErrStepPeerNotFound
 }
 
+// TransferLeader tries to transfer leadership to the given transferee.
+func (rn *RaftNode) TransferLeader(transferee uint64) {
+	_ = rn.Raft.Step(&pb.Message{MsgType: pb.MessageType_MsgTransferLeader, From: transferee})
+}
+
 // GetProgress return the Progress of this node and its peers, if this
 // node is leader.
 func (rn *RaftNode) GetProgress() map[uint64]Progress {
@@ -113,11 +118,6 @@ func (rn *RaftNode) GetProgress() map[uint64]Progress {
 		}
 	}
 	return prs
-}
-
-// TransferLeader tries to transfer leadership to the given transferee.
-func (rn *RaftNode) TransferLeader(transferee uint64) {
-	_ = rn.Raft.Step(&pb.Message{MsgType: pb.MessageType_MsgTransferLeader, From: transferee})
 }
 
 // ProposeConfChange proposes a config change.
@@ -171,24 +171,23 @@ func RestartRaftNode(c *Config) *RaftNode {
 }
 
 func (rn *RaftNode) run() {
-	var readyc chan Ready
-	var advancec chan struct{}
+	var readyC chan Ready
+	var advanceC chan struct{}
 	var rd Ready
 
 	r := rn.Raft
 
 	for {
 		// advance channel不为空，说明应用层还在处理上一轮ready
-		if advancec != nil {
-			readyc = nil
-			//如果应该有Ready那么生成Ready并通知应用层
+		if advanceC != nil {
+			readyC = nil
 		} else if rn.HasReady() {
 			rd = rn.newReady(rn.Raft, rn.prevSoftSt, rn.prevHardSt)
-			readyc = rn.readyc
+			readyC = rn.readyC
 		}
 
 		select {
-		case m := <-rn.recvc:
+		case m := <-rn.recvC:
 			// 处理其他节点发送过来的提交值
 			// filter out response message from unknown From.
 			if pr := r.Progress[m.From]; pr != nil || !IsResponseMsg(m.Type) {
@@ -198,11 +197,11 @@ func (rn *RaftNode) run() {
 				}
 			}
 
-		case readyc <- rd:
+		case readyC <- rd:
 			//将rd投喂给应用层后,对raft相关字段进行更新
 			rn.alterRaftStatus(rd)
 			// 修改advance channel不为空，等待接收advance消息
-			advancec = rn.advancec
+			advanceC = rn.advanceC
 
 		case <-rn.stop:
 			close(rn.done)
@@ -212,10 +211,10 @@ func (rn *RaftNode) run() {
 
 }
 
-func (rn *RaftNode) newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
+func (rn *RaftNode) newReady(r *Raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	rd := Ready{
-		Entries:          r.raftLog.unstableEntries(),
-		CommittedEntries: r.raftLog.nextEnts(),
+		Entries:          r.RaftLog.unstableEntries(),
+		CommittedEntries: r.RaftLog.nextEnts(),
 		Messages:         r.msgs,
 	}
 	if softSt := r.softState(); !softSt.equal(prevSoftSt) {
@@ -234,15 +233,6 @@ func (rn *RaftNode) newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardS
 	return rd
 }
 
-// 每一轮算法层投递完 Ready 后，会重置raft的一些状态比如把 raft.msgs 置为空，保证消息不被重复发送到应用层
-func (rn *RaftNode) alterRaftStatus(rd Ready) {
-	if rd.SoftState != nil {
-		rn.prevSoftSt = rd.SoftState
-	}
-	//每一轮算法层投递完 Ready 后，会把 raft.msgs 置为空，保证消息不被重复发送到应用层：
-	rn.Raft.msgs = nil
-}
-
 //关闭raft层（相关数据结构）
 func (rn *RaftNode) Stop() {
 
@@ -256,7 +246,6 @@ func (rn *RaftNode) ReportSnapshot(id uint64, status SnapshotStatus) {
 	return
 }
 
-// Ready returns the current point-in-time state of this RawNode.
 func (rn *RaftNode) Ready() Ready {
 	rd := Ready{
 		Entries:          rn.Raft.RaftLog.unstableEntries(),
@@ -288,30 +277,22 @@ func (rn *RaftNode) Ready() Ready {
 	return rd
 }
 
-// HasReady called when RawNode user need to check if any Ready pending.
 func (rn *RaftNode) HasReady() bool {
-	// Your Code Here (2A).
 	hardState := pb.HardState{
 		Term:   rn.Raft.Term,
-		Vote:   rn.Raft.Vote,
+		Vote:   rn.Raft.VoteFor,
 		Commit: rn.Raft.RaftLog.committed,
 	}
-	if !IsEmptyHardState(hardState) && !isHardStateEqual(rn.prevHardState, hardState) {
+	if !IsEmptyHardState(hardState) && !isHardStateEqual(rn.prevHardSt, hardState) {
 		return true
 	}
 	if len(rn.Raft.msgs) > 0 || len(rn.Raft.RaftLog.nextEnts()) > 0 || len(rn.Raft.RaftLog.unstableEntries()) > 0 {
 		return true
 	}
-	if !IsEmptySnap(rn.Raft.RaftLog.pendingSnapshot) {
-		return true
-	}
 	return false
 }
 
-// Advance notifies the RawNode that the application has applied and saved progress in the
-// last Ready results.
 func (rn *RaftNode) Advance(rd Ready) {
-	// Your Code Here (2A).
 	if len(rd.Entries) > 0 {
 		rn.Raft.RaftLog.stabled = rd.Entries[len(rd.Entries)-1].Index
 	}
@@ -319,7 +300,15 @@ func (rn *RaftNode) Advance(rd Ready) {
 		rn.Raft.RaftLog.applied = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
 	}
 	if !IsEmptyHardState(rd.HardState) {
-		rn.prevHardState = rd.HardState
+		rn.prevHardSt = rd.HardState
 	}
-	rn.Raft.RaftLog.maybeCompact()
+}
+
+// 每一轮算法层投递完 Ready 后，会重置raft的一些状态比如把 raft.msgs 置为空，保证消息不被重复发送到应用层
+func (rn *RaftNode) alterRaftStatus(rd Ready) {
+	if rd.SoftState != nil {
+		rn.prevSoftSt = rd.SoftState
+	}
+	//每一轮算法层投递完 Ready 后，会把 raft.msgs 置为空，保证消息不被重复发送到应用层：
+	rn.Raft.msgs = nil
 }

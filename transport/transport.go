@@ -20,7 +20,7 @@ import (
 )
 
 // Raft app_node实现该接口
-type Raft interface {
+type RaftTransport interface {
 	Process(ctx context.Context, m *pb.Message) error
 	IsIDRemoved(id uint64) bool
 	ReportUnreachable(id uint64)
