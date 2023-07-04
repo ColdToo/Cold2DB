@@ -69,6 +69,22 @@ func Fatal(msg string) *Fields {
 	return newFields(msg, log, false)
 }
 
+func Infof(msg string, param ...any) {
+
+}
+
+func Warnf(msg string, param ...any) {
+
+}
+
+func Errorf(msg string, param ...any) {
+
+}
+
+func Debugf(msg string, param ...any) {
+
+}
+
 type Fields struct {
 	level  zapcore.Level
 	zap    *zap.Logger

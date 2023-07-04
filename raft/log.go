@@ -10,12 +10,11 @@ import (
 //	snapshot/first.....applied....committed....stabled.....last
 //	--------|------------------------------------------------|
 //	                          log entries
-//
 
 type RaftLog struct {
 	first uint64
 
-	Applied uint64
+	applied uint64
 
 	committed uint64
 
@@ -42,21 +41,21 @@ func newRaftLog(storage Storage) (*RaftLog, error) {
 	}
 	allEntrys, err := storage.Entries(firstIndex, lastIndex+1)
 
-	return &RaftLog{storage: storage, first: firstIndex, last: lastIndex, Entries: allEntrys}, nil
+	return &RaftLog{storage: storage, first: firstIndex, last: lastIndex, entries: allEntrys}, nil
 }
 
 func (l *RaftLog) getAllEntries() []pb.Entry {
-	return l.Entries
+	return l.entries
 }
 
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
-	return l.Entries[l.stabled : l.last+1]
+	return l.entries[l.first : l.stabled+1]
 }
 
 // nextEnts returns all the committed but not applied entries
-func (l *RaftLog) nextEnts() (ents []pb.Entry) {
-	return l.Entries[l.Applied : l.committed+1]
+func (l *RaftLog) nextApplyEnts() (ents []pb.Entry) {
+	return l.entries[l.applied : l.committed+1]
 }
 
 // LastIndex return the last index of the log entries
@@ -64,14 +63,13 @@ func (l *RaftLog) LastIndex() uint64 {
 	return l.last
 }
 
-// Term return the term of the entry in the given index
 func (l *RaftLog) getTermByEntryIndex(i uint64) (uint64, error) {
-	if uint64(len(l.Entries)) < i {
+	if uint64(len(l.entries)) < i {
 		return 0, errors.New("not find the log entry")
 	}
-	return l.Entries[i].Term, nil
+	return l.entries[i].Term, nil
 }
 
 func (l *RaftLog) AppendEntries(ents []pb.Entry) {
-	l.Entries = append(l.Entries, ents...)
+	l.entries = append(l.entries, ents...)
 }

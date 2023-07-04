@@ -568,7 +568,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 // sendAppendResponse send append response
 func (r *Raft) sendAppendResponse(to uint64, reject bool) {
 	msg := pb.Message{
-		MsgType: pb.MessageType_MsgAppendResponse,
+		Type: 	 pb.MsgAppResp,
 		From:    r.id,
 		To:      to,
 		Term:    r.Term,

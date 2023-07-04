@@ -68,7 +68,7 @@ type peer struct {
 	// id of the remote raft peer node
 	remoteID types.ID
 
-	raft Raft
+	raft RaftTransport
 
 	status *peerStatus
 

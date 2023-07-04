@@ -4,7 +4,6 @@ import (
 	"context"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db"
-	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
@@ -137,9 +136,6 @@ func (t *Transport) Send(msgs []pb.Message) {
 		t.mu.RUnlock()
 
 		if pok {
-			if m.MsgType == pb.MessageType_MsgAppend {
-				t.ServerStats.SendAppendReq(int(m.Size()))
-			}
 			p.send(m)
 			continue
 		}
@@ -148,13 +144,6 @@ func (t *Transport) Send(msgs []pb.Message) {
 			g.send(m)
 			continue
 		}
-
-		domain.Log.Warn()
-		t.Logger.Debug(
-			"ignored message send request; unknown remote peer target",
-			zap.String("type", m.Type.String()),
-			zap.String("unknown-target-peer-id", to.String()),
-		)
 	}
 }
 

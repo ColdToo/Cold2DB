@@ -33,7 +33,6 @@ type Storage interface {
 	// [FirstIndex()-1, LastIndex()]. The term of the entry before
 	Term(i uint64) (uint64, error)
 
-	// LastIndex returns the index of the last entry in the log.
 	LastIndex() (uint64, error)
 
 	FirstIndex() (uint64, error)

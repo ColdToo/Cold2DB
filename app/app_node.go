@@ -30,7 +30,7 @@ type AppNode struct {
 	appliedIndex  uint64
 
 	raftNode    *raft.RaftNode
-	raftStorage *raft.MemoryStorage
+	raftStorage raft.Storage
 	wal         *wal.WAL
 	transport   *transport.Transport
 
@@ -140,7 +140,9 @@ func (an *AppNode) serveRaftLayer() {
 		//需要调用通信模块为算法层执行消息发送动作（Ready.Messages），需要与数据状态机应用算法层已确认提交的预写日志.
 		//当以上步骤处理完成时，AppNode 会调用 Node.Advance 方法对算法层进行响应.
 		case rd := <-an.raftNode.ReadyC:
+			// 先写到预写日志wal
 			an.wal.Save(&rd.HardState, rd.Entries)
+			// 再写入内存数据库中
 			an.raftStorage.Append(rd.Entries)
 			an.transport.Send(rd.Messages)
 			applyDoneC, ok := an.commitEntries(an.checkEntries(rd.CommittedEntries))
@@ -148,6 +150,8 @@ func (an *AppNode) serveRaftLayer() {
 				an.stop()
 				return
 			}
+
+			<-applyDoneC
 
 			//通知算法层进行下一轮
 			an.raftNode.Advance(raft.Ready{})
@@ -214,7 +218,7 @@ func (an *AppNode) checkEntries(ents []pb.Entry) (nents []pb.Entry) {
 	}
 	firstIdx := ents[0].Index
 	if firstIdx > an.appliedIndex+1 {
-		log.Fatalf("first index of committed entry[%d] should <= progress.appliedIndex[%d]+1", firstIdx, an.appliedIndex)
+		log.Infof("first index of committed entry[%d] should <= progress.appliedIndex[%d]+1", firstIdx, an.appliedIndex)
 	}
 	if an.appliedIndex-firstIdx+1 < uint64(len(ents)) {
 		nents = ents[an.appliedIndex-firstIdx+1:]
@@ -229,28 +233,26 @@ func (an *AppNode) commitEntries(ents []pb.Entry) (<-chan struct{}, bool) {
 
 	data := make([]string, 0, len(ents))
 	for i := range ents {
-		switch ents[i].EntryType {
-		case pb.EntryType_EntryNormal:
+		switch ents[i].Type {
+		case pb.EntryNormal:
 			if len(ents[i].Data) == 0 {
-				// ignore empty messages
 				break
 			}
 			s := string(ents[i].Data)
 			data = append(data, s)
 
-		case pb.EntryType_EntryConfChange:
-			var cc pb.ConfChange
+		case pb.EntryConfChange:
+			var cc *pb.ConfChange
 			cc.Unmarshal(ents[i].Data)
 			//通过算法层应用配置更新请求
-			an.confState = *an.raftNode.ApplyConfChange(cc)
+			an.confState = an.raftNode.ApplyConfChange(cc)
 			switch cc.Type {
-			case pb.ConfChangeType_AddNode:
+			case pb.ConfChangeAddNode:
 				if len(cc.Context) > 0 {
 					an.transport.AddPeer(types.ID(cc.NodeID), []string{string(cc.Context)})
 				}
-			case pb.ConfChangeType_RemoveNode:
-				if cc.NodeID == uint64(an.id) {
-					log.Println("I've been removed from the cluster! Shutting down.")
+			case pb.ConfChangeRemoveNode:
+				if cc.NodeID == uint64(an.localId) {
 					return nil, false
 				}
 				an.transport.RemovePeer(types.ID(cc.NodeID))
@@ -262,9 +264,10 @@ func (an *AppNode) commitEntries(ents []pb.Entry) (<-chan struct{}, bool) {
 
 	//将commitedEntry传入commitC中由KVstore完成持久化
 	if len(data) > 0 {
-		applyDoneC = make(chan struct{}, 1)
+		applyDoneC = make(chan struct{}, 0)
 		select {
-		case an.commitC <- &commit{data}:
+		//todo 将data序列化后插入
+		case an.commitC <- &commit{kv: []kv{}}:
 		case <-an.stopc:
 			return nil, false
 		}

@@ -47,11 +47,11 @@ type RaftNode struct {
 	propC    chan msgWithResult
 	recvC    chan pb.Message
 	confC    chan pb.ConfChange
-	ReadyC   chan Ready
-	advanceC chan struct{}
 	tickC    chan struct{}
 	done     chan struct{}
 	stop     chan struct{}
+	ReadyC   chan Ready
+	AdvanceC chan struct{}
 
 	prevSoftSt *SoftState
 	prevHardSt pb.HardState
@@ -64,7 +64,8 @@ func NewRaftNode(config *Config) (*RaftNode, error) {
 		return nil, err
 	}
 	ReadyC := make(chan Ready, 0)
-	return &RaftNode{Raft: raft, ReadyC: ReadyC}, nil
+	AdvanceC := make(chan struct{}, 0)
+	return &RaftNode{Raft: raft, ReadyC: ReadyC, AdvanceC: AdvanceC}, nil
 }
 
 func StartRaftNode(c *Config, peers []Peer) *RaftNode {
@@ -166,8 +167,6 @@ func (rn *RaftNode) GetProgress() map[uint64]Progress {
 	return prs
 }
 
-//
-
 func (rn *RaftNode) run() {
 	var readyC chan Ready
 	var advanceC chan struct{}
@@ -181,14 +180,12 @@ func (rn *RaftNode) run() {
 			readyC = nil
 		} else if rn.HasReady() {
 			rd = rn.newReady()
-			readyC = rn.readyC
+			readyC = rn.ReadyC
 		}
 
 		select {
 		case m := <-rn.recvC:
-			// 处理其他节点发送过来的提交值
-			// filter out response message from unknown From.
-			if pr := r.Progress[m.From]; pr != nil || !IsResponseMsg(m.Type) {
+			if pr := r.Progress[m.From]; pr != nil {
 				err := r.Step(&m)
 				if err != nil {
 					return
@@ -196,10 +193,8 @@ func (rn *RaftNode) run() {
 			}
 
 		case readyC <- rd:
-			//将rd投喂给应用层后,对raft相关字段进行更新
 			rn.alterRaftStatus(rd)
-			// 修改advance channel不为空，等待接收advance消息
-			advanceC = rn.advanceC
+			advanceC = rn.AdvanceC
 
 		case <-rn.stop:
 			close(rn.done)
@@ -212,7 +207,7 @@ func (rn *RaftNode) run() {
 func (rn *RaftNode) newReady() Ready {
 	rd := Ready{
 		Entries:          rn.Raft.RaftLog.unstableEntries(),
-		CommittedEntries: rn.Raft.RaftLog.nextEnts(),
+		CommittedEntries: rn.Raft.RaftLog.nextApplyEnts(),
 	}
 	if len(rn.Raft.msgs) > 0 {
 		rd.Messages = rn.Raft.msgs
@@ -236,37 +231,6 @@ func (rn *RaftNode) newReady() Ready {
 	return rd
 }
 
-func (rn *RaftNode) Ready() Ready {
-	rd := Ready{
-		Entries:          rn.Raft.RaftLog.unstableEntries(),
-		CommittedEntries: rn.Raft.RaftLog.nextEnts(),
-	}
-	if len(rn.Raft.msgs) > 0 {
-		rd.Messages = rn.Raft.msgs
-	}
-	if rn.prevSoftSt.Lead != rn.Raft.Lead ||
-		rn.prevSoftSt.RaftState != rn.Raft.State {
-		rn.prevSoftSt.Lead = rn.Raft.Lead
-		rn.prevSoftSt.RaftState = rn.Raft.State
-		rd.SoftState = rn.prevSoftSt
-	}
-	hardState := pb.HardState{
-		Term:   rn.Raft.Term,
-		Vote:   rn.Raft.Vote,
-		Commit: rn.Raft.RaftLog.committed,
-	}
-	if !isHardStateEqual(rn.prevHardState, hardState) {
-		rd.HardState = hardState
-	}
-	// clear msg
-	rn.Raft.msgs = make([]pb.Message, 0)
-	if !IsEmptySnap(rn.Raft.RaftLog.pendingSnapshot) {
-		rd.Snapshot = *rn.Raft.RaftLog.pendingSnapshot
-		rn.Raft.RaftLog.pendingSnapshot = nil
-	}
-	return rd
-}
-
 func (rn *RaftNode) HasReady() bool {
 	hardState := pb.HardState{
 		Term:   rn.Raft.Term,
@@ -276,7 +240,7 @@ func (rn *RaftNode) HasReady() bool {
 	if !IsEmptyHardState(hardState) && !isHardStateEqual(rn.prevHardSt, hardState) {
 		return true
 	}
-	if len(rn.Raft.msgs) > 0 || len(rn.Raft.RaftLog.nextEnts()) > 0 || len(rn.Raft.RaftLog.unstableEntries()) > 0 {
+	if len(rn.Raft.msgs) > 0 || len(rn.Raft.RaftLog.nextApplyEnts()) > 0 || len(rn.Raft.RaftLog.unstableEntries()) > 0 {
 		return true
 	}
 	return false
@@ -302,8 +266,6 @@ func (rn *RaftNode) alterRaftStatus(rd Ready) {
 	//每一轮算法层投递完 Ready 后，会把 raft.msgs 置为空，保证消息不被重复发送到应用层：
 	rn.Raft.msgs = nil
 }
-
-//
 
 //网络层报告接口
 
