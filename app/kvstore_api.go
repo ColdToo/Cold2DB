@@ -36,6 +36,7 @@ type kv struct {
 
 func NewKVStore(proposeC chan<- bytes.Buffer, commitC <-chan *commit, errorC <-chan error) *kvstore {
 	//初始化db
+	db.InitDB()
 	s := &kvstore{proposeC: proposeC}
 	go s.serveCommitC(commitC, errorC)
 	return s

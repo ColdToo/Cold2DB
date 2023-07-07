@@ -9,7 +9,6 @@ import (
 	"github.com/ColdToo/Cold2DB/raft"
 	"github.com/ColdToo/Cold2DB/transport"
 	types "github.com/ColdToo/Cold2DB/transport/types"
-	"github.com/ColdToo/Cold2DB/wal"
 	"net/http"
 	"net/url"
 	"time"
@@ -31,7 +30,6 @@ type AppNode struct {
 
 	raftNode    *raft.RaftNode
 	raftStorage raft.Storage
-	wal         *wal.WAL
 	transport   *transport.Transport
 
 	proposeC    <-chan bytes.Buffer  // 提议 (k,v)
@@ -69,12 +67,6 @@ func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan byt
 }
 
 func (an *AppNode) startRaftNode() {
-	//是否存在旧的WAL日志,用于判断该节点是首次加入还是重启的节点
-	oldwal := wal.Exist(an.wal.Dir)
-
-	//如果wal文件存在那么先回放wal中的文件到内存中
-	an.wal = an.openWAL()
-
 	rpeers := make([]raft.Peer, len(an.peersUrl))
 	for i := range rpeers {
 		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
@@ -86,11 +78,12 @@ func (an *AppNode) startRaftNode() {
 		ID:            uint64(an.localId),
 		ElectionTick:  10,
 		HeartbeatTick: 1,
-		Storage:       an.raftStorage,
+		Storage:       an.Storage,
 	}
 
 	// 初始化底层的 etcd-raft 模块，这里会根据 WAL 日志的回放情况，
 	// 判断当前节点是首次启动还是重新启动
+	// oldwal 通过 sotrage接口获取wal日志判断
 	if oldwal || an.join {
 		an.raftNode = raft.RestartRaftNode(c)
 	} else {
@@ -143,7 +136,7 @@ func (an *AppNode) serveRaftLayer() {
 			// 先写到预写日志wal
 			an.wal.Save(&rd.HardState, rd.Entries)
 			// 再写入内存数据库中
-			an.raftStorage.Append(rd.Entries)
+			an.Storage.Append(rd.Entries)
 			an.transport.Send(rd.Messages)
 			applyDoneC, ok := an.commitEntries(an.checkEntries(rd.CommittedEntries))
 			if !ok {
@@ -277,14 +270,6 @@ func (an *AppNode) commitEntries(ents []pb.Entry) (<-chan struct{}, bool) {
 	an.appliedIndex = ents[len(ents)-1].Index
 
 	return applyDoneC, true
-}
-
-func (an *AppNode) openWAL() (w *wal.WAL) {
-	return w
-}
-
-func (an *AppNode) replayWAL() {
-	log.Info("replaying WAL of member %d").Record()
 }
 
 //  实现Rat网络层接口,网络层通过该接口与RaftNode交互

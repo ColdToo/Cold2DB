@@ -2,13 +2,15 @@ package domain
 
 import (
 	"fmt"
+	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 )
 
 type Config struct {
-	ZapConf *log.ZapConfig
+	ZapConf  *log.ZapConfig
+	dbConfig *db.DBConfig
 }
 
 func InitViper() *viper.Viper {
