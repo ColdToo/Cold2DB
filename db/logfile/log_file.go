@@ -2,7 +2,6 @@ package logfile
 
 import (
 	"errors"
-	"fmt"
 	"github.com/ColdToo/Cold2DB/db/ioselector"
 	"hash/crc32"
 	"os"
@@ -71,16 +70,16 @@ const (
 // LogFile is an abstraction of a disk file, entry`s read and write will go through it.
 type LogFile struct {
 	sync.RWMutex
-	Fid        uint32
+	Fname      string
 	WriteAt    int64
 	IoSelector ioselector.IOSelector
 }
 
 // OpenLogFile open an existing or create a new log file.
 // fsize must be a postitive number.And we will create io selector according to ioType.
-func OpenLogFile(path string, fid uint32, fsize int64, ftype FileType, ioType IOType) (lf *LogFile, err error) {
-	lf = &LogFile{Fid: fid}
-	fileName, err := lf.getLogFileName(path, fid, ftype)
+func OpenLogFile(path string, fname string, fsize int64, ftype FileType, ioType IOType) (lf *LogFile, err error) {
+	lf = &LogFile{Fname: fname}
+	fileName, err := lf.getLogFileName(path, fname, ftype)
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +92,10 @@ func OpenLogFile(path string, fid uint32, fsize int64, ftype FileType, ioType IO
 		}
 	case MMap:
 		if selector, err = ioselector.NewMMapSelector(fileName, fsize); err != nil {
+			return
+		}
+	case DirectIO:
+		if selector, err = ioselector.NewDirectorIOSelector(fileName, fsize); err != nil {
 			return
 		}
 	default:
@@ -196,13 +199,15 @@ func (lf *LogFile) readBytes(offset, n int64) (buf []byte, err error) {
 	return
 }
 
-func (lf *LogFile) getLogFileName(path string, fid uint32, ftype FileType) (name string, err error) {
-	fname := path + PathSeparator + fmt.Sprintf("%09d", fid)
+func (lf *LogFile) getLogFileName(path string, name string, ftype FileType) (fname string, err error) {
+	fname = path + PathSeparator + name
 	switch ftype {
 	case WAL:
-		name = fname + WalSuffixName
+		fname = fname + WalSuffixName
 	case ValueLog:
-		name = fname + VLogSuffixName
+		fname = fname + VLogSuffixName
+	case RaftHardState:
+		fname = fname + RaftHardStateSuffixName
 	default:
 		err = ErrUnsupportedLogFileType
 	}

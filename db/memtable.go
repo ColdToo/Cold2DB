@@ -6,7 +6,6 @@ import (
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,12 +23,12 @@ type memtable struct {
 
 // options held by memtable for opening new memtables.
 type memCfg struct {
-	dirPath    string         //wal dir file path
-	fid        uint32         //wal file id
-	fsize      int64          //wal file size
-	ioType     logfile.IOType //mmap io buffer io
-	memSize    uint32
-	bytesFlush uint32
+	walDirPath  string
+	walFileName string
+	fsize       int64
+	ioType      logfile.IOType
+	memSize     uint32
+	bytesFlush  uint32
 }
 
 type memValue struct {
@@ -45,37 +44,37 @@ func initMemtable(dbCfg *DBConfig) (err error) {
 	}
 
 	memCfg := memCfg{
-		dirPath: dbCfg.DirPath,
-		fsize:   int64(dbCfg.MemtableSize),
-		ioType:  ioType,
-		memSize: dbCfg.MemtableSize,
+		walDirPath: dbCfg.WalDirPath,
+		fsize:      int64(dbCfg.MemtableSize),
+		ioType:     ioType,
+		memSize:    dbCfg.MemtableSize,
 	}
 
-	// read wal dirs.
-	DirEntrys, err := os.ReadDir(dbCfg.DirPath)
+	// read wal dir.
+	DirEntries, err := os.ReadDir(dbCfg.WalDirPath)
 	if err != nil {
 		return err
 	}
 
-	// if fileInfo more than zero load the wal file to memtable
-	if len(DirEntrys) > 0 {
-		var fids []uint32
-		for _, entry := range DirEntrys {
+	// if more than zero load the wal file to memtable
+	if len(DirEntries) > 0 {
+		var fnames []string
+		for _, entry := range DirEntries {
 			if !strings.HasSuffix(entry.Name(), logfile.WalSuffixName) {
 				continue
 			}
 			splitNames := strings.Split(entry.Name(), ".")
-			fid, err := strconv.Atoi(splitNames[0])
+			fname := splitNames[0]
 			if err != nil {
 				return err
 			}
-			fids = append(fids, uint32(fid))
+			fnames = append(fnames, fname)
 		}
-		// load memtables in concurrency
 
-		// newest wal is actice memtable
-		for i, fid := range fids {
-			memCfg.fid = fid
+		// load memtables in concurrency
+		// newest wal is active memtable
+		for i, fname := range fnames {
+			memCfg.walFileName = fname
 			table, err := openMemtable(memCfg)
 			if err != nil {
 				return err
@@ -86,6 +85,7 @@ func initMemtable(dbCfg *DBConfig) (err error) {
 				Cold2.immuMems = append(Cold2.immuMems, table)
 			}
 		}
+
 	} else {
 		Cold2.activeMem, err = newMemtable(memCfg)
 	}
@@ -150,7 +150,7 @@ func newMemtable(memCfg memCfg) (*memtable, error) {
 	table := &memtable{memCfg: memCfg, skl: skl, sklIter: sklIter}
 
 	// open a new wal log file.
-	wal, err := logfile.OpenLogFile(memCfg.path, memCfg.fid, memCfg.fsize*2, logfile.WAL, memCfg.ioType)
+	wal, err := logfile.OpenLogFile(memCfg.walDirPath, memCfg.walFileName, memCfg.fsize*2, logfile.WAL, memCfg.ioType)
 	if err != nil {
 		return nil, err
 	}
@@ -160,21 +160,19 @@ func newMemtable(memCfg memCfg) (*memtable, error) {
 }
 
 // put new writes to memtable.
-func (mt *memtable) put(key []byte, value []byte, deleted bool, opts WriteOptions) error {
+func (mt *memtable) put(key []byte, value []byte, deleted bool) error {
 	entry := &logfile.LogEntry{
 		Key:   key,
 		Value: value,
 	}
-	if opts.ExpiredAt > 0 {
-		entry.ExpiredAt = opts.ExpiredAt
-	}
+
 	if deleted {
 		entry.Type = logfile.TypeDelete
 	}
 
 	// write entrty into wal first.
 	buf, sz := logfile.EncodeEntry(entry)
-	if !opts.DisableWal && mt.wal != nil {
+	if mt.wal != nil {
 		if err := mt.wal.Write(buf); err != nil {
 			return err
 		}
@@ -195,7 +193,7 @@ func (mt *memtable) put(key []byte, value []byte, deleted bool, opts WriteOption
 		}
 	}
 
-	// write data into skip list in memory.
+	// write data into skip list .
 	mv := memValue{value: value, expiredAt: entry.ExpiredAt, typ: byte(entry.Type)}
 	mvBuf := mv.encode()
 	if mt.sklIter.Seek(key) {

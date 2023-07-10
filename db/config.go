@@ -9,7 +9,7 @@ type DBConfig struct {
 	DBPath string
 
 	// wal dir path, one memtable corresponds one wal
-	DirPath string
+	WalDirPath string
 
 	// MemtableSize represents the maximum size in bytes for a memtable.
 	// It means that each memtable will occupy so much memory.
