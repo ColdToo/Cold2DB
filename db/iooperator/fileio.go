@@ -1,4 +1,4 @@
-package ioselector
+package iooperator
 
 import "os"
 

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"github.com/ColdToo/Cold2DB/db/index"
 	"github.com/ColdToo/Cold2DB/db/logfile"
+	"github.com/ColdToo/Cold2DB/log"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/signal"
 	"sort"
@@ -51,8 +51,21 @@ type vlogOptions struct {
 }
 
 // openValueLog create a new value log file.
-func openValueLog(opt vlogOptions) (*valueLog, error) {
-	fileInfos, err := ioutil.ReadDir(opt.path)
+func initValueLog(dbCfg *DBConfig) (*valueLog, error) {
+	// open value log.
+	var ioType = logfile.BufferedIO
+	if dbCfg.ValueLogMmap {
+		ioType = logfile.MMap
+	}
+
+	vlogOpt := vlogOptions{
+		path:       dbCfg.ValueLogDir,
+		blockSize:  dbCfg.ValueLogFileSize,
+		ioType:     ioType,
+		gcRatio:    dbCfg.ValueLogGCRatio,
+		gcInterval: dbCfg.ValueLogGCInterval,
+	}
+	fileInfos, err := os.ReadDir(vlogOpt.path)
 	if err != nil {
 		return nil, err
 	}
@@ -77,22 +90,22 @@ func openValueLog(opt vlogOptions) (*valueLog, error) {
 		fids = append(fids, logfile.InitialLogFileId)
 	}
 
-	// open discard file.
-	discard, err := newDiscard(opt.path, vlogDiscardName)
+	// open discard file. mainly use to compaction
+	discard, err := newDiscard(vlogOpt.path, vlogDiscardName)
 	if err != nil {
 		return nil, err
 	}
 
 	// open active log file only.
-	logFile, err := logfile.OpenLogFile(opt.path, fids[len(fids)-1], opt.blockSize, logfile.ValueLog, opt.ioType)
+	logFile, err := logfile.OpenLogFile(vlogOpt.path, fids[len(fids)-1], vlogOpt.blockSize, logfile.ValueLog, vlogOpt.ioType)
 	// set total size in discard file, skip it if exist.
-	discard.setTotal(fids[len(fids)-1], uint32(opt.blockSize))
+	discard.setTotal(fids[len(fids)-1], uint32(vlogOpt.blockSize))
 	if err != nil {
 		return nil, err
 	}
 
 	vlog := &valueLog{
-		opt:           opt,
+		opt:           vlogOpt,
 		activeLogFile: logFile,
 		logFiles:      make(map[uint32]*logfile.LogFile),
 		discard:       discard,
@@ -266,10 +279,10 @@ func (vlog *valueLog) handleCompaction() {
 		select {
 		case <-ticker.C:
 			if err := vlog.compact(); err != nil {
-				logger.Errorf("value log compaction err: %+v", err)
+				log.Errorf("value log compaction err: %+v", err)
 			}
 		case <-quitSig:
-		case <-vlog.cf.closedC:
+		case <-vlog.closedC:
 			return
 		}
 	}

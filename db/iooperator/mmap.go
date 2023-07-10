@@ -1,4 +1,4 @@
-package ioselector
+package iooperator
 
 import (
 	"io"
@@ -8,14 +8,14 @@ import (
 )
 
 // MMapSelector represents using memory-mapped file I/O.
-type DirectorIOSelector struct {
+type MMapSelector struct {
 	fd     *os.File
 	buf    []byte // a buffer of mmap
 	bufLen int64
 }
 
 // NewMMapSelector create a new mmap selector.
-func NewDirectorIOSelector(fName string, fsize int64) (IOSelector, error) {
+func NewMMapSelector(fName string, fsize int64) (IOSelector, error) {
 	if fsize <= 0 {
 		return nil, ErrInvalidFsize
 	}
@@ -32,7 +32,7 @@ func NewDirectorIOSelector(fName string, fsize int64) (IOSelector, error) {
 }
 
 // Write copy slice b into mapped region(buf) at offset.
-func (lm *DirectorIOSelector) Write(b []byte, offset int64) (int, error) {
+func (lm *MMapSelector) Write(b []byte, offset int64) (int, error) {
 	length := int64(len(b))
 	if length <= 0 {
 		return 0, nil
@@ -44,7 +44,7 @@ func (lm *DirectorIOSelector) Write(b []byte, offset int64) (int, error) {
 }
 
 // Read copy data from mapped region(buf) into slice b at offset.
-func (lm DirectorIOSelector) Read(b []byte, offset int64) (int, error) {
+func (lm *MMapSelector) Read(b []byte, offset int64) (int, error) {
 	if offset < 0 || offset >= lm.bufLen {
 		return 0, io.EOF
 	}
@@ -55,12 +55,12 @@ func (lm DirectorIOSelector) Read(b []byte, offset int64) (int, error) {
 }
 
 // Sync synchronize the mapped buffer to the file's contents on disk.
-func (lm DirectorIOSelector) Sync() error {
+func (lm *MMapSelector) Sync() error {
 	return mmap.Msync(lm.buf)
 }
 
 // Close sync/unmap mapped buffer and close fd.
-func (lm *DirectorIOSelector) Close() error {
+func (lm *MMapSelector) Close() error {
 	if err := mmap.Msync(lm.buf); err != nil {
 		return err
 	}
@@ -71,7 +71,7 @@ func (lm *DirectorIOSelector) Close() error {
 }
 
 // Delete delete mapped buffer and remove file on disk.
-func (lm *DirectorIOSelector) Delete() error {
+func (lm *MMapSelector) Delete() error {
 	if err := mmap.Munmap(lm.buf); err != nil {
 		return err
 	}

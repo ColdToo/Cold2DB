@@ -1,4 +1,4 @@
-package ioselector
+package iooperator
 
 import (
 	"errors"
@@ -11,8 +11,7 @@ var ErrInvalidFsize = errors.New("fsize can`t be zero or negative")
 // FilePerm default permission of the newly created log file.
 const FilePerm = 0644
 
-// IOSelector io selector for fileio and mmap, used by wal and value log right now.
-type IOSelector interface {
+type IoOperator interface {
 	// Write a slice to log file at offset.
 	// It returns the number of bytes written and an error, if any.
 	Write(b []byte, offset int64) (int, error)

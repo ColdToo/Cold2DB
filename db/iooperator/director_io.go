@@ -1,4 +1,4 @@
-package ioselector
+package iooperator
 
 import (
 	"io"
@@ -8,14 +8,14 @@ import (
 )
 
 // MMapSelector represents using memory-mapped file I/O.
-type MMapSelector struct {
+type DirectorIOSelector struct {
 	fd     *os.File
 	buf    []byte // a buffer of mmap
 	bufLen int64
 }
 
 // NewMMapSelector create a new mmap selector.
-func NewMMapSelector(fName string, fsize int64) (IOSelector, error) {
+func NewDirectorIOSelector(fName string, fsize int64) (IOSelector, error) {
 	if fsize <= 0 {
 		return nil, ErrInvalidFsize
 	}
@@ -32,7 +32,7 @@ func NewMMapSelector(fName string, fsize int64) (IOSelector, error) {
 }
 
 // Write copy slice b into mapped region(buf) at offset.
-func (lm *MMapSelector) Write(b []byte, offset int64) (int, error) {
+func (lm *DirectorIOSelector) Write(b []byte, offset int64) (int, error) {
 	length := int64(len(b))
 	if length <= 0 {
 		return 0, nil
@@ -44,7 +44,7 @@ func (lm *MMapSelector) Write(b []byte, offset int64) (int, error) {
 }
 
 // Read copy data from mapped region(buf) into slice b at offset.
-func (lm *MMapSelector) Read(b []byte, offset int64) (int, error) {
+func (lm DirectorIOSelector) Read(b []byte, offset int64) (int, error) {
 	if offset < 0 || offset >= lm.bufLen {
 		return 0, io.EOF
 	}
@@ -55,12 +55,12 @@ func (lm *MMapSelector) Read(b []byte, offset int64) (int, error) {
 }
 
 // Sync synchronize the mapped buffer to the file's contents on disk.
-func (lm *MMapSelector) Sync() error {
+func (lm DirectorIOSelector) Sync() error {
 	return mmap.Msync(lm.buf)
 }
 
 // Close sync/unmap mapped buffer and close fd.
-func (lm *MMapSelector) Close() error {
+func (lm *DirectorIOSelector) Close() error {
 	if err := mmap.Msync(lm.buf); err != nil {
 		return err
 	}
@@ -71,7 +71,7 @@ func (lm *MMapSelector) Close() error {
 }
 
 // Delete delete mapped buffer and remove file on disk.
-func (lm *MMapSelector) Delete() error {
+func (lm *DirectorIOSelector) Delete() error {
 	if err := mmap.Munmap(lm.buf); err != nil {
 		return err
 	}

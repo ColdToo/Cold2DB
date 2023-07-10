@@ -4,8 +4,10 @@ import (
 	"encoding/binary"
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
 	"github.com/ColdToo/Cold2DB/db/logfile"
+	"github.com/ColdToo/Cold2DB/log"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +34,8 @@ type memCfg struct {
 }
 
 type memValue struct {
+	Term      uint64
+	Index     uint64
 	value     []byte
 	expiredAt int64
 	typ       byte
@@ -71,7 +75,12 @@ func initMemtable(dbCfg *DBConfig) (err error) {
 			fnames = append(fnames, fname)
 		}
 
-		// load memtables in concurrency
+		//根据timestamp排序
+		sort.Slice(fnames, func(i, j int) bool {
+			return fnames[i] < fnames[j]
+		})
+
+		// todo load memtables in concurrency
 		// newest wal is active memtable
 		for i, fname := range fnames {
 			memCfg.walFileName = fname
@@ -101,13 +110,13 @@ func openMemtable(memCfg memCfg) (*memtable, error) {
 	table := &memtable{memCfg: memCfg, skl: skl, sklIter: sklIter}
 
 	// open wal log file.
-	wal, err := logfile.OpenLogFile(memCfg.path, memCfg.fid, memCfg.fsize*2, logfile.WAL, memCfg.ioType)
+	wal, err := logfile.OpenLogFile(memCfg.walDirPath, memCfg.walFileName, memCfg.fsize*2, logfile.WAL, memCfg.ioType)
 	if err != nil {
 		return nil, err
 	}
 	table.wal = wal
 
-	// load entries.
+	// load wal entries into memory.
 	var offset int64 = 0
 	for {
 		if entry, size, err := wal.ReadLogEntry(offset); err == nil {
@@ -122,6 +131,7 @@ func openMemtable(memCfg memCfg) (*memtable, error) {
 				typ:       byte(entry.Type),
 			}
 			mvBuf := mv.encode()
+
 			var err error
 			if table.sklIter.Seek(entry.Key) {
 				err = table.sklIter.Set(mvBuf)
@@ -129,7 +139,7 @@ func openMemtable(memCfg memCfg) (*memtable, error) {
 				err = table.sklIter.Put(entry.Key, mvBuf)
 			}
 			if err != nil {
-				logger.Errorf("put value into skip list err.%+v", err)
+				log.Errorf("put value into skip list err.%+v", err)
 				return nil, err
 			}
 		} else {
@@ -149,7 +159,6 @@ func newMemtable(memCfg memCfg) (*memtable, error) {
 	sklIter.Init(skl)
 	table := &memtable{memCfg: memCfg, skl: skl, sklIter: sklIter}
 
-	// open a new wal log file.
 	wal, err := logfile.OpenLogFile(memCfg.walDirPath, memCfg.walFileName, memCfg.fsize*2, logfile.WAL, memCfg.ioType)
 	if err != nil {
 		return nil, err

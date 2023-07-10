@@ -62,6 +62,11 @@ func InitDB(dbCfg *DBConfig) error {
 		return err
 	}
 
+	log, err := openValueLog(dbCfg)
+	if err != nil {
+		return err
+	}
+
 	//开启后台合并协程
 
 	return nil

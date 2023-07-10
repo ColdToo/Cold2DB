@@ -2,7 +2,7 @@ package logfile
 
 import (
 	"errors"
-	"github.com/ColdToo/Cold2DB/db/ioselector"
+	"github.com/ColdToo/Cold2DB/db/iooperator"
 	"hash/crc32"
 	"os"
 	"sync"
@@ -72,11 +72,10 @@ type LogFile struct {
 	sync.RWMutex
 	Fname      string
 	WriteAt    int64
-	IoSelector ioselector.IOSelector
+	IoOperator iooperator.IoOperator
 }
 
 // OpenLogFile open an existing or create a new log file.
-// fsize must be a postitive number.And we will create io selector according to ioType.
 func OpenLogFile(path string, fname string, fsize int64, ftype FileType, ioType IOType) (lf *LogFile, err error) {
 	lf = &LogFile{Fname: fname}
 	fileName, err := lf.getLogFileName(path, fname, ftype)
@@ -84,25 +83,25 @@ func OpenLogFile(path string, fname string, fsize int64, ftype FileType, ioType 
 		return nil, err
 	}
 
-	var selector ioselector.IOSelector
+	var operator iooperator.IoOperator
 	switch ioType {
 	case BufferedIO:
-		if selector, err = ioselector.NewFileIOSelector(fileName, fsize); err != nil {
+		if operator, err = iooperator.NewFileIOSelector(fileName, fsize); err != nil {
 			return
 		}
 	case MMap:
-		if selector, err = ioselector.NewMMapSelector(fileName, fsize); err != nil {
+		if operator, err = iooperator.NewMMapSelector(fileName, fsize); err != nil {
 			return
 		}
 	case DirectIO:
-		if selector, err = ioselector.NewDirectorIOSelector(fileName, fsize); err != nil {
+		if operator, err = iooperator.NewDirectorIOSelector(fileName, fsize); err != nil {
 			return
 		}
 	default:
 		return nil, ErrUnsupportedIoType
 	}
 
-	lf.IoSelector = selector
+	lf.IoOperator = operator
 	return
 }
 
@@ -143,6 +142,12 @@ func (lf *LogFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
 		return nil, 0, ErrInvalidCrc
 	}
 	return e, entrySize, nil
+}
+
+func (lf *LogFile) readBytes(offset, n int64) (buf []byte, err error) {
+	buf = make([]byte, n)
+	_, err = lf.IoSelector.Read(buf, offset)
+	return
 }
 
 // Read a byte slice in the log file at offset, slice length is the given size.
@@ -191,12 +196,6 @@ func (lf *LogFile) Close() error {
 // File can`t be retrieved if do this, so use it carefully.
 func (lf *LogFile) Delete() error {
 	return lf.IoSelector.Delete()
-}
-
-func (lf *LogFile) readBytes(offset, n int64) (buf []byte, err error) {
-	buf = make([]byte, n)
-	_, err = lf.IoSelector.Read(buf, offset)
-	return
 }
 
 func (lf *LogFile) getLogFileName(path string, name string, ftype FileType) (fname string, err error) {
