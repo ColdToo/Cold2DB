@@ -1,6 +1,7 @@
 package db
 
 import (
+	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db/flock"
 	"github.com/ColdToo/Cold2DB/db/index"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -46,27 +47,23 @@ type Cold2DB struct {
 }
 
 func InitDB(dbCfg *DBConfig) error {
-	err := dbCfgCheck(dbCfg)
+	var err error
+	err = dbCfgCheck(dbCfg)
 	if err != nil {
 		return err
 	}
 
-	if !utils.PathExist(dbCfg.DBPath) {
-		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
-			return err
-		}
-	}
-
-	err := initMemtable(dbCfg)
+	err = initMemtable(dbCfg)
 	if err != nil {
 		return err
 	}
 
-	log, err := openValueLog(dbCfg)
+	err = initValueLog(dbCfg)
 	if err != nil {
 		return err
 	}
 
+	init
 	//开启后台合并协程
 
 	return nil
@@ -75,7 +72,7 @@ func InitDB(dbCfg *DBConfig) error {
 func dbCfgCheck(dbCfg *DBConfig) error {
 	var err error
 	if dbCfg.ValueLogGCRatio >= 1.0 || dbCfg.ValueLogGCRatio <= 0.0 {
-		return ErrInvalidVLogGCRatio
+		return code.ErrInvalidVLogGCRatio
 	}
 	Cold2 = new(Cold2DB)
 	Cold2.flushChn = make(chan *memtable, dbCfg.MemtableNums-1)
@@ -84,7 +81,21 @@ func dbCfgCheck(dbCfg *DBConfig) error {
 		return err
 	}
 	Cold2.immuMems = make([]*memtable, dbCfg.MemtableNums-1)
-
+	if !utils.PathExist(dbCfg.DBPath) {
+		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
+			return err
+		}
+	}
+	if !utils.PathExist(dbCfg.DBPath) {
+		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
+			return err
+		}
+	}
+	if !utils.PathExist(dbCfg.DBPath) {
+		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
+			return err
+		}
+	}
 }
 
 func ListenAndFlush() {

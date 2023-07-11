@@ -322,3 +322,7 @@ func (n *node) casNextOffset(h int, old, val uint32) bool {
 func (n *node) casPrevOffset(h int, old, val uint32) bool {
 	return atomic.CompareAndSwapUint32(&n.tower[h].prevOffset, old, val)
 }
+
+// Fastrand returns a lock free uint32 value.
+//go:linkname Fastrand runtime.fastrand
+func Fastrand() uint32

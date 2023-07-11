@@ -51,7 +51,7 @@ type vlogOptions struct {
 }
 
 // openValueLog create a new value log file.
-func initValueLog(dbCfg *DBConfig) (*valueLog, error) {
+func initValueLog(dbCfg *DBConfig) error {
 	// open value log.
 	var ioType = logfile.BufferedIO
 	if dbCfg.ValueLogMmap {
@@ -120,6 +120,7 @@ func initValueLog(dbCfg *DBConfig) (*valueLog, error) {
 		return nil, err
 	}
 	go vlog.handleCompaction()
+	Cold2.vlog = vlog
 	return vlog, nil
 }
 

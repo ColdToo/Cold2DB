@@ -86,21 +86,6 @@ func NewIndexer(opts IndexerOptions) (Indexer, error) {
 	}
 }
 
-// IndexerOptions options of creating a new indexer.
-type IndexerOptions interface {
-	SetType(typ IndexerType)
-
-	SetColumnFamilyName(cfName string)
-
-	SetDirPath(dirPath string)
-
-	GetType() IndexerType
-
-	GetColumnFamilyName() string
-
-	GetDirPath() string
-}
-
 // IndexerIter .
 type IndexerIter interface {
 	// First moves the cursor to the first item in the bucket and returns its key and value.

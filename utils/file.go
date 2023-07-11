@@ -11,3 +11,6 @@ func PathExist(path string) bool {
 	}
 	return true
 }
+
+//go:linkname FastRand runtime.fastrand
+func FastRand() uint32

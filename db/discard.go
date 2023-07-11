@@ -3,6 +3,9 @@ package db
 import (
 	"encoding/binary"
 	"errors"
+	"github.com/ColdToo/Cold2DB/db/index"
+	"github.com/ColdToo/Cold2DB/db/iooperator"
+	"github.com/ColdToo/Cold2DB/db/logfile"
 	"io"
 	"path/filepath"
 	"sort"
@@ -19,7 +22,7 @@ var ErrDiscardNoSpace = errors.New("not enough space can be allocated for the di
 type discard struct {
 	sync.Mutex
 	valChan  chan [][]byte
-	file     ioselector.IOSelector
+	file     iooperator.IoOperator
 	freeList []int64          // contains file offset that can be allocated
 	location map[uint32]int64 // offset of each fid
 }
@@ -27,7 +30,7 @@ type discard struct {
 func newDiscard(path, name string) (*discard, error) {
 	fname := filepath.Join(path, name)
 	fsize := 1 << 12
-	file, err := ioselector.NewMMapSelector(fname, int64(fsize))
+	file, err := iooperator.NewMMapSelector(fname, int64(fsize))
 	if err != nil {
 		return nil, err
 	}
