@@ -46,11 +46,15 @@ package arenaskl
 import (
 	"bytes"
 	"errors"
-	"github.com/flower-corp/lotusdb/util"
+	"github.com/ColdToo/Cold2DB/utils"
 	"math"
 	"sync/atomic"
 	"unsafe"
 )
+
+// Fastrand returns a lock free uint32 value.
+//go:linkname Fastrand runtime.fastrand
+import _ "unsafe" // required by go:linkname
 
 const (
 	maxHeight  = 20
@@ -168,7 +172,7 @@ func (s *Skiplist) newNode(key, val []byte) (nd *node, height uint32, err error)
 }
 
 func (s *Skiplist) randomHeight() uint32 {
-	rnd := util.Fastrand()
+	rnd := utils.Fastrand()
 	h := uint32(1)
 	for h < maxHeight && rnd <= probabilities[h] {
 		h++
