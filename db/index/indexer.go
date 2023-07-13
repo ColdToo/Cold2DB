@@ -30,8 +30,17 @@ const (
 type IndexerType int8
 
 const (
-	// BptreeBoltDB represents indexer using bptree.
+	// persist index
+
 	BptreeBoltDB IndexerType = iota
+
+	// inmemory index
+
+	ArenaSkipList
+
+	Bptree
+
+	ART
 )
 
 // IndexerNode represents the value stored in indexer, including Key and Meta info,
@@ -47,25 +56,20 @@ type IndexerMeta struct {
 	Value     []byte
 	Fid       uint32
 	Offset    int64
-	EntrySize int
-}
-
-// WriteOptions options for updates batch.
-type WriteOptions struct {
-	SendDiscard bool
+	ValueSize int
 }
 
 // Indexer index data are stored in indexer.
 type Indexer interface {
 	Put(key []byte, value []byte) (err error)
 
-	PutBatch(kv []*IndexerNode, opts WriteOptions) (offset int, err error)
+	PutBatch(kv []*IndexerNode) (offset int, err error)
 
 	Get(key []byte) (meta *IndexerMeta, err error)
 
 	Delete(key []byte) error
 
-	DeleteBatch(keys [][]byte, opts WriteOptions) error
+	DeleteBatch(keys [][]byte) error
 
 	Sync() error
 
@@ -73,17 +77,16 @@ type Indexer interface {
 }
 
 // NewIndexer create a new Indexer by the given options, return an error, if any.
-func NewIndexer(opts IndexerOptions) (Indexer, error) {
-	switch opts.GetType() {
+func NewIndexer(indexType IndexerType) (Indexer, error) {
+	switch indexType {
 	case BptreeBoltDB:
-		boltOpts, ok := opts.(*BPTreeOptions)
-		if !ok || boltOpts == nil {
-			return nil, ErrOptionsTypeNotMatch
-		}
-		return NewBPTree(*boltOpts)
+	case ArenaSkipList:
+	case Bptree:
+	case ART:
 	default:
 		panic("unknown indexer type")
 	}
+	return nil, nil
 }
 
 // IndexerIter .
@@ -118,7 +121,7 @@ func EncodeMeta(m *IndexerMeta) []byte {
 	var index int
 	index += binary.PutVarint(header[index:], int64(m.Fid))
 	index += binary.PutVarint(header[index:], m.Offset)
-	index += binary.PutVarint(header[index:], int64(m.EntrySize))
+	index += binary.PutVarint(header[index:], int64(m.ValueSize))
 
 	if m.Value != nil {
 		buf := make([]byte, index+len(m.Value))
@@ -142,7 +145,7 @@ func DecodeMeta(buf []byte) *IndexerMeta {
 	index += n
 
 	esize, n := binary.Varint(buf[index:])
-	m.EntrySize = int(esize)
+	m.ValueSize = int(esize)
 	index += n
 
 	m.Value = buf[index:]

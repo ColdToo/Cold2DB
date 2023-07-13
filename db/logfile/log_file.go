@@ -35,10 +35,10 @@ const (
 	// VLogSuffixName log file suffix name of value log.
 	VLogSuffixName = ".vlog"
 
-	RaftHardStateSuffixName = ".raft"
+	// BufferSuffixName log file suffix name of value log.
+	BufferSuffixName = ".buffer"
 
-	// InitialLogFileId initial log file id: 0.
-	InitialLogFileId = 0
+	RaftHardStateSuffixName = ".raft"
 )
 
 // FileType represents different types of log file: wal and value log.
