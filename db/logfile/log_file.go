@@ -5,6 +5,7 @@ import (
 	"github.com/ColdToo/Cold2DB/db/iooperator"
 	"hash/crc32"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 )
@@ -51,7 +52,10 @@ const (
 	// ValueLog value log.
 	ValueLog
 
-	// RaftHardState status
+	// BufferLog when memory space lack, trans immutable to buffer log tmp to persist
+	BufferLog
+
+	// RaftHardState persist raft status
 	RaftHardState
 )
 
@@ -70,15 +74,15 @@ const (
 // LogFile is an abstraction of a disk file, entry`s read and write will go through it.
 type LogFile struct {
 	sync.RWMutex
-	Fname      string
+	Fid        int64 //timestamp
 	WriteAt    int64
 	IoOperator iooperator.IoOperator
 }
 
 // OpenLogFile open an existing or create a new log file.
-func OpenLogFile(path string, fname string, fsize int64, ftype FileType, ioType IOType) (lf *LogFile, err error) {
-	lf = &LogFile{Fname: fname}
-	fileName, err := lf.getLogFileName(path, fname, ftype)
+func OpenLogFile(path string, fid int64, fsize int64, ftype FileType, ioType IOType) (lf *LogFile, err error) {
+	lf = &LogFile{Fid: fid}
+	fileName, err := lf.getLogFileName(path, fid, ftype)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +150,7 @@ func (lf *LogFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
 
 func (lf *LogFile) readBytes(offset, n int64) (buf []byte, err error) {
 	buf = make([]byte, n)
-	_, err = lf.IoSelector.Read(buf, offset)
+	_, err = lf.IoOperator.Read(buf, offset)
 	return
 }
 
@@ -157,7 +161,7 @@ func (lf *LogFile) Read(offset int64, size uint32) ([]byte, error) {
 		return []byte{}, nil
 	}
 	buf := make([]byte, size)
-	if _, err := lf.IoSelector.Read(buf, offset); err != nil {
+	if _, err := lf.IoOperator.Read(buf, offset); err != nil {
 		return nil, err
 	}
 	return buf, nil
@@ -198,8 +202,8 @@ func (lf *LogFile) Delete() error {
 	return lf.IoSelector.Delete()
 }
 
-func (lf *LogFile) getLogFileName(path string, name string, ftype FileType) (fname string, err error) {
-	fname = path + PathSeparator + name
+func (lf *LogFile) getLogFileName(path string, fid int64, ftype FileType) (fname string, err error) {
+	fname = path + PathSeparator + strconv.FormatInt(fid, 10)
 	switch ftype {
 	case WAL:
 		fname = fname + WalSuffixName

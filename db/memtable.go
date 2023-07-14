@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,12 +26,12 @@ type memtable struct {
 
 // options held by memtable for opening new memtables.
 type memCfg struct {
-	walDirPath  string
-	walFileName string
-	fsize       int64
-	ioType      logfile.IOType
-	memSize     uint32
-	bytesFlush  uint32
+	walDirPath string
+	walFileId  int64
+	fsize      int64
+	ioType     logfile.IOType
+	memSize    uint32
+	bytesFlush uint32
 }
 
 type memValue struct {
@@ -62,28 +63,28 @@ func initMemtable(dbCfg *DBConfig) (err error) {
 
 	// if more than zero load the wal file to memtable
 	if len(DirEntries) > 0 {
-		var fnames []string
+		var fids []int64
 		for _, entry := range DirEntries {
 			if !strings.HasSuffix(entry.Name(), logfile.WalSuffixName) {
 				continue
 			}
 			splitNames := strings.Split(entry.Name(), ".")
-			fname := splitNames[0]
+			fid, err := strconv.Atoi(splitNames[0])
 			if err != nil {
 				return err
 			}
-			fnames = append(fnames, fname)
+			fids = append(fids, int64(fid))
 		}
 
-		//根据timestamp排序
-		sort.Slice(fnames, func(i, j int) bool {
-			return fnames[i] < fnames[j]
+		// 根据timestamp排序
+		sort.Slice(fids, func(i, j int) bool {
+			return fids[i] < fids[j]
 		})
 
 		// todo load memtables in concurrency
 		// newest wal is active memtable
-		for i, fname := range fnames {
-			memCfg.walFileName = fname
+		for i, fid := range fids {
+			memCfg.walFileId = fid
 			table, err := openMemtable(memCfg)
 			if err != nil {
 				return err
@@ -110,7 +111,7 @@ func openMemtable(memCfg memCfg) (*memtable, error) {
 	table := &memtable{memCfg: memCfg, skl: skl, sklIter: sklIter}
 
 	// open wal log file.
-	wal, err := logfile.OpenLogFile(memCfg.walDirPath, memCfg.walFileName, memCfg.fsize*2, logfile.WAL, memCfg.ioType)
+	wal, err := logfile.OpenLogFile(memCfg.walDirPath, memCfg.walFileId, memCfg.fsize*2, logfile.WAL, memCfg.ioType)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +160,7 @@ func newMemtable(memCfg memCfg) (*memtable, error) {
 	sklIter.Init(skl)
 	table := &memtable{memCfg: memCfg, skl: skl, sklIter: sklIter}
 
-	wal, err := logfile.OpenLogFile(memCfg.walDirPath, memCfg.walFileName, memCfg.fsize*2, logfile.WAL, memCfg.ioType)
+	wal, err := logfile.OpenLogFile(memCfg.walDirPath, memCfg.walFileId, memCfg.fsize*2, logfile.WAL, memCfg.ioType)
 	if err != nil {
 		return nil, err
 	}

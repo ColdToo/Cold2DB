@@ -48,6 +48,7 @@ type Cold2DB struct {
 
 func InitDB(dbCfg *DBConfig) error {
 	var err error
+	//check db config necessary conf
 	err = dbCfgCheck(dbCfg)
 	if err != nil {
 		return err

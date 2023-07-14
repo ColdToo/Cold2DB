@@ -67,7 +67,7 @@ func initValueLog(dbCfg *DBConfig) error {
 	}
 	fileInfos, err := os.ReadDir(vlogOpt.path)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 
 	var fids []uint32
@@ -76,7 +76,7 @@ func initValueLog(dbCfg *DBConfig) error {
 			splitNames := strings.Split(file.Name(), ".")
 			fid, err := strconv.Atoi(splitNames[0])
 			if err != nil {
-				return nil, err
+				return nil
 			}
 			fids = append(fids, uint32(fid))
 		}
@@ -93,7 +93,7 @@ func initValueLog(dbCfg *DBConfig) error {
 	// open discard file. mainly use to compaction
 	discard, err := newDiscard(vlogOpt.path, vlogDiscardName)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 
 	// open active log file only.
@@ -101,7 +101,7 @@ func initValueLog(dbCfg *DBConfig) error {
 	// set total size in discard file, skip it if exist.
 	discard.setTotal(fids[len(fids)-1], uint32(vlogOpt.blockSize))
 	if err != nil {
-		return nil, err
+		return nil
 	}
 
 	vlog := &valueLog{
@@ -121,7 +121,7 @@ func initValueLog(dbCfg *DBConfig) error {
 	}
 	go vlog.handleCompaction()
 	Cold2.vlog = vlog
-	return vlog, nil
+	return nil
 }
 
 // Read a VLogEntry from a specified vlog file at offset, returns an error, if any.
