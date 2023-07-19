@@ -90,24 +90,6 @@ func (it *Iterator) Seek(key []byte) (found bool) {
 	return found && present
 }
 
-// SeekForPrev searches for the record with the given key. If it is present in
-// the skiplist, then SeekForPrev positions the iterator on that record and
-// returns true. If the record is not present, then SeekForPrev positions the
-// iterator on the preceding node (if it exists) and returns false.
-func (it *Iterator) SeekForPrev(key []byte) (found bool) {
-	var prev, next *node
-	prev, next, found = it.seekForBaseSplice(key)
-
-	var present bool
-	if found {
-		present = it.setNode(next, true)
-	} else {
-		present = it.setNode(prev, true)
-	}
-
-	return found && present
-}
-
 // Put creates a new key/value record if it does not yet exist and positions the
 // iterator on it. If the record already exists, then Add positions the iterator
 // on the most current value and returns ErrRecordExists. If there isn't enough

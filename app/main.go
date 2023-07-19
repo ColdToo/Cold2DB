@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"flag"
-	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/pb"
 	"strings"
 )
@@ -17,8 +16,6 @@ func main() {
 	kvport := flag.Int("port", 9081, "节点提供存储服务的kv端口")
 	join := flag.Bool("join", false, "是否加入已经存在的集群")
 	flag.Parse()
-
-	domain.Init()
 
 	proposeC := make(chan bytes.Buffer)
 	defer close(proposeC)

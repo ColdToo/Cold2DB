@@ -88,6 +88,9 @@ func (a *Arena) Alloc(size, overflow uint32, align Align) (uint32, error) {
 	}
 
 	// Return the aligned offset.
+	// 对align取反再与操作
+	// 7 0000 0111 -> 1111 1000
+	// 0 0000 0000 -> 1111 1111
 	offset := (uint32(newSize) - padded + uint32(align)) & ^uint32(align)
 	return offset, nil
 }

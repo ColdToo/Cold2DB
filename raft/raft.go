@@ -17,15 +17,18 @@ const (
 	Candidate
 )
 
-type Config struct {
-	// local raft id
-	ID uint64
-
-	peers []uint64 //peers ip
+type RaftConfig struct {
 
 	ElectionTick int
 
 	HeartbeatTick int
+}
+
+type Opts struct {
+	// local raft id
+	ID uint64
+
+	peers []uint64 //peers ip
 
 	Storage Storage
 
@@ -703,7 +706,7 @@ func (r *Raft) handleLeaderTransfer(m pb.Message) {
 //当Follower节点接收到MsgTimeoutNow消息时，会立刻切换成Candidate状态，然后创建MsgHup消息并发起选举。
 func (r *Raft) sendTimeoutNow(to uint64) {
 	r.msgs = append(r.msgs, pb.Message{
-		MsgType: pb.MsgTimeoutNow,
+		Type: pb.MsgTimeoutNow,
 		To:      to,
 		From:    r.id,
 	})
