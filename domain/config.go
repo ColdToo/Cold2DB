@@ -37,6 +37,9 @@ func InitViper() *viper.Viper {
 			fmt.Println(err)
 		}
 	})
-
+	Viper = v
 	return v
+}
+
+func configPreCheck() {
 }

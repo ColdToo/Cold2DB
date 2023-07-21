@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db/flock"
 	"github.com/ColdToo/Cold2DB/db/index"
@@ -46,6 +47,14 @@ type Cold2DB struct {
 	raftHardState raftpb.HardState
 }
 
+func GetDB() (*Cold2DB, error) {
+	if Cold2 != nil {
+		return Cold2, nil
+	} else {
+		return nil, errors.New("db is no init complete")
+	}
+}
+
 func InitDB(dbCfg *DBConfig) error {
 	var err error
 	//check db config necessary conf
@@ -64,7 +73,6 @@ func InitDB(dbCfg *DBConfig) error {
 		return err
 	}
 
-	init
 	//开启后台合并协程
 
 	return nil

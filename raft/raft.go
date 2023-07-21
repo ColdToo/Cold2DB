@@ -18,7 +18,6 @@ const (
 )
 
 type RaftConfig struct {
-
 	ElectionTick int
 
 	HeartbeatTick int
@@ -35,7 +34,8 @@ type Opts struct {
 	Applied uint64
 }
 
-func (c *Config) validate() error {
+//raft配置文件前置检查
+func (c *Opts) validate() error {
 	if c.ID == 0 {
 		return errors.New("cannot use none as id")
 	}
@@ -111,7 +111,7 @@ type Progress struct {
 	Match, Next uint64
 }
 
-func NewRaft(c *Config) (raft *Raft, err error) {
+func NewRaft(c *Opts) (raft *Raft, err error) {
 	err = c.validate()
 	if err != nil {
 		return
@@ -128,7 +128,7 @@ func NewRaft(c *Config) (raft *Raft, err error) {
 func (r *Raft) Step(m *pb.Message) error {
 	return r.stepFunc(r, m)
 }
-func (r *Raft) Tick(){
+func (r *Raft) Tick() {
 	r.tick()
 }
 
@@ -218,7 +218,7 @@ func (r *Raft) tickElection() {
 		r.electionElapsed = 0
 		err := r.Step(&pb.Message{From: r.id, Type: pb.MsgHup})
 		if err != nil {
-			log.Error("msg").Err(code.TickErr,err).Record()
+			log.Error("msg").Err(code.TickErr, err).Record()
 			return
 		}
 	}
@@ -235,7 +235,7 @@ func (r *Raft) tickHeartbeat() {
 		r.heartbeatElapsed = 0
 		err := r.Step(&pb.Message{From: r.id, Type: pb.MsgBeat})
 		if err != nil {
-			log.Error("msg").Err(code.TickErr,err).Record()
+			log.Error("msg").Err(code.TickErr, err).Record()
 			return
 		}
 	}
@@ -267,18 +267,17 @@ func (r *Raft) becomeLeader() {
 	r.tick = r.tickHeartbeat
 }
 
-
 // ------------------- leader behavior -------------------
 
-func (r *Raft) handlePropMsg(m *pb.Message)(err error){
+func (r *Raft) handlePropMsg(m *pb.Message) (err error) {
 	lastIndex := r.RaftLog.LastIndex()
 	ents := make([]*pb.Entry, 0)
 	for _, e := range m.Entries {
 		ents = append(ents, &pb.Entry{
-			Type:      e.Type,
-			Term:      r.Term,
-			Index:     lastIndex + 1,
-			Data:      e.Data,
+			Type:  e.Type,
+			Term:  r.Term,
+			Index: lastIndex + 1,
+			Data:  e.Data,
 		})
 		lastIndex += 1
 	}
@@ -371,7 +370,7 @@ func (r *Raft) sendSnapshot(to uint64) {
 		return
 	}
 	r.msgs = append(r.msgs, pb.Message{
-		Type:     pb.,
+		Type:     pb.MsgSnap,
 		From:     r.id,
 		To:       to,
 		Term:     r.Term,
@@ -393,10 +392,10 @@ func (r *Raft) appendEntries(entries ...*pb.Entry) {
 			r.PendingConfIndex = e.Index
 		}
 		ents = append(ents, pb.Entry{
-			Type: 	   e.Type,
-			Term:      e.Term,
-			Index:     e.Index,
-			Data:      e.Data,
+			Type:  e.Type,
+			Term:  e.Term,
+			Index: e.Index,
+			Data:  e.Data,
 		})
 	}
 	r.RaftLog.AppendEntries(ents)
@@ -435,7 +434,6 @@ func (r *Raft) handleHeartbeatResponse(m pb.Message) {
 		r.sendAppend(m.From)
 	}
 }
-
 
 // ------------------ candidate behavior ------------------
 
@@ -500,8 +498,6 @@ func (r *Raft) abortLeaderTransfer() {
 	r.leadTransferee = None
 }
 
-
-
 // ------------------ follower behavior ------------------
 
 // sendVoteResponse send vote response
@@ -528,7 +524,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		r.sendAppendResponse(m.From, true)
 		return
 	}
-
 
 	if len(m.Entries) > 0 {
 		appendStart := 0
@@ -571,12 +566,12 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 // sendAppendResponse send append response
 func (r *Raft) sendAppendResponse(to uint64, reject bool) {
 	msg := pb.Message{
-		Type: 	 pb.MsgAppResp,
-		From:    r.id,
-		To:      to,
-		Term:    r.Term,
-		Reject:  reject,
-		Index:   r.RaftLog.LastIndex(),
+		Type:   pb.MsgAppResp,
+		From:   r.id,
+		To:     to,
+		Term:   r.Term,
+		Reject: reject,
+		Index:  r.RaftLog.LastIndex(),
 	}
 	r.msgs = append(r.msgs, msg)
 }
@@ -707,8 +702,8 @@ func (r *Raft) handleLeaderTransfer(m pb.Message) {
 func (r *Raft) sendTimeoutNow(to uint64) {
 	r.msgs = append(r.msgs, pb.Message{
 		Type: pb.MsgTimeoutNow,
-		To:      to,
-		From:    r.id,
+		To:   to,
+		From: r.id,
 	})
 }
 

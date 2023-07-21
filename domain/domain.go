@@ -12,7 +12,7 @@ var (
 )
 
 func Init() {
-	Viper = InitViper()
+	InitViper()
 	log.InitLog()
 	db.InitDB()
 }

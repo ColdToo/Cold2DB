@@ -102,9 +102,9 @@ func (it *Iterator) Put(key []byte, val []byte) error {
 	}
 
 	if it.list.testing {
-		// Add delay to make it easier to test race between this thread
-		// and another thread that sees the intermediate state between
-		// finding the splice and using it.
+		//这段代码是为了更好地测试并发性能
+		//例如线程1执行到这段代码时，会调用runtime.Gosched()函数，让出执行权给线程2。线程2在这段时间内可能会修改splice的内容。然后，线程1重新获得执行权，继续执行后续的代码。
+		//通过添加延迟，可以增加线程2修改splice的机会，从而更好地模拟并发环境下的竞争条件。
 		runtime.Gosched()
 	}
 
@@ -124,6 +124,7 @@ func (it *Iterator) Put(key []byte, val []byte) error {
 		prev := spl[i].prev
 		next := spl[i].next
 
+		//若在最高层是有可能发现prev是空的，该height是新建的一层
 		if prev == nil {
 			// New node increased the height of the skiplist, so assume that the
 			// new level has not yet been populated.
@@ -220,22 +221,18 @@ func (it *Iterator) Set(val []byte) error {
 	return it.trySetValue(newVal)
 }
 
-// Delete marks the current iterator record as deleted from the store if it
-// has not been updated since iterating or seeking to it. If the record has
-// been updated, then Delete positions the iterator on the most current value
-// and returns ErrRecordUpdated. If the record is deleted, then Delete positions
-// the iterator on the next record.
-func (it *Iterator) Delete() error {
-	if !atomic.CompareAndSwapUint64(&it.nd.value, it.value, deletedVal) {
-		if it.setNode(it.nd, false) {
-			return ErrRecordUpdated
+func (it *Iterator) trySetValue(new uint64) error {
+	if !atomic.CompareAndSwapUint64(&it.nd.value, it.value, new) {
+		old := atomic.LoadUint64(&it.nd.value)
+		if old == deletedVal {
+			return ErrRecordDeleted
 		}
-		return nil
+
+		it.value = old
+		return ErrRecordUpdated
 	}
 
-	// Deletion succeeded, so position iterator on next non-deleted node.
-	next := it.list.getNext(it.nd, 0)
-	it.setNode(next, false)
+	it.value = new
 	return nil
 }
 
@@ -273,21 +270,6 @@ func (it *Iterator) setNode(nd *node, reverse bool) bool {
 	it.value = value
 	it.nd = nd
 	return success
-}
-
-func (it *Iterator) trySetValue(new uint64) error {
-	if !atomic.CompareAndSwapUint64(&it.nd.value, it.value, new) {
-		old := atomic.LoadUint64(&it.nd.value)
-		if old == deletedVal {
-			return ErrRecordDeleted
-		}
-
-		it.value = old
-		return ErrRecordUpdated
-	}
-
-	it.value = new
-	return nil
 }
 
 func (it *Iterator) setValueIfDeleted(nd *node, val []byte) error {
