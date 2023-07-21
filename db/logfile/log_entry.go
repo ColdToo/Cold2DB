@@ -14,16 +14,27 @@ const MaxHeaderSize = 25
 type EntryType byte
 
 const (
-	// TypeDelete represents entry type is delete.
 	TypeDelete EntryType = iota + 1
 )
 
-// LogEntry is the data will be appended in log file.
-type LogEntry struct {
-	Key       []byte
-	Value     []byte
-	ExpiredAt int64 // time.Unix
-	Type      EntryType
+// EntryNoKey when use persisit B+tree index ,dont need storage the key to disk
+type EntryNoKey struct {
+	Value []byte
+	Type  EntryType
+}
+
+type Entry struct {
+	Key   []byte
+	Value []byte
+	Type  EntryType
+}
+
+type WalEntry struct {
+	Index uint64
+	Term  uint64
+	Key   []byte
+	Value []byte
+	Type  EntryType
 }
 
 type entryHeader struct {

@@ -91,22 +91,17 @@ func init() {
 	}
 }
 
-// Skiplist is an in-memory data structure held by memtable.
 type Skiplist struct {
 	arena  *Arena
 	head   *node
 	tail   *node
 	height uint32 // Current height. 1 <= height <= maxHeight. CAS.
-
-	// If set to true by tests, then extra delays are added to make it easier to
-	// detect unusual race conditions.
-	testing bool
+	// If set to true by tests, it easier to detect unusual race conditions.
+	testing  bool
+	indexArr []uint64 // store node cursor
 }
 
-// NewSkiplist constructs and initializes a new, empty skiplist. All nodes, keys,
-// and values in the skiplist will be allocated from the given arena.
 func NewSkiplist(arena *Arena) *Skiplist {
-	// Allocate head and tail nodes.
 	head, err := newNode(arena, maxHeight)
 	if err != nil {
 		panic("arenaSize is not large enough to hold the head node")
@@ -117,7 +112,6 @@ func NewSkiplist(arena *Arena) *Skiplist {
 		panic("arenaSize is not large enough to hold the tail node")
 	}
 
-	// Link all head/tail levels together.
 	headOffset := arena.GetPointerOffset(unsafe.Pointer(head))
 	tailOffset := arena.GetPointerOffset(unsafe.Pointer(tail))
 	for i := 0; i < maxHeight; i++ {
@@ -134,14 +128,10 @@ func NewSkiplist(arena *Arena) *Skiplist {
 	return skl
 }
 
-// Height returns the height of the highest tower within any of the nodes that
-// have ever been allocated as part of this skiplist.
 func (s *Skiplist) Height() uint32 { return atomic.LoadUint32(&s.height) }
 
-// Arena returns the arena backing this skiplist.
 func (s *Skiplist) Arena() *Arena { return s.arena }
 
-// Size returns the number of bytes that have allocated from the arena.
 func (s *Skiplist) Size() uint32 { return s.arena.Size() }
 
 func (s *Skiplist) newNode(key, val []byte) (nd *node, height uint32, err error) {
@@ -161,13 +151,17 @@ func (s *Skiplist) newNode(key, val []byte) (nd *node, height uint32, err error)
 		listHeight = s.Height()
 	}
 
-	// Allocate node's key and value.
 	nd.keyOffset, nd.keySize, err = s.allocKey(key)
 	if err != nil {
 		return
 	}
 
 	nd.value, err = s.allocVal(val)
+	//获取index
+	return
+}
+
+func (s *Skiplist) storeValueCursor(key, val []byte) (nd *node, height uint32, err error) {
 	return
 }
 

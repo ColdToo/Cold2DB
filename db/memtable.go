@@ -35,11 +35,10 @@ type memCfg struct {
 }
 
 type memValue struct {
-	Term      uint64
-	Index     uint64
-	value     []byte
-	expiredAt int64
-	typ       byte
+	Term  uint64
+	Index uint64
+	value []byte
+	typ   byte
 }
 
 func initMemtable(dbCfg *DBConfig) (err error) {
@@ -127,9 +126,8 @@ func openMemtable(memCfg memCfg) (*memtable, error) {
 			wal.WriteAt += size
 
 			mv := &memValue{
-				value:     entry.Value,
-				expiredAt: entry.ExpiredAt,
-				typ:       byte(entry.Type),
+				value: entry.Value,
+				typ:   byte(entry.Type),
 			}
 			mvBuf := mv.encode()
 
@@ -180,15 +178,13 @@ func (mt *memtable) put(key []byte, value []byte, deleted bool) error {
 		entry.Type = logfile.TypeDelete
 	}
 
-	// write entrty into wal first.
+	// todo 应该放入一个chan，如果此时有更多的数据写入，那么应该批量写入wal，这样能减少sync的开销
 	buf, sz := logfile.EncodeEntry(entry)
 	if mt.wal != nil {
 		if err := mt.wal.Write(buf); err != nil {
 			return err
 		}
 
-		// if Sync is ture in WriteOptions or bytesWritten has reached bytesFlush, syncWal will be true.
-		var syncWal = opts.Sync
 		if mt.opts.bytesFlush > 0 {
 			writes := atomic.AddUint32(&mt.bytesWritten, uint32(sz))
 			if writes > mt.opts.bytesFlush {
@@ -282,5 +278,5 @@ func decodeMemValue(buf []byte) memValue {
 	var index = 1
 	ex, n := binary.Varint(buf[index:])
 	index += n
-	return memValue{typ: buf[0], expiredAt: ex, value: buf[index:]}
+	return memValue{typ: buf[0], value: buf[index:]}
 }
