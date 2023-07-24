@@ -34,15 +34,11 @@ const (
 	Bptree
 )
 
-// IndexerNode represents the value stored in indexer, including Key and Meta info,
 type IndexerNode struct {
 	Key  []byte
 	Meta *IndexerMeta
 }
 
-// IndexerMeta meta info of a key.
-// If value exists, it means both key and value will be stored in indexer.
-// If not, we will store some info(Fid, Size, Offset) to find the value in value log.
 type IndexerMeta struct {
 	Value     []byte
 	Fid       uint32
