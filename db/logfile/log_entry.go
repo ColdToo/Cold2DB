@@ -23,6 +23,7 @@ type EntryNoKey struct {
 	Type  EntryType
 }
 
+// Entry when use memory  index , need storage the key to restruct index when node restart
 type Entry struct {
 	Key   []byte
 	Value []byte

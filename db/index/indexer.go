@@ -7,12 +7,6 @@ import (
 )
 
 var (
-	// ErrColumnFamilyNameNil column family name is nil.
-	ErrColumnFamilyNameNil = errors.New("column family name is nil")
-
-	// ErrBucketNameNil bucket name is nil.
-	ErrBucketNameNil = errors.New("bucket name is nil")
-
 	// ErrDirPathNil indexer dir path is nil.
 	ErrDirPathNil = errors.New("indexer dir path is nil")
 
@@ -31,7 +25,6 @@ type IndexerType int8
 
 const (
 	// persist index
-
 	BptreeBoltDB IndexerType = iota
 
 	// inmemory index
@@ -39,8 +32,6 @@ const (
 	ArenaSkipList
 
 	Bptree
-
-	ART
 )
 
 // IndexerNode represents the value stored in indexer, including Key and Meta info,
@@ -82,7 +73,6 @@ func NewIndexer(indexType IndexerType) (Indexer, error) {
 	case BptreeBoltDB:
 	case ArenaSkipList:
 	case Bptree:
-	case ART:
 	default:
 		panic("unknown indexer type")
 	}
