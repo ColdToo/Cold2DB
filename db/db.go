@@ -2,9 +2,9 @@ package db
 
 import (
 	"errors"
-	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db/flock"
 	"github.com/ColdToo/Cold2DB/db/index"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/utils"
 	"go.etcd.io/etcd/raft/raftpb"
@@ -195,5 +195,13 @@ func (db *Cold2DB) GetSnapshot() (pb.Snapshot, error) {
 }
 
 func (db *Cold2DB) IsRestartNode() bool {
-	db.
+	DirEntries, err := os.ReadDir(db.walDirPath)
+	if err != nil {
+		log.Errorf("open wal dir failed")
+	}
+
+	if len(DirEntries) > 0 {
+		return true
+	}
+	return false
 }

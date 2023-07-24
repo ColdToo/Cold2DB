@@ -26,8 +26,7 @@ func main() {
 	errorC := make(chan error)
 	defer close(errorC)
 
-	StartAppNode(*localId, strings.Split(*cluster, ","), *join, proposeC, confChangeC, commitC, errorC)
-
 	kvStore := NewKVStore(proposeC, commitC, errorC)
+	StartAppNode(*localId, strings.Split(*cluster, ","), *join, proposeC, confChangeC, commitC, errorC, kvStore)
 	ServeHttpKVAPI(kvStore, *kvport, confChangeC, errorC)
 }

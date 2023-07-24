@@ -15,7 +15,6 @@ import (
 )
 
 type commit struct {
-	kv []kv
 }
 
 // A key-value stream backed by raft
@@ -29,6 +28,7 @@ type AppNode struct {
 	appliedIndex  uint64
 
 	raftNode  *raft.RaftNode
+	KvStore   *KvStore
 	Storage   raft.Storage
 	transport *transport.Transport
 
@@ -43,7 +43,8 @@ type AppNode struct {
 	TickTime int //定时触发定时器的时间
 }
 
-func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan bytes.Buffer, confChangeC <-chan pb.ConfChange, commitC chan<- *commit, errorC chan<- error) {
+func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan bytes.Buffer,
+	confChangeC <-chan pb.ConfChange, commitC chan<- *commit, errorC chan<- error, kvStore *KvStore) {
 	an := &AppNode{
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
@@ -55,13 +56,14 @@ func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan byt
 		stopc:       make(chan struct{}),
 		httpstopc:   make(chan struct{}),
 		httpdonec:   make(chan struct{}),
+		KvStore:     kvStore,
 	}
 	an.startRaftNode()
 
-	// 启动一个goroutine,监听当前节点与集群中其他节点之间的网络连接
-	go an.servePeerRaft()
 	// 启动一个goroutine,处理appLayer与raftLayer的交互
 	go an.serveRaftLayer()
+	// 启动一个goroutine,监听当前节点与集群中其他节点之间的网络连接
+	go an.servePeerRaft()
 
 	return
 }
@@ -88,32 +90,7 @@ func (an *AppNode) startRaftNode() {
 }
 
 func (an *AppNode) serveRaftLayer() {
-	//处理配置变更以及日志提议
-	go func() {
-		confChangeCount := uint64(0)
-
-		for an.proposeC != nil && an.confChangeC != nil {
-			select {
-			case prop, ok := <-an.proposeC:
-				if !ok {
-					an.proposeC = nil
-				} else {
-					an.raftNode.Propose(prop)
-				}
-
-			case cc, ok := <-an.confChangeC:
-				if !ok {
-					an.confChangeC = nil
-				} else {
-					confChangeCount++
-					cc.ID = confChangeCount
-					an.raftNode.ProposeConfChange(cc)
-				}
-			}
-		}
-
-		close(an.stopc)
-	}()
+	go an.servePropCAndConfC()
 
 	//AppNode 会启动一个定时器，每个 tick 默认为 100ms，然后定时调用 Node.Tick 方法驱动算法层执行定时函数：
 	//todo 定时器应该做成可配置选项
@@ -125,21 +102,18 @@ func (an *AppNode) serveRaftLayer() {
 		case <-ticker.C:
 			an.raftNode.Tick()
 
-		//当应用层通过 Node.Ready 方法接收到来自算法层的处理结果后，AppNode 需要将待持久化的预写日志（Ready.Entries）进行持久化，
+		//当应用层通过 Node.Ready 方法接收到来自算法层的处理结果后，AppNode 需要将待commited的预写日志（Ready.Entries）进行持久化，
 		//需要调用通信模块为算法层执行消息发送动作（Ready.Messages），需要与数据状态机应用算法层已确认提交的预写日志.
 		//当以上步骤处理完成时，AppNode 会调用 Node.Advance 方法对算法层进行响应.
 		case rd := <-an.raftNode.ReadyC:
-			// 先写到预写日志wal
-			an.wal.Save(&rd.HardState, rd.Entries)
-			// 再写入内存数据库中
-			an.Storage.Append(rd.Entries)
-			an.transport.Send(rd.Messages)
+			// todo 先写入hardstate 还是commited entries，这两个应该同时写入否则信息不完整
 			applyDoneC, ok := an.commitEntries(an.checkEntries(rd.CommittedEntries))
 			if !ok {
 				an.stop()
 				return
 			}
-
+			// 需要同步到其他节点的信息
+			an.transport.Send(rd.Messages)
 			<-applyDoneC
 
 			//通知算法层进行下一轮
@@ -154,6 +128,33 @@ func (an *AppNode) serveRaftLayer() {
 			return
 		}
 	}
+}
+
+func (an *AppNode) servePropCAndConfC() {
+	//处理配置变更以及日志提议
+	confChangeCount := uint64(0)
+
+	for an.proposeC != nil && an.confChangeC != nil {
+		select {
+		case prop, ok := <-an.proposeC:
+			if !ok {
+				an.proposeC = nil
+			} else {
+				an.raftNode.Propose(prop)
+			}
+
+		case cc, ok := <-an.confChangeC:
+			if !ok {
+				an.confChangeC = nil
+			} else {
+				confChangeCount++
+				cc.ID = confChangeCount
+				an.raftNode.ProposeConfChange(cc)
+			}
+		}
+	}
+
+	close(an.stopc)
 }
 
 func (an *AppNode) servePeerRaft() {
@@ -246,23 +247,21 @@ func (an *AppNode) commitEntries(ents []pb.Entry) (<-chan struct{}, bool) {
 				}
 				an.transport.RemovePeer(types.ID(cc.NodeID))
 			}
+			// todo inform change ok
 		}
 	}
 
 	var applyDoneC chan struct{}
 
-	//将commitedEntry传入commitC中由KVstore完成持久化
 	if len(data) > 0 {
 		applyDoneC = make(chan struct{}, 0)
 		select {
-		//todo 将data序列化后插入
 		case an.commitC <- &commit{kv: []kv{}}:
 		case <-an.stopc:
 			return nil, false
 		}
 	}
 
-	// after commit, update appliedIndex
 	an.appliedIndex = ents[len(ents)-1].Index
 
 	return applyDoneC, true

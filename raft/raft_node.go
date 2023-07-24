@@ -30,8 +30,6 @@ type Ready struct {
 
 	pb.HardState
 
-	Entries []pb.Entry // 待持久化
-
 	CommittedEntries []pb.Entry // 待apply
 
 	Messages []pb.Message // 待发送给其他节点的message

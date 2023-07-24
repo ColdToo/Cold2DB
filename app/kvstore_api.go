@@ -37,7 +37,8 @@ func (s *KvStore) Lookup(key []byte) ([]byte, error) {
 }
 
 // Propose 提议kv对交给raft算法层处理
-func (s *KvStore) Propose(kv kv, delete bool) {
+func (s *KvStore) Propose(kv kv, delete bool) (bool, error) {
+	// chanel to inform where commit ok
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(kv); err != nil {
 	}
@@ -51,6 +52,7 @@ func (s *KvStore) serveCommitC(commitC <-chan *commit, errorC <-chan error) {
 			s.db.Put(data.Key, data.Val)
 		}
 	}
+	// inform
 
 	if _, ok := <-errorC; ok {
 	}
