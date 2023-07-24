@@ -111,9 +111,11 @@ func ListenAndFlush() {
 
 }
 
-// implement db basic operate interface
-
 func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
+	flag, val := db.activeMem.get(key)
+	if !flag {
+		return nil, errors.New("the key is not exist")
+	}
 	return
 }
 

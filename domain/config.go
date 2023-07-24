@@ -42,4 +42,5 @@ func InitViper() *viper.Viper {
 }
 
 func configPreCheck() {
+
 }

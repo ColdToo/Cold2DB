@@ -85,6 +85,13 @@ func Debugf(msg string, param ...any) {
 
 }
 
+func Panicf(msg string, param ...any) *Fields {
+	if !log.Core().Enabled(zapcore.DebugLevel) {
+		return newFields("", nil, true)
+	}
+	return newFields(msg, log, false)
+}
+
 type Fields struct {
 	level  zapcore.Level
 	zap    *zap.Logger
