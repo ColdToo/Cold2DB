@@ -121,6 +121,9 @@ func NewRaft(c *Opts) (raft *Raft, err error) {
 	}
 	raft = new(Raft)
 	raft.id = c.ID
+	// 新节点默认为follower
+	raft.stepFunc = stepFollower
+	raft.Role = Follower
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatTimeout = c.HeartbeatTick
 	return
@@ -131,6 +134,7 @@ func NewRaft(c *Opts) (raft *Raft, err error) {
 func (r *Raft) Step(m *pb.Message) error {
 	return r.stepFunc(r, m)
 }
+
 func (r *Raft) Tick() {
 	r.tick()
 }
@@ -244,7 +248,6 @@ func (r *Raft) tickHeartbeat() {
 	}
 }
 
-// becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.id = lead
 	r.Role = Follower
@@ -253,7 +256,6 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.Term = term
 }
 
-// becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	r.LeaderID = 0
 	r.Role = Candidate
@@ -262,7 +264,6 @@ func (r *Raft) becomeCandidate() {
 	r.tick = r.tickElection
 }
 
-// becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
 	r.Role = Leader
 	r.LeaderID = r.id

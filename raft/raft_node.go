@@ -6,11 +6,8 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
-// ErrStepLocalMsg is returned when try to step a local raft message
 var ErrStepLocalMsg = errors.New("raft: cannot step raft local message")
 
-// ErrStepPeerNotFound is returned when try to step a response message
-// but there is no peer found in raft.Prs for that node.
 var ErrStepPeerNotFound = errors.New("raft: cannot step as peer not found")
 
 type SoftState struct {
@@ -40,7 +37,6 @@ type Ready struct {
 	Messages []pb.Message // 待发送给其他节点的message
 }
 
-// RaftNode is a wrapper of Raft.
 type RaftNode struct {
 	Raft *Raft
 
@@ -57,8 +53,7 @@ type RaftNode struct {
 	prevHardSt pb.HardState
 }
 
-// NewRaftNode returns a new RaftNode given configuration and a list of raft peers.
-func NewRaftNode(config *Config) (*RaftNode, error) {
+func NewRaftNode(config *Opts) (*RaftNode, error) {
 	raft, err := NewRaft(config)
 	if err != nil {
 		return nil, err
@@ -68,7 +63,7 @@ func NewRaftNode(config *Config) (*RaftNode, error) {
 	return &RaftNode{Raft: raft, ReadyC: ReadyC, AdvanceC: AdvanceC}, nil
 }
 
-func StartRaftNode(c *Config, peers []Peer) *RaftNode {
+func StartRaftNode(c *Opts, peers []Peer) *RaftNode {
 	if len(peers) == 0 {
 		panic("no peers given; use RestartNode instead")
 	}
@@ -80,7 +75,8 @@ func StartRaftNode(c *Config, peers []Peer) *RaftNode {
 	return rn
 }
 
-func RestartRaftNode(c *Config) *RaftNode {
+func RestartRaftNode(c *Opts) *RaftNode {
+	//从storage恢复一些hard state
 	rn, err := NewRaftNode(c)
 	if err != nil {
 		panic(err)
@@ -277,7 +273,6 @@ func (rn *RaftNode) ReportSnapshot(id uint64, status SnapshotStatus) {
 	return
 }
 
-//关闭raft层（相关数据结构）
 func (rn *RaftNode) Stop() {
 
 }

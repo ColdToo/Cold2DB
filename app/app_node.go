@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"github.com/ColdToo/Cold2DB/code"
-	"github.com/ColdToo/Cold2DB/domain"
 	log "github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
@@ -29,9 +28,9 @@ type AppNode struct {
 	snapshotIndex uint64
 	appliedIndex  uint64
 
-	raftNode    *raft.RaftNode
-	Storage 	 raft.Storage
-	transport   *transport.Transport
+	raftNode  *raft.RaftNode
+	Storage   raft.Storage
+	transport *transport.Transport
 
 	proposeC    <-chan bytes.Buffer  // 提议 (k,v)
 	confChangeC <-chan pb.ConfChange // 提议更改配置文件
@@ -73,7 +72,6 @@ func (an *AppNode) startRaftNode() {
 		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
 	}
 
-	// 初始化raft配置
 	// todo 从配置文件获取参数
 	c := &raft.Opts{
 		ID:            uint64(an.localId),
@@ -82,18 +80,12 @@ func (an *AppNode) startRaftNode() {
 		Storage:       an.Storage,
 	}
 
-	c.Storage.
-	// 初始化底层的 raft 模块，这里会根据WAL的回放情况，
-	// 判断当前节点是首次启动还是重新启动
-	// oldwal 通过 sotrage接口获取wal日志判断
-	if oldwal || an.join {
+	if c.Storage.IsRestartNode() {
 		an.raftNode = raft.RestartRaftNode(c)
 	} else {
 		an.raftNode = raft.StartRaftNode(c, rpeers)
 	}
 }
-
-func (an *AppNode)
 
 func (an *AppNode) serveRaftLayer() {
 	//处理配置变更以及日志提议
