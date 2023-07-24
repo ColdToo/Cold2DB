@@ -18,8 +18,7 @@ const (
 )
 
 type RaftConfig struct {
-	ElectionTick int
-
+	ElectionTick  int
 	HeartbeatTick int
 }
 
@@ -32,6 +31,10 @@ type Opts struct {
 	Storage Storage
 
 	Applied uint64
+
+	ElectionTick int
+
+	HeartbeatTick int
 }
 
 //raft配置文件前置检查

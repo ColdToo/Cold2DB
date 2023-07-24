@@ -38,4 +38,7 @@ type Storage interface {
 
 	// GetSnapshot  返回最新的快照
 	GetSnapshot() (pb.Snapshot, error)
+
+	// 通过wal文件判断是否是重启节点
+	IsRestartNode() bool
 }

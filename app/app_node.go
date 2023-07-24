@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"github.com/ColdToo/Cold2DB/code"
+	"github.com/ColdToo/Cold2DB/domain"
 	log "github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
@@ -29,7 +30,7 @@ type AppNode struct {
 	appliedIndex  uint64
 
 	raftNode    *raft.RaftNode
-	Storage raft.Storage
+	Storage 	 raft.Storage
 	transport   *transport.Transport
 
 	proposeC    <-chan bytes.Buffer  // 提议 (k,v)
@@ -74,14 +75,14 @@ func (an *AppNode) startRaftNode() {
 
 	// 初始化raft配置
 	// todo 从配置文件获取参数
-	c := &raft.RaftConfig{
+	c := &raft.Opts{
 		ID:            uint64(an.localId),
 		ElectionTick:  10,
 		HeartbeatTick: 1,
 		Storage:       an.Storage,
 	}
 
-
+	c.Storage.
 	// 初始化底层的 raft 模块，这里会根据WAL的回放情况，
 	// 判断当前节点是首次启动还是重新启动
 	// oldwal 通过 sotrage接口获取wal日志判断

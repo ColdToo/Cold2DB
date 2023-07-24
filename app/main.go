@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"flag"
-	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/pb"
 	"strings"
 )
@@ -18,22 +17,17 @@ func main() {
 	join := flag.Bool("join", false, "是否加入已经存在的集群")
 	flag.Parse()
 
-	domain.Init()
-
 	proposeC := make(chan bytes.Buffer)
 	defer close(proposeC)
 	confChangeC := make(chan pb.ConfChange)
 	defer close(confChangeC)
-	errC := make(chan error)
-	defer close(errC)
 	commitC := make(chan *commit)
 	defer close(commitC)
 	errorC := make(chan error)
 	defer close(errorC)
 
-	kvStore := NewKVStore(proposeC, commitC, errorC)
-
 	StartAppNode(*localId, strings.Split(*cluster, ","), *join, proposeC, confChangeC, commitC, errorC)
 
-	ServeHttpKVAPI(kvStore, *kvport, confChangeC, errC)
+	kvStore := NewKVStore(proposeC, commitC, errorC)
+	ServeHttpKVAPI(kvStore, *kvport, confChangeC, errorC)
 }

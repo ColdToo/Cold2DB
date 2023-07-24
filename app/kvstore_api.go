@@ -13,8 +13,9 @@ type KvStore struct {
 }
 
 type kv struct {
-	Key []byte
-	Val []byte
+	Key    []byte
+	Val    []byte
+	Delete bool
 }
 
 func NewKVStore(proposeC chan<- bytes.Buffer, commitC <-chan *commit, errorC <-chan error) *KvStore {
@@ -27,16 +28,16 @@ func NewKVStore(proposeC chan<- bytes.Buffer, commitC <-chan *commit, errorC <-c
 	return s
 }
 
-func (s *KvStore) Lookup(key []byte) ([]byte, bool) {
-	get, err := s.db.Get(key)
+func (s *KvStore) Lookup(key []byte) ([]byte, error) {
+	val, err := s.db.Get(key)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
-	return get, true
+	return val, nil
 }
 
 // Propose 提议kv对交给raft算法层处理
-func (s *KvStore) Propose(kv kv) {
+func (s *KvStore) Propose(kv kv, delete bool) {
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(kv); err != nil {
 	}

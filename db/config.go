@@ -13,8 +13,6 @@ type DBConfig struct {
 	ValueLogConfig
 
 	MemTableConfig
-
-	BufferConfig
 }
 
 type WalConfig struct {
@@ -56,9 +54,4 @@ type IndexConfig struct {
 	IndexerDir string
 
 	IndexerType int8
-}
-
-type BufferConfig struct {
-	// Buffer dir path, one memtable corresponds one wal
-	BufferDirPath string
 }

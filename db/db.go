@@ -15,7 +15,7 @@ import (
 type DB interface {
 	Get(key []byte) (val []byte, err error)
 	Put(key, val []byte) (err error)
-	Del(key []byte) (err error)
+	Delete(key []byte) (err error)
 }
 
 var Cold2 *Cold2DB
@@ -26,6 +26,8 @@ type Cold2DB struct {
 	immuMems []*memtable
 
 	flushChn chan *memtable
+
+	walDirPath string
 
 	vlog *valueLog
 
@@ -74,15 +76,12 @@ func InitDB(dbCfg *DBConfig) error {
 	}
 
 	//开启后台合并协程
-
+	ListenAndFlush()
 	return nil
 }
 
 func dbCfgCheck(dbCfg *DBConfig) error {
 	var err error
-	if dbCfg.ValueLogGCRatio >= 1.0 || dbCfg.ValueLogGCRatio <= 0.0 {
-		return code.ErrInvalidVLogGCRatio
-	}
 	Cold2 = new(Cold2DB)
 	Cold2.flushChn = make(chan *memtable, dbCfg.MemtableNums-1)
 	err = initMemtable(dbCfg)
@@ -123,7 +122,7 @@ func (db *Cold2DB) Put(key, val []byte) (err error) {
 	return
 }
 
-func (db *Cold2DB) Del(key []byte) (err error) {
+func (db *Cold2DB) Delete(key []byte) (err error) {
 	return
 }
 
@@ -134,9 +133,6 @@ func (db *Cold2DB) InitialState() (pb.HardState, pb.ConfState, error) {
 }
 
 func (db *Cold2DB) SetHardState(st pb.HardState) error {
-	ms.Lock()
-	defer ms.Unlock()
-	ms.hardState = st
 	return nil
 }
 
@@ -196,4 +192,8 @@ func (db *Cold2DB) GetSnapshot() (pb.Snapshot, error) {
 	ms.Lock()
 	defer ms.Unlock()
 	return ms.snapshot, nil
+}
+
+func (db *Cold2DB) IsRestartNode() bool {
+	db.
 }

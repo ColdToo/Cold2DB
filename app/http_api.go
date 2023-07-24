@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"github.com/ColdToo/Cold2DB/pb"
 	"io/ioutil"
 	"log"
@@ -8,8 +9,21 @@ import (
 	"strconv"
 )
 
+const (
+	PUT    = "PUT"
+	GET    = "GET"
+	DELETE = "DELETE"
+	POST   = "POST"
+)
+
+type UpdateNodeInfo struct {
+	NodeIP string            `json:"node_ip"`
+	NodeId uint64            `json:"node_id"`
+	NodeOp pb.ConfChangeType `json:"node_op"`
+}
+
 type HttpKVAPI struct {
-	store       *kvstore
+	store       *KvStore
 	confChangeC chan<- pb.ConfChange
 }
 
@@ -18,7 +32,7 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	switch {
-	case r.Method == "PUT":
+	case r.Method == PUT:
 		v, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			log.Printf("Failed to read on PUT (%v)\n", err)
@@ -29,53 +43,37 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.store.Propose(kv{Key: []byte(key), Val: v})
 
 		w.WriteHeader(http.StatusNoContent)
-	case r.Method == "GET":
-		if v, ok := h.store.Lookup([]byte(key)); ok {
+
+	case r.Method == GET:
+		if v, err := h.store.Lookup([]byte(key)); err != nil {
 			w.Write(v)
 		} else {
 			http.Error(w, "Failed to GET", http.StatusNotFound)
 		}
 
-	case r.Method == "POST":
-		url, err := ioutil.ReadAll(r.Body)
+	case r.Method == DELETE:
+		v, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			log.Printf("Failed to read on POST (%v)\n", err)
-			http.Error(w, "Failed on POST", http.StatusBadRequest)
+			log.Printf("Failed to read on PUT (%v)\n", err)
+			http.Error(w, "Failed on PUT", http.StatusBadRequest)
 			return
 		}
 
-		nodeId, err := strconv.ParseUint(key[1:], 0, 64)
-		if err != nil {
-			log.Printf("Failed to convert ID for conf change (%v)\n", err)
-			http.Error(w, "Failed on POST", http.StatusBadRequest)
-			return
-		}
+		h.store.Propose(kv{Key: []byte(key), true})
 
-		cc := pb.ConfChange{
-			Type:    pb.ConfChangeAddNode,
-			NodeID:  nodeId,
-			Context: url,
-		}
-		h.confChangeC <- cc
-
-		// As above, optimistic that raft will apply the conf change
 		w.WriteHeader(http.StatusNoContent)
-	case r.Method == "DELETE":
-		nodeId, err := strconv.ParseUint(key[1:], 0, 64)
+
+	case r.Method == POST:
+		v, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			log.Printf("Failed to convert ID for conf change (%v)\n", err)
-			http.Error(w, "Failed on DELETE", http.StatusBadRequest)
+			log.Printf("Failed to read on PUT (%v)\n", err)
+			http.Error(w, "Failed on PUT", http.StatusBadRequest)
 			return
 		}
+		nodeInfo := new(UpdateNodeInfo)
+		json.Unmarshal(v, &nodeInfo)
 
-		cc := pb.ConfChange{
-			Type:   pb.ConfChangeRemoveNode,
-			NodeID: nodeId,
-		}
-		h.confChangeC <- cc
-
-		// As above, optimistic that raft will apply the conf change
-		w.WriteHeader(http.StatusNoContent)
+		h.NodeUpdate(nodeInfo, w)
 
 	default:
 		w.Header().Set("Allow", "PUT")
@@ -86,7 +84,7 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func ServeHttpKVAPI(kvStore *kvstore, port int, confChangeC chan<- pb.ConfChange, errorC <-chan error) {
+func ServeHttpKVAPI(kvStore *KvStore, port int, confChangeC chan<- pb.ConfChange, errorC <-chan error) {
 	srv := http.Server{
 		Addr: ":" + strconv.Itoa(port),
 		Handler: &HttpKVAPI{
@@ -101,8 +99,27 @@ func ServeHttpKVAPI(kvStore *kvstore, port int, confChangeC chan<- pb.ConfChange
 		}
 	}()
 
-	// exit when raft goes down
 	if err, ok := <-errorC; ok {
 		log.Fatal(err)
 	}
+}
+
+func (h *HttpKVAPI) NodeUpdate(updateInfo *UpdateNodeInfo, w http.ResponseWriter) {
+	var cc pb.ConfChange
+	switch updateInfo.NodeOp {
+	case pb.ConfChangeAddNode:
+		cc = pb.ConfChange{
+			Type:    pb.ConfChangeAddNode,
+			NodeID:  updateInfo.NodeId,
+			Context: []byte(updateInfo.NodeIP),
+		}
+	case pb.ConfChangeRemoveNode:
+		cc = pb.ConfChange{
+			Type:   pb.ConfChangeRemoveNode,
+			NodeID: updateInfo.NodeId,
+		}
+	}
+	h.confChangeC <- cc
+	// As above, optimistic that raft will apply the conf change
+	w.WriteHeader(http.StatusNoContent)
 }
