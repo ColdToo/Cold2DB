@@ -35,10 +35,11 @@ type memCfg struct {
 }
 
 type memValue struct {
-	Term  uint64
-	Index uint64
-	value []byte
-	typ   byte
+	Term      uint64
+	Index     uint64
+	value     []byte
+	typ       byte
+	expiredAt int64
 }
 
 func initMemtable(dbCfg *DBConfig) (err error) {
@@ -54,13 +55,13 @@ func initMemtable(dbCfg *DBConfig) (err error) {
 		memSize:    dbCfg.MemtableSize,
 	}
 
-	// read wal dir.
 	DirEntries, err := os.ReadDir(dbCfg.WalDirPath)
 	if err != nil {
 		return err
 	}
 
 	// if more than zero load the wal file to memtable
+	// 怎么区分memtable和immtable?加载的全部作为immtable再重新创建一个memtable
 	if len(DirEntries) > 0 {
 		var fids []int64
 		for _, entry := range DirEntries {
@@ -75,30 +76,23 @@ func initMemtable(dbCfg *DBConfig) (err error) {
 			fids = append(fids, int64(fid))
 		}
 
-		// 根据timestamp排序
+		// 根据文件timestamp排序
 		sort.Slice(fids, func(i, j int) bool {
 			return fids[i] < fids[j]
 		})
 
-		// todo load memtables in concurrency
-		// newest wal is active memtable
-		for i, fid := range fids {
+		// todo load memtable in concurrency
+		for _, fid := range fids {
 			memCfg.walFileId = fid
 			table, err := openMemtable(memCfg)
 			if err != nil {
 				return err
 			}
-			if i == 0 {
-				Cold2.activeMem = table
-			} else {
-				Cold2.immuMems = append(Cold2.immuMems, table)
-			}
+			Cold2.immuMems = append(Cold2.immuMems, table)
 		}
-
-	} else {
-		Cold2.activeMem, err = newMemtable(memCfg)
 	}
 
+	Cold2.activeMem, err = newMemtable(memCfg)
 	return nil
 }
 
@@ -169,7 +163,7 @@ func newMemtable(memCfg memCfg) (*memtable, error) {
 
 // put new writes to memtable.
 func (mt *memtable) put(key []byte, value []byte, deleted bool) error {
-	entry := &logfile.LogEntry{
+	entry := &logfile.WalEntry{
 		Key:   key,
 		Value: value,
 	}
@@ -185,22 +179,19 @@ func (mt *memtable) put(key []byte, value []byte, deleted bool) error {
 			return err
 		}
 
-		if mt.opts.bytesFlush > 0 {
+		if mt.memCfg.bytesFlush > 0 {
 			writes := atomic.AddUint32(&mt.bytesWritten, uint32(sz))
-			if writes > mt.opts.bytesFlush {
-				syncWal = true
+			if writes > mt.memCfg.bytesFlush {
 				atomic.StoreUint32(&mt.bytesWritten, 0)
 			}
 		}
-		if syncWal {
-			if err := mt.syncWAL(); err != nil {
-				return err
-			}
+		if err := mt.syncWAL(); err != nil {
+			return err
 		}
 	}
 
 	// write data into skip list .
-	mv := memValue{value: value, expiredAt: entry.ExpiredAt, typ: byte(entry.Type)}
+	mv := memValue{value: value, typ: byte(entry.Type)}
 	mvBuf := mv.encode()
 	if mt.sklIter.Seek(key) {
 		return mt.sklIter.Set(mvBuf)
@@ -208,8 +199,6 @@ func (mt *memtable) put(key []byte, value []byte, deleted bool) error {
 	return mt.sklIter.Put(key, mvBuf)
 }
 
-// get value from memtable.
-// if the specified key is marked as deleted or expired, a true bool value is returned.
 func (mt *memtable) get(key []byte) (bool, []byte) {
 	mt.Lock()
 	defer mt.Unlock()
@@ -229,9 +218,8 @@ func (mt *memtable) get(key []byte) (bool, []byte) {
 	return false, mv.value
 }
 
-// delete operation is to put a key and a special tombstone value.
-func (mt *memtable) delete(key []byte, opts WriteOptions) error {
-	return mt.put(key, nil, true, opts)
+func (mt *memtable) delete(key []byte) error {
+	return mt.put(key, nil, true)
 }
 
 func (mt *memtable) syncWAL() error {
@@ -241,7 +229,7 @@ func (mt *memtable) syncWAL() error {
 }
 
 func (mt *memtable) isFull(delta uint32) bool {
-	if mt.skl.Size()+delta+paddedSize >= mt.opts.memSize {
+	if mt.skl.Size()+delta >= mt.memCfg.memSize {
 		return true
 	}
 	if mt.wal == nil {
@@ -249,10 +237,10 @@ func (mt *memtable) isFull(delta uint32) bool {
 	}
 
 	walSize := atomic.LoadInt64(&mt.wal.WriteAt)
-	return walSize >= int64(mt.opts.memSize)
+	return walSize >= int64(mt.memCfg.memSize)
 }
 
-func (mt *memtable) logFileId() uint32 {
+func (mt *memtable) logFileId() int64 {
 	return mt.wal.Fid
 }
 

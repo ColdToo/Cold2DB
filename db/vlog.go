@@ -50,21 +50,18 @@ type vlogOptions struct {
 	gcInterval time.Duration
 }
 
-// openValueLog create a new value log file.
 func initValueLog(dbCfg *DBConfig) error {
-	// open value log.
 	var ioType = logfile.BufferedIO
 	if dbCfg.ValueLogMmap {
 		ioType = logfile.MMap
 	}
 
 	vlogOpt := vlogOptions{
-		path:       dbCfg.ValueLogDir,
-		blockSize:  dbCfg.ValueLogFileSize,
-		ioType:     ioType,
-		gcRatio:    dbCfg.ValueLogGCRatio,
-		gcInterval: dbCfg.ValueLogGCInterval,
+		path:      dbCfg.ValueLogDir,
+		blockSize: dbCfg.ValueLogFileSize,
+		ioType:    ioType,
 	}
+
 	fileInfos, err := os.ReadDir(vlogOpt.path)
 	if err != nil {
 		return nil

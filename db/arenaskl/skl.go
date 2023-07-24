@@ -1,46 +1,3 @@
-/*
- * Copyright 2017 Dgraph Labs, Inc. and Contributors
- * Modifications copyright (C) 2017 Andy Kimball and Contributors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-/*
-Adapted from RocksDB inline skiplist.
-
-Key differences:
-- No optimization for sequential inserts (no "prev").
-- No custom comparator.
-- Support overwrites. This requires care when we see the same key when inserting.
-  For RocksDB or LevelDB, overwrites are implemented as a newer sequence number in the key, so
-	there is no need for values. We don't intend to support versioning. In-place updates of values
-	would be more efficient.
-- We discard all non-concurrent code.
-- We do not support Splices. This simplifies the code a lot.
-- No AllocateNode or other pointer arithmetic.
-- We combine the findLessThan, findGreaterOrEqual, etc into one function.
-*/
-
-/*
-Further adapted from Badger: https://github.com/dgraph-io/badger.
-
-Key differences:
-- Support for previous pointers - doubly linked lists. Note that it's up to higher
-  level code to deal with the intermediate state that occurs during insertion,
-  where node A is linked to node B, but node B is not yet linked back to node A.
-- Iterator includes mutator functions.
-*/
-
 package arenaskl
 
 import (
@@ -124,7 +81,10 @@ func NewSkiplist(arena *Arena) *Skiplist {
 		head:   head,
 		tail:   tail,
 		height: 1,
+		//todo 动态分配还是一次性分配
+		indexArr: make([]uint64, 1000),
 	}
+
 	return skl
 }
 

@@ -199,7 +199,7 @@ func (lf *LogFile) Close() error {
 // Delete delete current log file.
 // File can`t be retrieved if do this, so use it carefully.
 func (lf *LogFile) Delete() error {
-	return lf.IoSelector.Delete()
+	return lf.IoOperator.Delete()
 }
 
 func (lf *LogFile) getLogFileName(path string, fid int64, ftype FileType) (fname string, err error) {

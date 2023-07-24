@@ -33,17 +33,6 @@ type ValueLogConfig struct {
 
 	// ValueLogMmap similar to WalMMap, default value is false.
 	ValueLogMmap bool
-
-	// ValueLogGCRatio if discarded data in value log exceeds this ratio, it can be picked up for compaction(garbage collection)
-	// And if there are many files reached the ratio, we will pick the highest one by one.
-	// The recommended ratio is 0.5, half of the file can be compacted.
-	// Default value is 0.5.
-	ValueLogGCRatio float64
-
-	// ValueLogGCInterval a background groutine will check and do gc periodically according to the interval.
-	// If you don`t want value log file be compacted, set it a Zero time.
-	// Default value is 10 minutes.
-	ValueLogGCInterval time.Duration
 }
 
 type MemTableConfig struct {
