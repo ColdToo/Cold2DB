@@ -14,9 +14,6 @@ import (
 	"time"
 )
 
-type commit struct {
-}
-
 // A key-value stream backed by raft
 type AppNode struct {
 	localId  int
@@ -34,7 +31,7 @@ type AppNode struct {
 
 	proposeC    <-chan bytes.Buffer  // 提议 (k,v)
 	confChangeC <-chan pb.ConfChange // 提议更改配置文件
-	commitC     chan<- *commit       // 提交 (k,v)
+	commitC     chan<- *bytes.Buffer // 提交 (k,v)
 	errorC      chan<- error         // errors from raft session
 	stopc       chan struct{}        // signals proposal channel closed
 	httpstopc   chan struct{}        // signals http server to shutdown

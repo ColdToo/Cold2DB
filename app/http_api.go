@@ -32,6 +32,13 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	switch {
+	case r.Method == GET:
+		if v, err := h.store.Lookup([]byte(key)); err != nil {
+			w.Write(v)
+		} else {
+			http.Error(w, "Failed to GET", http.StatusNotFound)
+		}
+
 	case r.Method == PUT:
 		v, err := ioutil.ReadAll(r.Body)
 		if err != nil {
@@ -40,26 +47,13 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		h.store.Propose(kv{Key: []byte(key), Val: v})
+		h.store.Propose([]byte(key), v, false)
 
 		w.WriteHeader(http.StatusNoContent)
 
-	case r.Method == GET:
-		if v, err := h.store.Lookup([]byte(key)); err != nil {
-			w.Write(v)
-		} else {
-			http.Error(w, "Failed to GET", http.StatusNotFound)
-		}
-
 	case r.Method == DELETE:
-		v, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			log.Printf("Failed to read on PUT (%v)\n", err)
-			http.Error(w, "Failed on PUT", http.StatusBadRequest)
-			return
-		}
 
-		h.store.Propose(kv{Key: []byte(key), true})
+		h.store.Propose([]byte(key), nil, true)
 
 		w.WriteHeader(http.StatusNoContent)
 
