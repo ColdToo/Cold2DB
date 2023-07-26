@@ -123,6 +123,7 @@ func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
 }
 
 func (db *Cold2DB) Put(entry logfile.WalEntry) (err error) {
+	db.activeMem.put(entry)
 	return
 }
 

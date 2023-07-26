@@ -11,19 +11,14 @@ import (
 )
 
 var (
-	// ErrInvalidCrc invalid crc.
 	ErrInvalidCrc = errors.New("logfile: invalid crc")
 
-	// ErrWriteSizeNotEqual write size is not equal to entry size.
 	ErrWriteSizeNotEqual = errors.New("logfile: write size is not equal to entry size")
 
-	// ErrEndOfEntry end of entry in log file.
 	ErrEndOfEntry = errors.New("logfile: end of entry in log file")
 
-	// ErrUnsupportedIoType unsupported io type, only mmap and fileIO now.
 	ErrUnsupportedIoType = errors.New("unsupported io type")
 
-	// ErrUnsupportedLogFileType unsupported log file type, only WAL and ValueLog now.
 	ErrUnsupportedLogFileType = errors.New("unsupported log file type")
 )
 
@@ -51,9 +46,6 @@ const (
 
 	// ValueLog value log.
 	ValueLog
-
-	// BufferLog when memory space lack, trans immutable to buffer log tmp to persist
-	BufferLog
 
 	// RaftHardState persist raft status
 	RaftHardState
@@ -174,7 +166,7 @@ func (lf *LogFile) Write(buf []byte) error {
 		return nil
 	}
 	offset := atomic.LoadInt64(&lf.WriteAt)
-	n, err := lf.IoSelector.Write(buf, offset)
+	n, err := lf.IoOperator.Write(buf, offset)
 	if err != nil {
 		return err
 	}
@@ -188,12 +180,12 @@ func (lf *LogFile) Write(buf []byte) error {
 
 // Sync commits the current contents of the log file to stable storage.
 func (lf *LogFile) Sync() error {
-	return lf.IoSelector.Sync()
+	return lf.IoOperator.Sync()
 }
 
 // Close current log file.
 func (lf *LogFile) Close() error {
-	return lf.IoSelector.Close()
+	return lf.IoOperator.Close()
 }
 
 // Delete delete current log file.

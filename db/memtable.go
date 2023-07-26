@@ -38,7 +38,7 @@ type memValue struct {
 	Term      uint64
 	Index     uint64
 	value     []byte
-	typ       byte
+	typ       logfile.EntryType
 	expiredAt int64
 }
 
@@ -162,23 +162,12 @@ func newMemtable(memCfg memCfg) (*memtable, error) {
 }
 
 // put new writes to memtable.
-func (mt *memtable) put(key []byte, value []byte, deleted bool) error {
-	entry := &logfile.WalEntry{
-		Key:   key,
-		Value: value,
-	}
-
-	if deleted {
-		entry.Type = logfile.TypeDelete
-	}
-
-	// todo 应该放入一个chan，如果此时有更多的数据写入，那么应该批量写入wal，这样能减少sync的开销
+func (mt *memtable) put(entry logfile.WalEntry) error {
 	buf, sz := logfile.EncodeEntry(entry)
 	if mt.wal != nil {
 		if err := mt.wal.Write(buf); err != nil {
 			return err
 		}
-
 		if mt.memCfg.bytesFlush > 0 {
 			writes := atomic.AddUint32(&mt.bytesWritten, uint32(sz))
 			if writes > mt.memCfg.bytesFlush {
@@ -190,13 +179,17 @@ func (mt *memtable) put(key []byte, value []byte, deleted bool) error {
 		}
 	}
 
-	// write data into skip list .
-	mv := memValue{value: value, typ: byte(entry.Type)}
+	go mt.putInMemtable(entry)
+	return nil
+}
+
+func (mt *memtable) putInMemtable(entry logfile.WalEntry) error {
+	mv := memValue{Term: entry.Term, Index: entry.Index, value: entry.Value, typ: entry.Type, expiredAt: entry.ExpiredAt}
 	mvBuf := mv.encode()
-	if mt.sklIter.Seek(key) {
+	if mt.sklIter.Seek(entry.Key) {
 		return mt.sklIter.Set(mvBuf)
 	}
-	return mt.sklIter.Put(key, mvBuf)
+	return mt.sklIter.Put(entry.Key, mvBuf)
 }
 
 func (mt *memtable) get(key []byte) (bool, []byte) {
@@ -216,10 +209,6 @@ func (mt *memtable) get(key []byte) (bool, []byte) {
 		return true, nil
 	}
 	return false, mv.value
-}
-
-func (mt *memtable) delete(key []byte) error {
-	return mt.put(key, nil, true)
 }
 
 func (mt *memtable) syncWAL() error {
