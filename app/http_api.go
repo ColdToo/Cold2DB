@@ -47,13 +47,13 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		h.store.Propose([]byte(key), v, false)
+		h.store.Propose([]byte(key), v, false, 0)
 
 		w.WriteHeader(http.StatusNoContent)
 
 	case r.Method == DELETE:
 
-		h.store.Propose([]byte(key), nil, true)
+		h.store.Propose([]byte(key), nil, true, 0)
 
 		w.WriteHeader(http.StatusNoContent)
 

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/gob"
+	"errors"
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
@@ -19,9 +20,10 @@ type KV struct {
 }
 
 type KvStore struct {
-	db       db.DB
-	proposeC chan<- bytes.Buffer // channel for proposing updates
-	monitorC []chan int64        // channel for monitor key is commit
+	db         db.DB
+	proposeC   chan<- bytes.Buffer // channel for proposing updates
+	monitorKV  map[int64]chan struct{}
+	ReqTimeout time.Duration
 }
 
 func NewKVStore(proposeC chan<- bytes.Buffer, commitC <-chan []pb.Entry, errorC <-chan error) *KvStore {
@@ -44,6 +46,7 @@ func (s *KvStore) Lookup(key []byte) ([]byte, error) {
 }
 
 func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
+	timeOutC := time.NewTimer(s.ReqTimeout)
 	uid := time.Now().UnixNano()
 	kv := &KV{
 		id:        uid,
@@ -58,9 +61,17 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	if err := gob.NewEncoder(&buf).Encode(kv); err != nil {
 		return false, err
 	}
-	// 开始监听uid
 	s.proposeC <- buf
-	return false, nil
+
+	sig := make(chan struct{})
+	s.monitorKV[uid] = sig
+
+	select {
+	case <-sig:
+		return true, nil
+	case <-timeOutC.C:
+		return false, errors.New("request time out")
+	}
 }
 
 func (s *KvStore) serveCommitC(commitC <-chan []pb.Entry, errorC <-chan error) {
@@ -83,9 +94,11 @@ func (s *KvStore) serveCommitC(commitC <-chan []pb.Entry, errorC <-chan error) {
 			}
 			err = s.db.Put(walEntry)
 			if err != nil {
+				log.Errorf("put kv failed :", err)
 				return
 			}
-			//唤醒应用层返回客户端ok
+
+			close(s.monitorKV[kv.id])
 		}
 	}
 
