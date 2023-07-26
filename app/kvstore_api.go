@@ -4,18 +4,29 @@ import (
 	"bytes"
 	"encoding/gob"
 	"github.com/ColdToo/Cold2DB/db"
-	"github.com/ColdToo/Cold2DB/domain"
+	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
+	"github.com/ColdToo/Cold2DB/pb"
+	"time"
 )
 
-type KV domain.KV
+type entry logfile.WalEntry
+
+type KV struct {
+	id        int64
+	Key       []byte
+	Value     []byte
+	Type      logfile.EntryType
+	ExpiredAt int64
+}
 
 type KvStore struct {
 	db       db.DB
 	proposeC chan<- bytes.Buffer // channel for proposing updates
+	monitorC []chan int64        // channel for monitor key is commit
 }
 
-func NewKVStore(proposeC chan<- bytes.Buffer, commitC <-chan *commit, errorC <-chan error) *KvStore {
+func NewKVStore(proposeC chan<- bytes.Buffer, commitC <-chan []pb.Entry, errorC <-chan error) *KvStore {
 	cold2DB, err := db.GetDB()
 	if err != nil {
 		log.Panicf("get db failed", err)
@@ -37,10 +48,11 @@ func (s *KvStore) Lookup(key []byte) ([]byte, error) {
 func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
 	//针对put请求和delete请求分别做对应处理
 	kv := &KV{
+		id:        time.Now().UnixNano(),
 		Key:       key,
-		Val:       val,
+		Value:     val,
 		ExpiredAt: expiredAt,
-		Type:      1,
+		Type:      logfile.TypeDelete,
 	}
 	if delete {
 		kv.Type = 0
@@ -49,19 +61,20 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	if err := gob.NewEncoder(&buf).Encode(kv); err != nil {
 		return false, err
 	}
-	// todo 监听该key
+	// todo 如何监听该key
 	s.proposeC <- buf
 	return false, nil
 }
 
 //  持久化kv对到db中
-func (s *KvStore) serveCommitC(commitC <-chan *bytes.Buffer, errorC <-chan error) {
-	for commit := range commitC {
-		for _, data := range commit.kv {
-			s.db.Put(data.Key, data.Val)
+func (s *KvStore) serveCommitC(commitC <-chan []pb.Entry, errorC <-chan error) {
+	for entries := range commitC {
+		err := s.db.Put(entries)
+		//唤醒部分
+		if err != nil {
+			return
 		}
 	}
-	// inform
 
 	if _, ok := <-errorC; ok {
 	}

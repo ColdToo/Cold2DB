@@ -17,25 +17,20 @@ const (
 	TypeDelete EntryType = iota + 1
 )
 
-// EntryNoKey when use persisit B+tree index ,dont need storage the key to disk
-type EntryNoKey struct {
-	Value []byte
-	Type  EntryType
-}
-
-// Entry when use memory  index , need storage the key to restruct index when node restart
-type Entry struct {
-	Key   []byte
-	Value []byte
-	Type  EntryType
+type LogEntry struct {
+	Key       []byte
+	Value     []byte
+	Type      EntryType
+	ExpiredAt int64
 }
 
 type WalEntry struct {
-	Index uint64
-	Term  uint64
-	Key   []byte
-	Value []byte
-	Type  EntryType
+	Index     uint64
+	Term      uint64
+	Key       []byte
+	Value     []byte
+	Type      EntryType
+	ExpiredAt int64
 }
 
 type entryHeader struct {

@@ -14,8 +14,7 @@ import (
 
 type DB interface {
 	Get(key []byte) (val []byte, err error)
-	Put(key, val []byte) (err error)
-	Delete(key []byte) (err error)
+	Put(entries []pb.Entry) (err error)
 }
 
 var Cold2 *Cold2DB
@@ -118,11 +117,7 @@ func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
 	return
 }
 
-func (db *Cold2DB) Put(key, val []byte) (err error) {
-	return
-}
-
-func (db *Cold2DB) Delete(key []byte) (err error) {
+func (db *Cold2DB) Put(entries []pb.Entry) (err error) {
 	return
 }
 

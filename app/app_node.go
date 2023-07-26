@@ -31,7 +31,7 @@ type AppNode struct {
 
 	proposeC    <-chan bytes.Buffer  // 提议 (k,v)
 	confChangeC <-chan pb.ConfChange // 提议更改配置文件
-	commitC     chan<- *bytes.Buffer // 提交 (k,v)
+	commitC     chan<- []pb.Entry    // 提交 (k,v)
 	errorC      chan<- error         // errors from raft session
 	stopc       chan struct{}        // signals proposal channel closed
 	httpstopc   chan struct{}        // signals http server to shutdown
@@ -41,7 +41,7 @@ type AppNode struct {
 }
 
 func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan bytes.Buffer,
-	confChangeC <-chan pb.ConfChange, commitC chan<- *commit, errorC chan<- error, kvStore *KvStore) {
+	confChangeC <-chan pb.ConfChange, commitC chan<- []pb.Entry, errorC chan<- error, kvStore *KvStore) {
 	an := &AppNode{
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
@@ -218,15 +218,14 @@ func (an *AppNode) commitEntries(ents []pb.Entry) (<-chan struct{}, bool) {
 		return nil, true
 	}
 
-	data := make([]string, 0, len(ents))
-	for i := range ents {
+	entries := make([]pb.Entry, len(ents))
+	for i, entry := range ents {
 		switch ents[i].Type {
 		case pb.EntryNormal:
 			if len(ents[i].Data) == 0 {
 				break
 			}
-			s := string(ents[i].Data)
-			data = append(data, s)
+			entries = append(entries, entry)
 
 		case pb.EntryConfChange:
 			var cc *pb.ConfChange
@@ -250,10 +249,10 @@ func (an *AppNode) commitEntries(ents []pb.Entry) (<-chan struct{}, bool) {
 
 	var applyDoneC chan struct{}
 
-	if len(data) > 0 {
+	if len(entries) > 0 {
 		applyDoneC = make(chan struct{}, 0)
 		select {
-		case an.commitC <- &commit{kv: []kv{}}:
+		case an.commitC <- entries:
 		case <-an.stopc:
 			return nil, false
 		}
