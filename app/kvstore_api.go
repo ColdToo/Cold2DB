@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-type entry logfile.WalEntry
-
 type KV struct {
 	id        int64
 	Key       []byte
@@ -37,6 +35,7 @@ func NewKVStore(proposeC chan<- bytes.Buffer, commitC <-chan []pb.Entry, errorC 
 }
 
 func (s *KvStore) Lookup(key []byte) ([]byte, error) {
+	// 线性一致性读
 	val, err := s.db.Get(key)
 	if err != nil {
 		return nil, err
@@ -44,38 +43,54 @@ func (s *KvStore) Lookup(key []byte) ([]byte, error) {
 	return val, nil
 }
 
-// Propose 提议kv对交给raft算法层处理
 func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
-	//针对put请求和delete请求分别做对应处理
+	uid := time.Now().UnixNano()
 	kv := &KV{
-		id:        time.Now().UnixNano(),
+		id:        uid,
 		Key:       key,
 		Value:     val,
 		ExpiredAt: expiredAt,
-		Type:      logfile.TypeDelete,
 	}
 	if delete {
-		kv.Type = 0
+		kv.Type = logfile.TypeDelete
 	}
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(kv); err != nil {
 		return false, err
 	}
-	// todo 如何监听该key
+	// 开始监听uid
 	s.proposeC <- buf
 	return false, nil
 }
 
-//  持久化kv对到db中
 func (s *KvStore) serveCommitC(commitC <-chan []pb.Entry, errorC <-chan error) {
+	var buf *bytes.Buffer
+	var kv KV
 	for entries := range commitC {
-		err := s.db.Put(entries)
-		//唤醒部分
-		if err != nil {
-			return
+		for _, entry := range entries {
+			err := gob.NewDecoder(buf).Decode(&kv)
+			if err != nil {
+				log.Errorf("decode err:", err)
+				continue
+			}
+			walEntry := logfile.WalEntry{
+				Index:     entry.Index,
+				Term:      entry.Term,
+				Key:       kv.Key,
+				Value:     kv.Value,
+				ExpiredAt: kv.ExpiredAt,
+				Type:      kv.Type,
+			}
+			err = s.db.Put(walEntry)
+			if err != nil {
+				return
+			}
+			//唤醒应用层返回客户端ok
 		}
 	}
 
-	if _, ok := <-errorC; ok {
+	if err, ok := <-errorC; ok {
+		log.Errorf("found err exit serveCommitC:", err)
+		return
 	}
 }

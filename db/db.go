@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/db/flock"
 	"github.com/ColdToo/Cold2DB/db/index"
+	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/utils"
@@ -14,7 +15,9 @@ import (
 
 type DB interface {
 	Get(key []byte) (val []byte, err error)
-	Put(entries []pb.Entry) (err error)
+	Put(entries logfile.WalEntry) (err error)
+	PutBatch(entries []logfile.WalEntry) (err error)
+	Scan(lowKey []byte, highKey []byte) (err error)
 }
 
 var Cold2 *Cold2DB
@@ -109,6 +112,8 @@ func ListenAndFlush() {
 
 }
 
+// kv
+
 func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
 	flag, val := db.activeMem.get(key)
 	if !flag {
@@ -117,11 +122,19 @@ func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
 	return
 }
 
-func (db *Cold2DB) Put(entries []pb.Entry) (err error) {
+func (db *Cold2DB) Put(entry logfile.WalEntry) (err error) {
 	return
 }
 
-// implement raft storage interface
+func (db *Cold2DB) PutBatch(entries []logfile.WalEntry) (err error) {
+	return err
+}
+
+func (db *Cold2DB) Scan(lowKey []byte, highKey []byte) (err error) {
+	return err
+}
+
+// raft
 
 func (db *Cold2DB) InitialState() (pb.HardState, pb.ConfState, error) {
 	return db.hardState, *ms.snapshot.Metadata.ConfState, nil
