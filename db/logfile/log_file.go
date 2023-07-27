@@ -25,10 +25,8 @@ var (
 const (
 	PathSeparator = string(os.PathSeparator)
 
-	// WalSuffixName log file suffix name of write ahead log.
 	WalSuffixName = ".wal"
 
-	// VLogSuffixName log file suffix name of value log.
 	VLogSuffixName = ".vlog"
 
 	RaftHardStateSuffixName = ".raft"
@@ -68,7 +66,6 @@ type LogFile struct {
 	IoOperator iooperator.IoOperator
 }
 
-// OpenLogFile open an existing or create a new log file.
 func OpenLogFile(path string, fid int64, fsize int64, ftype FileType, ioType IOType) (lf *LogFile, err error) {
 	lf = &LogFile{Fid: fid}
 	fileName, err := lf.getLogFileName(path, fid, ftype)
@@ -79,15 +76,15 @@ func OpenLogFile(path string, fid int64, fsize int64, ftype FileType, ioType IOT
 	var operator iooperator.IoOperator
 	switch ioType {
 	case BufferedIO:
-		if operator, err = iooperator.NewFileIOSelector(fileName, fsize); err != nil {
+		if operator, err = iooperator.NewFileIoOperator(fileName, fsize); err != nil {
 			return
 		}
 	case MMap:
-		if operator, err = iooperator.NewMMapSelector(fileName, fsize); err != nil {
+		if operator, err = iooperator.NewMMapIoOperator(fileName, fsize); err != nil {
 			return
 		}
 	case DirectIO:
-		if operator, err = iooperator.NewDirectorIOSelector(fileName, fsize); err != nil {
+		if operator, err = iooperator.NewDirectorIoOperator(fileName, fsize); err != nil {
 			return
 		}
 	default:
@@ -98,9 +95,6 @@ func OpenLogFile(path string, fid int64, fsize int64, ftype FileType, ioType IOT
 	return
 }
 
-// ReadLogEntry read a LogEntry from log file at offset.
-// It returns a LogEntry, entry size and an error, if any.
-// If offset is invalid, the err is io.EOF.
 func (lf *LogFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
 	// read entry header.
 	headerBuf, err := lf.readBytes(offset, MaxHeaderSize)
@@ -143,8 +137,6 @@ func (lf *LogFile) readBytes(offset, n int64) (buf []byte, err error) {
 	return
 }
 
-// Read a byte slice in the log file at offset, slice length is the given size.
-// It returns the byte slice and error, if any.
 func (lf *LogFile) Read(offset int64, size uint32) ([]byte, error) {
 	if size <= 0 {
 		return []byte{}, nil
@@ -173,18 +165,14 @@ func (lf *LogFile) Write(buf []byte) error {
 	return nil
 }
 
-// Sync commits the current contents of the log file to stable storage.
 func (lf *LogFile) Sync() error {
 	return lf.IoOperator.Sync()
 }
 
-// Close current log file.
 func (lf *LogFile) Close() error {
 	return lf.IoOperator.Close()
 }
 
-// Delete delete current log file.
-// File can`t be retrieved if do this, so use it carefully.
 func (lf *LogFile) Delete() error {
 	return lf.IoOperator.Delete()
 }
