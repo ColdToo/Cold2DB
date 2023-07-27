@@ -45,6 +45,15 @@ func (s *KvStore) Lookup(key []byte) ([]byte, error) {
 	return val, nil
 }
 
+func (s *KvStore) Scan(lowKey, highKey []byte) ([]byte, error) {
+	// 线性一致性读
+	val, err := s.db.Scan(lowKey, highKey)
+	if err != nil {
+		return nil, err
+	}
+	return val, nil
+}
+
 func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
 	timeOutC := time.NewTimer(s.ReqTimeout)
 	uid := time.Now().UnixNano()
@@ -74,12 +83,42 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	}
 }
 
+func (s *KvStore) BatchPropose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
+	timeOutC := time.NewTimer(s.ReqTimeout)
+	uid := time.Now().UnixNano()
+	kv := &KV{
+		id:        uid,
+		Key:       key,
+		Value:     val,
+		ExpiredAt: expiredAt,
+	}
+	if delete {
+		kv.Type = logfile.TypeDelete
+	}
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(kv); err != nil {
+		return false, err
+	}
+	s.proposeC <- buf
+
+	sig := make(chan struct{})
+	s.monitorKV[uid] = sig
+
+	select {
+	case <-sig:
+		return true, nil
+	case <-timeOutC.C:
+		return false, errors.New("request time out")
+	}
+}
+
 func (s *KvStore) serveCommitC(commitC <-chan []pb.Entry, errorC <-chan error) {
-	var buf *bytes.Buffer
 	var kv KV
 	for entries := range commitC {
+		walEntries := make([]logfile.WalEntry, len(entries))
+		walEntriesid := make([]int64, 0)
 		for _, entry := range entries {
-			err := gob.NewDecoder(buf).Decode(&kv)
+			err := gob.NewDecoder(bytes.NewBuffer(entry.Data)).Decode(&kv)
 			if err != nil {
 				log.Errorf("decode err:", err)
 				continue
@@ -92,13 +131,18 @@ func (s *KvStore) serveCommitC(commitC <-chan []pb.Entry, errorC <-chan error) {
 				ExpiredAt: kv.ExpiredAt,
 				Type:      kv.Type,
 			}
-			err = s.db.Put(walEntry)
-			if err != nil {
-				log.Errorf("put kv failed :", err)
-				return
-			}
+			walEntries = append(walEntries, walEntry)
+			walEntriesid = append(walEntriesid, kv.id)
+		}
 
-			close(s.monitorKV[kv.id])
+		err := s.db.Put(walEntries)
+		if err != nil {
+			log.Error(err)
+			return
+		}
+
+		for _, id := range walEntriesid {
+			close(s.monitorKV[id])
 		}
 	}
 

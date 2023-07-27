@@ -15,8 +15,7 @@ import (
 
 type DB interface {
 	Get(key []byte) (val []byte, err error)
-	Put(entries logfile.WalEntry) (err error)
-	PutBatch(entries []logfile.WalEntry) (err error)
+	Put(entries []logfile.WalEntry) (err error)
 	Scan(lowKey []byte, highKey []byte) (err error)
 }
 
@@ -122,17 +121,27 @@ func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
 	return
 }
 
-func (db *Cold2DB) Put(entry logfile.WalEntry) (err error) {
-	db.activeMem.put(entry)
-	return
+func (db *Cold2DB) Scan(lowKey []byte, highKey []byte) (err error) {
+	return err
 }
 
 func (db *Cold2DB) PutBatch(entries []logfile.WalEntry) (err error) {
 	return err
 }
 
-func (db *Cold2DB) Scan(lowKey []byte, highKey []byte) (err error) {
-	return err
+func (db *Cold2DB) Put(entries []logfile.WalEntry) (err error) {
+	if len(entries) == 1 {
+		err := db.activeMem.put(entries[0])
+		if err != nil {
+			return err
+		}
+	} else {
+		err := db.activeMem.putBatch(entries)
+		if err != nil {
+			return err
+		}
+	}
+	return
 }
 
 // raft

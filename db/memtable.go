@@ -17,11 +17,10 @@ import (
 
 type memtable struct {
 	sync.RWMutex
-	sklIter      *arenaskl.Iterator
-	skl          *arenaskl.Skiplist
-	wal          *logfile.LogFile
-	bytesWritten uint32 // number of bytes written, used for flush wal file.
-	memCfg       memCfg
+	sklIter *arenaskl.Iterator
+	skl     *arenaskl.Skiplist
+	wal     *logfile.LogFile
+	memCfg  memCfg
 }
 
 // options held by memtable for opening new memtables.
@@ -161,35 +160,54 @@ func newMemtable(memCfg memCfg) (*memtable, error) {
 	return table, nil
 }
 
-// put new writes to memtable.
+// todo 写入WAL就返回还是写入Memtable再返回？
 func (mt *memtable) put(entry logfile.WalEntry) error {
-	buf, sz := logfile.EncodeWalEntry(entry)
-	if mt.wal != nil {
-		if err := mt.wal.Write(buf); err != nil {
-			return err
-		}
-		if mt.memCfg.bytesFlush > 0 {
-			writes := atomic.AddUint32(&mt.bytesWritten, uint32(sz))
-			if writes > mt.memCfg.bytesFlush {
-				atomic.StoreUint32(&mt.bytesWritten, 0)
-			}
-		}
-		if err := mt.syncWAL(); err != nil {
-			return err
-		}
+	buf, _ := logfile.EncodeWalEntry(&entry)
+	if err := mt.wal.Write(buf); err != nil {
+		return err
 	}
-
+	if err := mt.syncWAL(); err != nil {
+		return err
+	}
 	go mt.putInMemtable(entry)
 	return nil
 }
 
-func (mt *memtable) putInMemtable(entry logfile.WalEntry) error {
+func (mt *memtable) putBatch(entries []logfile.WalEntry) error {
+	for _, entry := range entries {
+		buf, _ := logfile.EncodeWalEntry(&entry)
+		if err := mt.wal.Write(buf); err != nil {
+			return err
+		}
+	}
+	if err := mt.syncWAL(); err != nil {
+		return err
+	}
+
+	// todo 写入WAL就返回还是写入Memtable再返回？
+	go mt.putInMemtableBatch(entries)
+	return nil
+}
+
+func (mt *memtable) putInMemtable(entry logfile.WalEntry) {
 	mv := memValue{Term: entry.Term, Index: entry.Index, value: entry.Value, typ: entry.Type, expiredAt: entry.ExpiredAt}
 	mvBuf := mv.encode()
 	if mt.sklIter.Seek(entry.Key) {
-		return mt.sklIter.Set(mvBuf)
+		err := mt.sklIter.Set(mvBuf)
+		if err != nil {
+			log.Error(err)
+		}
 	}
-	return mt.sklIter.Put(entry.Key, mvBuf)
+	err := mt.sklIter.Put(entry.Key, mvBuf)
+	if err != nil {
+		log.Error(err)
+	}
+}
+
+func (mt *memtable) putInMemtableBatch(entries []logfile.WalEntry) {
+	for _, entry := range entries {
+		mt.putInMemtable(entry)
+	}
 }
 
 func (mt *memtable) get(key []byte) (bool, []byte) {

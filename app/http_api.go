@@ -33,6 +33,7 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == GET:
+		// todo 支持 scan
 		if v, err := h.store.Lookup([]byte(key)); err != nil {
 			w.Write(v)
 		} else {
@@ -40,6 +41,7 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case r.Method == PUT:
+		// todo 支持批量put
 		v, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			log.Printf("Failed to read on PUT (%v)\n", err)
@@ -52,11 +54,12 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 
 	case r.Method == DELETE:
-
+		//todo 支持批量delete
 		h.store.Propose([]byte(key), nil, true, 0)
 
 		w.WriteHeader(http.StatusNoContent)
 
+		//更改节点配置相关
 	case r.Method == POST:
 		v, err := ioutil.ReadAll(r.Body)
 		if err != nil {
