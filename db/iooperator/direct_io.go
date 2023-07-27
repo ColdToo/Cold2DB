@@ -6,30 +6,17 @@ import (
 	"os"
 )
 
-// MMapIoOperator represents using memory-mapped file I/O.
-type MMapIoOperator struct {
+type DirectorIoOperator struct {
 	fd     *os.File
 	buf    []byte // a buffer of mmap
 	bufLen int64
 }
 
-func NewMMapIoOperator(fName string, fsize int64) (IoOperator, error) {
-	if fsize <= 0 {
-		return nil, ErrInvalidFsize
-	}
-	file, err := openFile(fName, fsize)
-	if err != nil {
-		return nil, err
-	}
-	buf, err := mmap.Mmap(file, true, fsize)
-	if err != nil {
-		return nil, err
-	}
-
-	return &MMapIoOperator{fd: file, buf: buf, bufLen: int64(len(buf))}, nil
+func NewDirectorIoOperator(fName string, fsize int64) (IoOperator, error) {
+	return &DirectorIoOperator{}, nil
 }
 
-func (lm *MMapIoOperator) Write(b []byte, offset int64) (int, error) {
+func (lm *DirectorIoOperator) Write(b []byte, offset int64) (int, error) {
 	length := int64(len(b))
 	if length <= 0 {
 		return 0, nil
@@ -40,7 +27,7 @@ func (lm *MMapIoOperator) Write(b []byte, offset int64) (int, error) {
 	return copy(lm.buf[offset:], b), nil
 }
 
-func (lm *MMapIoOperator) Read(b []byte, offset int64) (int, error) {
+func (lm DirectorIoOperator) Read(b []byte, offset int64) (int, error) {
 	if offset < 0 || offset >= lm.bufLen {
 		return 0, io.EOF
 	}
@@ -50,11 +37,11 @@ func (lm *MMapIoOperator) Read(b []byte, offset int64) (int, error) {
 	return copy(b, lm.buf[offset:]), nil
 }
 
-func (lm *MMapIoOperator) Sync() error {
+func (lm DirectorIoOperator) Sync() error {
 	return mmap.Msync(lm.buf)
 }
 
-func (lm *MMapIoOperator) Close() error {
+func (lm *DirectorIoOperator) Close() error {
 	if err := mmap.Msync(lm.buf); err != nil {
 		return err
 	}
@@ -64,7 +51,7 @@ func (lm *MMapIoOperator) Close() error {
 	return lm.fd.Close()
 }
 
-func (lm *MMapIoOperator) Delete() error {
+func (lm *DirectorIoOperator) Delete() error {
 	if err := mmap.Munmap(lm.buf); err != nil {
 		return err
 	}

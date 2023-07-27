@@ -31,9 +31,6 @@ const (
 	// VLogSuffixName log file suffix name of value log.
 	VLogSuffixName = ".vlog"
 
-	// BufferSuffixName log file suffix name of value log.
-	BufferSuffixName = ".buffer"
-
 	RaftHardStateSuffixName = ".raft"
 )
 
@@ -159,8 +156,6 @@ func (lf *LogFile) Read(offset int64, size uint32) ([]byte, error) {
 	return buf, nil
 }
 
-// Write a byte slice at the end of log file.
-// Returns an error, if any.
 func (lf *LogFile) Write(buf []byte) error {
 	if len(buf) <= 0 {
 		return nil
