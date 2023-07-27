@@ -104,3 +104,28 @@ func getEntryCrc(e *LogEntry, h []byte) uint32 {
 	crc = crc32.Update(crc, crc32.IEEETable, e.Value)
 	return crc
 }
+
+func EncodeWalEntry(e *LogFile.WalEntry) ([]byte, int) {
+	if e == nil {
+		return nil, 0
+	}
+	header := make([]byte, MaxHeaderSize)
+	// encode header.
+	header[4] = byte(e.Type)
+	var index = 5
+	index += binary.PutVarint(header[index:], int64(len(e.Key)))
+	index += binary.PutVarint(header[index:], int64(len(e.Value)))
+	index += binary.PutVarint(header[index:], e.ExpiredAt)
+
+	var size = index + len(e.Key) + len(e.Value)
+	buf := make([]byte, size)
+	copy(buf[:index], header[:])
+	// key and value.
+	copy(buf[index:], e.Key)
+	copy(buf[index+len(e.Key):], e.Value)
+
+	// crc32.
+	crc := crc32.ChecksumIEEE(buf[4:])
+	binary.LittleEndian.PutUint32(buf[:4], crc)
+	return buf, size
+}

@@ -163,7 +163,7 @@ func newMemtable(memCfg memCfg) (*memtable, error) {
 
 // put new writes to memtable.
 func (mt *memtable) put(entry logfile.WalEntry) error {
-	buf, sz := logfile.EncodeEntry(entry)
+	buf, sz := logfile.EncodeWalEntry(entry)
 	if mt.wal != nil {
 		if err := mt.wal.Write(buf); err != nil {
 			return err
