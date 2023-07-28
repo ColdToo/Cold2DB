@@ -14,5 +14,5 @@ var (
 func Init() {
 	InitViper()
 	log.InitLog()
-	db.InitDB(Conf.DBConfig)
+	db.InitDB(*Conf.DBConfig)
 }

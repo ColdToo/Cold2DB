@@ -9,11 +9,7 @@ type DBConfig struct {
 
 	MemConfig MemConfig
 
-	WalConfig WalConfig
-
 	ValueLogConfig ValueLogConfig
-
-	MemTableConfig MemTableConfig
 
 	IndexConfig IndexConfig
 }

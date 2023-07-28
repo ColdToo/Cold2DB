@@ -3,7 +3,6 @@ package db
 import (
 	"encoding/binary"
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
-	"github.com/ColdToo/Cold2DB/db/index"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
 	"io"
@@ -16,6 +15,13 @@ import (
 	"time"
 )
 
+const (
+	iSize  = logfile.IndexSize
+	tSize  = logfile.TermSize
+	eaSize = logfile.ExpiredAtSize
+	etSize = logfile.EntryTypeSize
+)
+
 type memManager struct {
 	activeMem *memtable
 
@@ -23,11 +29,7 @@ type memManager struct {
 
 	flushChn chan *memtable
 
-	indexer index.Indexer
-
 	walDirPath string
-
-	indexDirPath string
 }
 
 type memtable struct {
@@ -48,15 +50,16 @@ type memOpt struct {
 	bytesFlush uint32
 }
 
+// 8 + 8 + 1 + 8 + len(value)
 type memValue struct {
-	Term      uint64
 	Index     uint64
-	value     []byte
-	typ       logfile.EntryType
+	Term      uint64
 	expiredAt int64
+	typ       logfile.EntryType
+	value     []byte
 }
 
-func NewMemManger(memCfg MemConfig) (err error) {
+func NewMemManger(memCfg MemConfig) (manager *memManager, err error) {
 	memManger := new(memManager)
 	Cold2.memManager = memManger
 	memManger.walDirPath = memCfg.WalDirPath
@@ -77,12 +80,12 @@ func NewMemManger(memCfg MemConfig) (err error) {
 
 	memManger.activeMem, err = memManger.newMemtable(memOpt)
 	if err != nil {
-		return err
+		return
 	}
 
 	go memManger.reopenImMemtable(memOpt)
-	Cold2.memManager = memManger
-	return nil
+
+	return memManger, nil
 }
 
 func (m *memManager) reopenImMemtable(memOpt memOpt) {
@@ -166,11 +169,7 @@ func (m *memManager) openMemtable(memOpt memOpt) (*memtable, error) {
 			mvBuf := mv.encode()
 
 			var err error
-			if table.sklIter.Seek(entry.Key) {
-				err = table.sklIter.Set(mvBuf)
-			} else {
-				err = table.sklIter.Put(entry.Key, mvBuf)
-			}
+			err = table.sklIter.PutOrUpdate(entry.Key, mvBuf)
 			if err != nil {
 				log.Errorf("put value into skip list err.%+v", err)
 				return nil, err
@@ -235,13 +234,11 @@ func (mt *memtable) putBatch(entries []logfile.WalEntry) error {
 func (mt *memtable) putInMemtable(entry logfile.WalEntry) {
 	mv := memValue{Term: entry.Term, Index: entry.Index, value: entry.Value, typ: entry.Type, expiredAt: entry.ExpiredAt}
 	mvBuf := mv.encode()
-	if mt.sklIter.Seek(entry.Key) {
-		err := mt.sklIter.Set(mvBuf)
-		if err != nil {
-			log.Error(err)
-		}
+	err := mt.sklIter.PutOrUpdate(entry.Key, mvBuf)
+	if err != nil {
+		log.Error(err)
+		return
 	}
-	err := mt.sklIter.Put(entry.Key, mvBuf)
 	if err != nil {
 		log.Error(err)
 	}
@@ -260,6 +257,8 @@ func (mt *memtable) get(key []byte) (bool, []byte) {
 		return false, nil
 	}
 
+	//根据判断多个value选取最新的value返回
+	valuse := mt.sklIter.Value()
 	mv := decodeMemValue(mt.sklIter.Value())
 	// ignore deleted key.
 	if mv.typ == byte(logfile.TypeDelete) {
@@ -279,7 +278,7 @@ func (mt *memtable) syncWAL() error {
 }
 
 func (mt *memtable) isFull(delta uint32) bool {
-	if mt.skl.Size()+delta >= mt.memCfg.memSize {
+	if mt.skl.Size()+delta >= mt.memOpt.memSize {
 		return true
 	}
 	if mt.wal == nil {
@@ -287,7 +286,7 @@ func (mt *memtable) isFull(delta uint32) bool {
 	}
 
 	walSize := atomic.LoadInt64(&mt.wal.WriteAt)
-	return walSize >= int64(mt.memCfg.memSize)
+	return walSize >= int64(mt.memOpt.memSize)
 }
 
 func (mt *memtable) logFileId() int64 {
@@ -300,21 +299,24 @@ func (mt *memtable) deleteWal() error {
 	return mt.wal.Delete()
 }
 
+// todo encode memvalue
 func (mv *memValue) encode() []byte {
-	head := make([]byte, 11)
-	head[0] = mv.typ
-	var index = 1
-	index += binary.PutVarint(head[index:], mv.expiredAt)
-
-	buf := make([]byte, len(mv.value)+index)
-	copy(buf[:index], head[:])
-	copy(buf[index:], mv.value)
+	buf := make([]byte, iSize+tSize+eaSize+etSize+len(mv.value))
+	binary.LittleEndian.PutUint64(buf[:], mv.Index)
+	binary.LittleEndian.PutUint64(buf[iSize:], mv.Term)
+	binary.LittleEndian.PutUint64(buf[iSize+tSize:], uint64(mv.expiredAt))
+	copy(buf[iSize+tSize+eaSize:], string(mv.typ))
+	copy(buf[iSize+tSize+eaSize+etSize:], string(mv.typ))
 	return buf
 }
 
-func decodeMemValue(buf []byte) memValue {
-	var index = 1
-	ex, n := binary.Varint(buf[index:])
-	index += n
-	return memValue{typ: buf[0], value: buf[index:]}
+func decodeMemValue(buf []byte) (memValue memValue) {
+	typ := make([]byte, 1)
+	memValue.Index = binary.LittleEndian.Uint64(buf[:4])
+	memValue.Index = binary.LittleEndian.Uint64(buf[4:9])
+	memValue.Index = binary.LittleEndian.Uint64(buf[9:13])
+	copy(typ, buf[13:14])
+	copy(memValue.value, buf[14:])
+	memValue.typ = logfile.EntryType(typ[0])
+	return
 }

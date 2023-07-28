@@ -50,15 +50,15 @@ type vlogOptions struct {
 	gcInterval time.Duration
 }
 
-func initValueLog(dbCfg *DBConfig) error {
+func initValueLog(vlogCfg ValueLogConfig) error {
 	var ioType = logfile.BufferedIO
-	if dbCfg.ValueLogMmap {
+	if vlogCfg.ValueLogMmap {
 		ioType = logfile.MMap
 	}
 
 	vlogOpt := vlogOptions{
-		path:      dbCfg.ValueLogDir,
-		blockSize: dbCfg.ValueLogFileSize,
+		path:      vlogCfg.ValueLogDir,
+		blockSize: vlogCfg.ValueLogFileSize,
 		ioType:    ioType,
 	}
 

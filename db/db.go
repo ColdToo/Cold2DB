@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/db/flock"
+	"github.com/ColdToo/Cold2DB/db/index"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -20,6 +21,7 @@ type DB interface {
 }
 
 type Cold2DB struct {
+	// put key to arena skl and wal , update activeMemtable trans act to imm
 	memManager *memManager
 
 	vlog *valueLog
@@ -27,6 +29,10 @@ type Cold2DB struct {
 	flushLock sync.RWMutex // guarantee flush and compaction exclusive.
 
 	mu sync.RWMutex
+
+	flushChn chan *memtable
+
+	indexer index.Indexer
 
 	// Prevent concurrent db using.
 	// At least one FileLockGuard(cf/indexer/vlog dirs are all the same).
@@ -52,17 +58,22 @@ func InitDB(dbCfg DBConfig) error {
 	}
 
 	Cold2 = new(Cold2DB)
-	err = NewMemManger(dbCfg.MemConfig)
+	Cold2.memManager, err = NewMemManger(dbCfg.MemConfig)
 	if err != nil {
 		return err
 	}
 
-	err = initValueLog(dbCfg)
+	Cold2.indexer, err = index.NewIndexer(dbCfg.IndexConfig)
 	if err != nil {
 		return err
 	}
 
-	go Cold2.ListenAndFlush()
+	err = initValueLog(dbCfg.ValueLogConfig)
+	if err != nil {
+		return err
+	}
+
+	go Cold2.CompactionAndFlush()
 	return nil
 }
 
@@ -86,7 +97,7 @@ func dbCfgCheck(dbCfg DBConfig) error {
 }
 
 // ListenAndFlush 定期将immtable刷入vlog,更新内存索引
-func (db *Cold2DB) ListenAndFlush() {
+func (db *Cold2DB) CompactionAndFlush() {
 
 }
 

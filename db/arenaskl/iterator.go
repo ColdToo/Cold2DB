@@ -20,14 +20,14 @@ type Iterator struct {
 	list  *Skiplist
 	arena *Arena
 	nd    *node
-	value uint64
+	value []uint64
 }
 
 func (it *Iterator) Init(list *Skiplist) {
 	it.list = list
 	it.arena = list.arena
 	it.nd = nil
-	it.value = 0
+	it.value = make([]uint64, 3) //根据实际情况确定可能的value数量
 }
 
 // Valid returns true iff the iterator is positioned at a valid node.
@@ -39,9 +39,13 @@ func (it *Iterator) Key() []byte {
 }
 
 // Value returns the value at the current position.
-func (it *Iterator) Value() []byte {
-	valOffset, valSize := decodeValue(it.value)
-	return it.arena.GetBytes(valOffset, valSize)
+func (it *Iterator) Value() (values [][]byte) {
+	for _, val := range it.value {
+		valOffset, valSize := decodeValue(val)
+		v := it.arena.GetBytes(valOffset, valSize)
+		values = append(values, v)
+	}
+	return
 }
 
 // Next advances to the next position. If there are no following nodes, then
@@ -313,4 +317,11 @@ func (it *Iterator) seekForBaseSplice(key []byte) (prev, next *node, found bool)
 		level--
 	}
 	return
+}
+
+func (it *Iterator) PutOrUpdate(key, mv []byte) (err error) {
+	if it.Seek(key) {
+		return it.Set(mv)
+	}
+	return it.Put(key, mv)
 }

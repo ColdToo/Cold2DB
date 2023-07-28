@@ -55,7 +55,7 @@ type Skiplist struct {
 	height uint32 // Current height. 1 <= height <= maxHeight. CAS.
 	// If set to true by tests, it easier to detect unusual race conditions.
 	testing  bool
-	indexArr []uint64 // store node cursor
+	indexMap map[uint64]uintptr // store node cursor
 }
 
 func NewSkiplist(arena *Arena) *Skiplist {
@@ -77,12 +77,11 @@ func NewSkiplist(arena *Arena) *Skiplist {
 	}
 
 	skl := &Skiplist{
-		arena:  arena,
-		head:   head,
-		tail:   tail,
-		height: 1,
-		//todo 动态分配还是一次性分配
-		indexArr: make([]uint64, 1000),
+		arena:    arena,
+		head:     head,
+		tail:     tail,
+		height:   1,
+		indexMap: make(map[uint64]uintptr),
 	}
 
 	return skl
@@ -116,8 +115,8 @@ func (s *Skiplist) newNode(key, val []byte) (nd *node, height uint32, err error)
 		return
 	}
 
-	nd.value, err = s.allocVal(val)
-	// todo 记录index
+	value, err := s.allocVal(val)
+	nd.value = append(nd.value, value)
 	return
 }
 
@@ -231,7 +230,8 @@ type node struct {
 	// can be atomically loaded and stored:
 	//   value offset: uint32 (bits 0-31)
 	//   value size  : uint16 (bits 32-63)
-	value uint64
+	//   一个key可以对应多个 index、term的值
+	value []uint64
 
 	// Most nodes do not need to use the full height of the tower, since the
 	// probability of each successive level decreases exponentially. Because

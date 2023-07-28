@@ -65,8 +65,8 @@ type Indexer interface {
 }
 
 // NewIndexer create a new Indexer by the given options, return an error, if any.
-func NewIndexer(dbCfg *db.DBConfig) (Indexer, error) {
-	switch IndexerType(dbCfg.IndexerType) {
+func NewIndexer(indexCfg db.IndexConfig) (Indexer, error) {
+	switch IndexerType(indexCfg.IndexerType) {
 	case BptreeBoltDB:
 	case ArenaSkipList:
 	case Bptree:
