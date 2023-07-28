@@ -117,7 +117,7 @@ func (s *Skiplist) newNode(key, val []byte) (nd *node, height uint32, err error)
 	}
 
 	nd.value, err = s.allocVal(val)
-	//获取index
+	// todo 记录index
 	return
 }
 

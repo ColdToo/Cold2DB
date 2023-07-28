@@ -1,20 +1,3 @@
-/*
- * Copyright 2017 Dgraph Labs, Inc. and Contributors
- * Modifications copyright (C) 2017 Andy Kimball and Contributors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package arenaskl
 
 import (
@@ -27,9 +10,9 @@ import (
 type Align uint8
 
 const (
-	// Align1 align 0.
+	// Align1 align 0. 不进行边界对齐
 	Align1 = 0
-	// Align8 align 7
+	// Align8 align 7  以8字节进行边界对齐
 	Align8 = 7
 )
 
@@ -39,7 +22,7 @@ type Arena struct {
 	buf []byte
 }
 
-// NewArena allocates a new arena of the specified size and returns it.
+// NewArena 分配一段内存
 func NewArena(size uint32) *Arena {
 	// Don't store data at position 0 in order to reserve offset=0 as a kind
 	// of nil pointer.
@@ -87,16 +70,13 @@ func (a *Arena) Alloc(size, overflow uint32, align Align) (uint32, error) {
 		a.growBufSize(uint64(padded + overflow))
 	}
 
-	// Return the aligned offset.
-	// 对align取反再与操作
-	// 7 0000 0111 -> 1111 1000
-	// 0 0000 0000 -> 1111 1111
+	// 对align取反再与操作，使地址对齐至8字节
+	// align8: 7 0000 0111 -> 1111 1000
+	// align1: 0 0000 0000 -> 1111 1111
 	offset := (uint32(newSize) - padded + uint32(align)) & ^uint32(align)
 	return offset, nil
 }
 
-// GetBytes returns byte slice at offset. The given size should be just the value
-// size and should NOT include the meta bytes.
 func (a *Arena) GetBytes(offset uint32, size uint32) []byte {
 	if offset == 0 {
 		return nil
@@ -104,7 +84,6 @@ func (a *Arena) GetBytes(offset uint32, size uint32) []byte {
 	return a.buf[offset : offset+size]
 }
 
-// GetPointer get pointer at offset.
 func (a *Arena) GetPointer(offset uint32) unsafe.Pointer {
 	if offset == 0 {
 		return nil
@@ -112,7 +91,6 @@ func (a *Arena) GetPointer(offset uint32) unsafe.Pointer {
 	return unsafe.Pointer(&a.buf[offset])
 }
 
-// GetPointerOffset get the pointer offset in buffer.
 func (a *Arena) GetPointerOffset(ptr unsafe.Pointer) uint32 {
 	if ptr == nil {
 		return 0
@@ -121,6 +99,7 @@ func (a *Arena) GetPointerOffset(ptr unsafe.Pointer) uint32 {
 }
 
 func (a *Arena) growBufSize(growBy uint64) {
+	//todo 这样更新切片大小会不会过于频繁
 	newBuf := make([]byte, uint64(len(a.buf))+growBy)
 	copy(newBuf, a.buf)
 	a.buf = newBuf

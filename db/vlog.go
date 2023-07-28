@@ -79,13 +79,9 @@ func initValueLog(dbCfg *DBConfig) error {
 		}
 	}
 
-	// load in order.
 	sort.Slice(fids, func(i, j int) bool {
 		return fids[i] < fids[j]
 	})
-	if len(fids) == 0 {
-		fids = append(fids, logfile.InitialLogFileId)
-	}
 
 	// open discard file. mainly use to compaction
 	discard, err := newDiscard(vlogOpt.path, vlogDiscardName)
@@ -93,8 +89,8 @@ func initValueLog(dbCfg *DBConfig) error {
 		return nil
 	}
 
-	// open active log file only.
-	logFile, err := logfile.OpenLogFile(vlogOpt.path, fids[len(fids)-1], vlogOpt.blockSize, logfile.ValueLog, vlogOpt.ioType)
+	// open active(recent) log file only.
+	logFile, err := logfile.OpenLogFile(vlogOpt.path, int64(fids[len(fids)-1]), vlogOpt.blockSize, logfile.ValueLog, vlogOpt.ioType)
 	// set total size in discard file, skip it if exist.
 	discard.setTotal(fids[len(fids)-1], uint32(vlogOpt.blockSize))
 	if err != nil {

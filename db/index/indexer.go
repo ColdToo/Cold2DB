@@ -3,6 +3,7 @@ package index
 import (
 	"encoding/binary"
 	"errors"
+	"github.com/ColdToo/Cold2DB/db"
 	"os"
 )
 
@@ -64,8 +65,8 @@ type Indexer interface {
 }
 
 // NewIndexer create a new Indexer by the given options, return an error, if any.
-func NewIndexer(indexType IndexerType) (Indexer, error) {
-	switch indexType {
+func NewIndexer(dbCfg *db.DBConfig) (Indexer, error) {
+	switch IndexerType(dbCfg.IndexerType) {
 	case BptreeBoltDB:
 	case ArenaSkipList:
 	case Bptree:
@@ -77,27 +78,16 @@ func NewIndexer(indexType IndexerType) (Indexer, error) {
 
 // IndexerIter .
 type IndexerIter interface {
-	// First moves the cursor to the first item in the bucket and returns its key and value.
-	// If the bucket is empty then a nil key and value are returned.
 	First() (key, value []byte)
 
-	// Last moves the cursor to the last item in the bucket and returns its key and value.
-	// If the bucket is empty then a nil key and value are returned.
 	Last() (key, value []byte)
 
-	// Seek moves the cursor to a given key and returns it.
-	// If the key does not exist then the next key is used. If no keys follow, a nil key is returned.
 	Seek(seek []byte) (key, value []byte)
 
-	// Next moves the cursor to the next item in the bucket and returns its key and value.
-	// If the cursor is at the end of the bucket then a nil key and value are returned.
 	Next() (key, value []byte)
 
-	// Prev moves the cursor to the previous item in the bucket and returns its key and value.
-	// If the cursor is at the beginning of the bucket then a nil key and value are returned.
 	Prev() (key, value []byte)
 
-	// Close The close method must be called after the iterative behavior is over！
 	Close() error
 }
 

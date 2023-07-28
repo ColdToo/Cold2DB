@@ -88,6 +88,7 @@ func EncodeWalEntry(e *WalEntry) ([]byte, int) {
 }
 
 func decodeHeader(buf []byte) (*entryHeader, int64) {
+	// 重构
 	if len(buf) <= 4 {
 		return nil, 0
 	}
@@ -109,7 +110,7 @@ func decodeHeader(buf []byte) (*entryHeader, int64) {
 	return h, int64(index + n)
 }
 
-func getEntryCrc(e *LogEntry, h []byte) uint32 {
+func getEntryCrc(e *WalEntry, h []byte) uint32 {
 	if e == nil {
 		return 0
 	}

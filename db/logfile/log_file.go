@@ -95,7 +95,8 @@ func OpenLogFile(path string, fid int64, fsize int64, ftype FileType, ioType IOT
 	return
 }
 
-func (lf *LogFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
+func (lf *LogFile) ReadWALEntry(offset int64) (*WalEntry, int64, error) {
+	//  todo 重构
 	// read entry header.
 	headerBuf, err := lf.readBytes(offset, MaxHeaderSize)
 	if err != nil {
@@ -107,7 +108,7 @@ func (lf *LogFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
 		return nil, 0, ErrEndOfEntry
 	}
 
-	e := &LogEntry{
+	e := &WalEntry{
 		ExpiredAt: header.expiredAt,
 		Type:      header.typ,
 	}

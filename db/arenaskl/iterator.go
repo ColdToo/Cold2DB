@@ -16,9 +16,6 @@ func (s *splice) init(prev, next *node) {
 	s.next = next
 }
 
-// Iterator is an iterator over the skiplist object. Call Init to associate a
-// skiplist with the iterator. The current state of the iterator can be cloned
-// by simply value copying the struct. All iterator methods are thread-safe.
 type Iterator struct {
 	list  *Skiplist
 	arena *Arena
@@ -26,7 +23,6 @@ type Iterator struct {
 	value uint64
 }
 
-// Init associates the iterator with a skiplist and resets all state.
 func (it *Iterator) Init(list *Skiplist) {
 	it.list = list
 	it.arena = list.arena
@@ -71,6 +67,36 @@ func (it *Iterator) Seek(key []byte) (found bool) {
 	_, next, found = it.seekForBaseSplice(key)
 	present := it.setNode(next, false)
 	return found && present
+}
+
+// Set updates the value of the current iteration record if it has not been
+// updated or deleted since iterating or seeking to it. If the record has been
+// updated, then Set positions the iterator on the most current value and
+// returns ErrRecordUpdated. If the record has been deleted, then Set keeps
+// the iterator positioned on the current record with the current value and
+// returns ErrRecordDeleted.
+func (it *Iterator) Set(val []byte) error {
+	newVal, err := it.list.allocVal(val)
+	if err != nil {
+		return err
+	}
+
+	return it.trySetValue(newVal)
+}
+
+func (it *Iterator) trySetValue(new uint64) error {
+	if !atomic.CompareAndSwapUint64(&it.nd.value, it.value, new) {
+		old := atomic.LoadUint64(&it.nd.value)
+		if old == deletedVal {
+			return ErrRecordDeleted
+		}
+
+		it.value = old
+		return ErrRecordUpdated
+	}
+
+	it.value = new
+	return nil
 }
 
 // Put creates a new key/value record if it does not yet exist and positions the
@@ -186,36 +212,6 @@ func (it *Iterator) Put(key []byte, val []byte) error {
 
 	it.value = value
 	it.nd = nd
-	return nil
-}
-
-// Set updates the value of the current iteration record if it has not been
-// updated or deleted since iterating or seeking to it. If the record has been
-// updated, then Set positions the iterator on the most current value and
-// returns ErrRecordUpdated. If the record has been deleted, then Set keeps
-// the iterator positioned on the current record with the current value and
-// returns ErrRecordDeleted.
-func (it *Iterator) Set(val []byte) error {
-	newVal, err := it.list.allocVal(val)
-	if err != nil {
-		return err
-	}
-
-	return it.trySetValue(newVal)
-}
-
-func (it *Iterator) trySetValue(new uint64) error {
-	if !atomic.CompareAndSwapUint64(&it.nd.value, it.value, new) {
-		old := atomic.LoadUint64(&it.nd.value)
-		if old == deletedVal {
-			return ErrRecordDeleted
-		}
-
-		it.value = old
-		return ErrRecordUpdated
-	}
-
-	it.value = new
 	return nil
 }
 

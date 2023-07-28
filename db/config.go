@@ -13,6 +13,8 @@ type DBConfig struct {
 	ValueLogConfig
 
 	MemTableConfig
+
+	IndexConfig
 }
 
 type WalConfig struct {

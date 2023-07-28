@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/binary"
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
+	"github.com/ColdToo/Cold2DB/db/index"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
 	"io"
@@ -14,6 +15,18 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+type memManager struct {
+	activeMem *memtable
+
+	immuMems []*memtable
+
+	flushChn chan *memtable
+
+	indexer index.Indexer
+
+	walDirPath string
+}
 
 type memtable struct {
 	sync.RWMutex
@@ -41,61 +54,91 @@ type memValue struct {
 	expiredAt int64
 }
 
-func initMemtable(dbCfg *DBConfig) (err error) {
+func NewMemManger(dbCfg *DBConfig) (err error) {
+	memManger := new(memManager)
+	Cold2.memManager = memManger
+	memManger.walDirPath = dbCfg.WalDirPath
+	memManger.flushChn = make(chan *memtable,dbCfg.MemtableNums-1)
+	memManger.immuMems = make([]*memtable, dbCfg.MemtableNums-1)
+	err = memManger.newActiveMemtable(dbCfg)
+	if err != nil {
+		return err
+	}
+	go memManger.reopenImMemtable(dbCfg., dbCfg.WalDirPath)
+	Cold2.memManager = memManger
+	return nil
+}
+
+func (m *memManager)newActiveMemtable(dbCfg *DBConfig) (err error) {
 	var ioType = logfile.BufferedIO
 	if dbCfg.WalMMap {
 		ioType = logfile.MMap
 	}
-
 	memCfg := memCfg{
+		walFileId:  time.Now().Unix(),
 		walDirPath: dbCfg.WalDirPath,
 		fsize:      int64(dbCfg.MemtableSize),
 		ioType:     ioType,
 		memSize:    dbCfg.MemtableSize,
 	}
 
-	DirEntries, err := os.ReadDir(dbCfg.WalDirPath)
+	m.activeMem, err = m.newMemtable(memCfg)
 	if err != nil {
 		return err
 	}
 
-	// if more than zero load the wal file to memtable
-	// 怎么区分memtable和immtable?加载的全部作为immtable再重新创建一个memtable
-	if len(DirEntries) > 0 {
-		var fids []int64
-		for _, entry := range DirEntries {
-			if !strings.HasSuffix(entry.Name(), logfile.WalSuffixName) {
-				continue
-			}
-			splitNames := strings.Split(entry.Name(), ".")
-			fid, err := strconv.Atoi(splitNames[0])
-			if err != nil {
-				return err
-			}
-			fids = append(fids, int64(fid))
-		}
-
-		// 根据文件timestamp排序
-		sort.Slice(fids, func(i, j int) bool {
-			return fids[i] < fids[j]
-		})
-
-		// todo load memtable in concurrency
-		for _, fid := range fids {
-			memCfg.walFileId = fid
-			table, err := openMemtable(memCfg)
-			if err != nil {
-				return err
-			}
-			Cold2.immuMems = append(Cold2.immuMems, table)
-		}
-	}
-
-	Cold2.activeMem, err = newMemtable(memCfg)
 	return nil
 }
 
-func openMemtable(memCfg memCfg) (*memtable, error) {
+func (m *memManager)reopenImMemtable(memCfg memCfg, walDirPath string) {
+	DirEntries, err := os.ReadDir(walDirPath)
+	if err != nil {
+		log.Error(err)
+		return
+	}
+
+	if len(DirEntries) <= 0 {
+		log.Info("没有wal文件,不用初始化immtable")
+		return
+	}
+
+	var fids []int64
+	for _, entry := range DirEntries {
+		if !strings.HasSuffix(entry.Name(), logfile.WalSuffixName) {
+			continue
+		}
+		splitNames := strings.Split(entry.Name(), ".")
+		fid, _ := strconv.Atoi(splitNames[0])
+		fids = append(fids, int64(fid))
+	}
+	// 根据文件timestamp排序
+	sort.Slice(fids, func(i, j int) bool {
+		return fids[i] < fids[j]
+	})
+
+	immtableC := make(chan *memtable, len(DirEntries))
+	wg := sync.WaitGroup{}
+	for _, fid := range fids {
+		memCfg.walFileId = fid
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			table, err := m.openMemtable(memCfg)
+			if err != nil {
+				log.Error(err)
+			}
+			immtableC <- table
+		}()
+	}
+	wg.Wait()
+	close(immtableC)
+	for table := range immtableC {
+		m.immuMems = append(m.immuMems, table)
+	}
+	return
+}
+
+func (m *memManager)openMemtable(memCfg memCfg) (*memtable, error) {
 	var sklIter = new(arenaskl.Iterator)
 	arena := arenaskl.NewArena(memCfg.memSize + uint32(arenaskl.MaxNodeSize))
 	skl := arenaskl.NewSkiplist(arena)
@@ -112,15 +155,18 @@ func openMemtable(memCfg memCfg) (*memtable, error) {
 	// load wal entries into memory.
 	var offset int64 = 0
 	for {
-		if entry, size, err := wal.ReadLogEntry(offset); err == nil {
+		if entry, size, err := wal.ReadWALEntry(offset); err == nil {
 			offset += size
 			// No need to use atomic updates.
 			// This function is only be executed in one goroutine at startup.
 			wal.WriteAt += size
 
 			mv := &memValue{
-				value: entry.Value,
-				typ:   byte(entry.Type),
+				Index:     entry.Index,
+				Term:      entry.Term,
+				expiredAt: entry.ExpiredAt,
+				value:     entry.Value,
+				typ:       entry.Type,
 			}
 			mvBuf := mv.encode()
 
@@ -134,17 +180,19 @@ func openMemtable(memCfg memCfg) (*memtable, error) {
 				log.Errorf("put value into skip list err.%+v", err)
 				return nil, err
 			}
-		} else {
-			if err == io.EOF || err == logfile.ErrEndOfEntry {
-				break
-			}
-			return nil, err
 		}
+
+		if err == io.EOF || err == logfile.ErrEndOfEntry {
+			break
+		}
+
+		return nil, err
 	}
+
 	return table, nil
 }
 
-func newMemtable(memCfg memCfg) (*memtable, error) {
+func (m *memManager)newMemtable(memCfg memCfg) (*memtable, error) {
 	var sklIter = new(arenaskl.Iterator)
 	arena := arenaskl.NewArena(memCfg.memSize + uint32(arenaskl.MaxNodeSize))
 	skl := arenaskl.NewSkiplist(arena)
