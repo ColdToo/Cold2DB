@@ -3,7 +3,6 @@ package db
 import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/db/flock"
-	"github.com/ColdToo/Cold2DB/db/index"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -25,8 +24,6 @@ type Cold2DB struct {
 
 	vlog *valueLog
 
-	indexer index.Indexer
-
 	flushLock sync.RWMutex // guarantee flush and compaction exclusive.
 
 	mu sync.RWMutex
@@ -47,7 +44,7 @@ func GetDB() (*Cold2DB, error) {
 	}
 }
 
-func InitDB(dbCfg *DBConfig) error {
+func InitDB(dbCfg DBConfig) error {
 	var err error
 	err = dbCfgCheck(dbCfg)
 	if err != nil {
@@ -55,7 +52,7 @@ func InitDB(dbCfg *DBConfig) error {
 	}
 
 	Cold2 = new(Cold2DB)
-	err = NewMemManger(dbCfg)
+	err = NewMemManger(dbCfg.MemConfig)
 	if err != nil {
 		return err
 	}
@@ -65,16 +62,11 @@ func InitDB(dbCfg *DBConfig) error {
 		return err
 	}
 
-	Cold2.indexer, err = index.NewIndexer(dbCfg)
-	if err != nil {
-		return err
-	}
-
 	go Cold2.ListenAndFlush()
 	return nil
 }
 
-func dbCfgCheck(dbCfg *DBConfig) error {
+func dbCfgCheck(dbCfg DBConfig) error {
 	if !utils.PathExist(dbCfg.DBPath) {
 		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
 			return err

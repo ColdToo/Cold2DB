@@ -26,6 +26,8 @@ type memManager struct {
 	indexer index.Indexer
 
 	walDirPath string
+
+	indexDirPath string
 }
 
 type memtable struct {
@@ -33,11 +35,11 @@ type memtable struct {
 	sklIter *arenaskl.Iterator
 	skl     *arenaskl.Skiplist
 	wal     *logfile.LogFile
-	memCfg  memCfg
+	memOpt  memOpt
 }
 
 // options held by memtable for opening new memtables.
-type memCfg struct {
+type memOpt struct {
 	walDirPath string
 	walFileId  int64
 	fsize      int64
@@ -54,44 +56,37 @@ type memValue struct {
 	expiredAt int64
 }
 
-func NewMemManger(dbCfg *DBConfig) (err error) {
+func NewMemManger(memCfg MemConfig) (err error) {
 	memManger := new(memManager)
 	Cold2.memManager = memManger
-	memManger.walDirPath = dbCfg.WalDirPath
-	memManger.flushChn = make(chan *memtable,dbCfg.MemtableNums-1)
-	memManger.immuMems = make([]*memtable, dbCfg.MemtableNums-1)
-	err = memManger.newActiveMemtable(dbCfg)
+	memManger.walDirPath = memCfg.WalDirPath
+	memManger.flushChn = make(chan *memtable, memCfg.MemtableNums-1)
+	memManger.immuMems = make([]*memtable, memCfg.MemtableNums-1)
+
+	var ioType = logfile.BufferedIO
+	if memCfg.WalMMap {
+		ioType = logfile.MMap
+	}
+	memOpt := memOpt{
+		walFileId:  time.Now().Unix(),
+		walDirPath: memCfg.WalDirPath,
+		fsize:      int64(memCfg.MemtableSize),
+		ioType:     ioType,
+		memSize:    memCfg.MemtableSize,
+	}
+
+	memManger.activeMem, err = memManger.newMemtable(memOpt)
 	if err != nil {
 		return err
 	}
-	go memManger.reopenImMemtable(dbCfg., dbCfg.WalDirPath)
+
+	go memManger.reopenImMemtable(memOpt)
 	Cold2.memManager = memManger
 	return nil
 }
 
-func (m *memManager)newActiveMemtable(dbCfg *DBConfig) (err error) {
-	var ioType = logfile.BufferedIO
-	if dbCfg.WalMMap {
-		ioType = logfile.MMap
-	}
-	memCfg := memCfg{
-		walFileId:  time.Now().Unix(),
-		walDirPath: dbCfg.WalDirPath,
-		fsize:      int64(dbCfg.MemtableSize),
-		ioType:     ioType,
-		memSize:    dbCfg.MemtableSize,
-	}
-
-	m.activeMem, err = m.newMemtable(memCfg)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (m *memManager)reopenImMemtable(memCfg memCfg, walDirPath string) {
-	DirEntries, err := os.ReadDir(walDirPath)
+func (m *memManager) reopenImMemtable(memOpt memOpt) {
+	DirEntries, err := os.ReadDir(memOpt.walDirPath)
 	if err != nil {
 		log.Error(err)
 		return
@@ -119,11 +114,11 @@ func (m *memManager)reopenImMemtable(memCfg memCfg, walDirPath string) {
 	immtableC := make(chan *memtable, len(DirEntries))
 	wg := sync.WaitGroup{}
 	for _, fid := range fids {
-		memCfg.walFileId = fid
+		memOpt.walFileId = fid
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			table, err := m.openMemtable(memCfg)
+			table, err := m.openMemtable(memOpt)
 			if err != nil {
 				log.Error(err)
 			}
@@ -138,15 +133,15 @@ func (m *memManager)reopenImMemtable(memCfg memCfg, walDirPath string) {
 	return
 }
 
-func (m *memManager)openMemtable(memCfg memCfg) (*memtable, error) {
+func (m *memManager) openMemtable(memOpt memOpt) (*memtable, error) {
 	var sklIter = new(arenaskl.Iterator)
-	arena := arenaskl.NewArena(memCfg.memSize + uint32(arenaskl.MaxNodeSize))
+	arena := arenaskl.NewArena(memOpt.memSize + uint32(arenaskl.MaxNodeSize))
 	skl := arenaskl.NewSkiplist(arena)
 	sklIter.Init(skl)
-	table := &memtable{memCfg: memCfg, skl: skl, sklIter: sklIter}
+	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
 
 	// open wal log file.
-	wal, err := logfile.OpenLogFile(memCfg.walDirPath, memCfg.walFileId, memCfg.fsize*2, logfile.WAL, memCfg.ioType)
+	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WAL, memOpt.ioType)
 	if err != nil {
 		return nil, err
 	}
@@ -192,14 +187,14 @@ func (m *memManager)openMemtable(memCfg memCfg) (*memtable, error) {
 	return table, nil
 }
 
-func (m *memManager)newMemtable(memCfg memCfg) (*memtable, error) {
+func (m *memManager) newMemtable(memOpt memOpt) (*memtable, error) {
 	var sklIter = new(arenaskl.Iterator)
-	arena := arenaskl.NewArena(memCfg.memSize + uint32(arenaskl.MaxNodeSize))
+	arena := arenaskl.NewArena(memOpt.memSize + uint32(arenaskl.MaxNodeSize))
 	skl := arenaskl.NewSkiplist(arena)
 	sklIter.Init(skl)
-	table := &memtable{memCfg: memCfg, skl: skl, sklIter: sklIter}
+	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
 
-	wal, err := logfile.OpenLogFile(memCfg.walDirPath, memCfg.walFileId, memCfg.fsize*2, logfile.WAL, memCfg.ioType)
+	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WAL, memOpt.ioType)
 	if err != nil {
 		return nil, err
 	}
