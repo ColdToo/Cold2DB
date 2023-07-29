@@ -157,6 +157,10 @@ func stepFollower(r *Raft, m *pb.Message) error {
 		r.electionElapsed = 0
 		r.LeaderID = m.From
 		r.handleSnapshot(*m)
+
+		//作为follower 也可能会收到投票请求
+	case pb.MsgVote:
+		r.handleVoteRequest(*m)
 	}
 	return nil
 }
@@ -281,7 +285,7 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 	}
 
 	// 目标节点所期望的下一条日志的上一条日志的term，如果获取不到说明已经被compact了
-	preLogTerm, err := r.RaftLog.getTermByEntryIndex(preLogIndex)
+	preLogTerm, err := r.RaftLog.Term(preLogIndex)
 	if err != nil {
 		if err == ErrCompacted {
 			r.sendSnapshot(to)
@@ -371,6 +375,7 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 		return
 	}
 
+	//todo 当follower在接收了日志条目update commit后应该立即向follower同步commit信息还是通过心跳发送comit信息？
 	r.updateCommit()
 }
 
@@ -454,26 +459,15 @@ func (r *Raft) abortLeaderTransfer() {
 
 // ------------------ follower behavior ------------------
 
-// sendVoteResponse send vote response
-func (r *Raft) sendVoteResponse(nvote uint64, reject bool) {
-	msg := pb.Message{
-		MsgType: pb.MessageType_MsgRequestVoteResponse,
-		From:    r.id,
-		To:      nvote,
-		Term:    r.Term,
-		Reject:  reject,
-	}
-	r.msgs = append(r.msgs, msg)
-}
-
 // handleAppendEntries handle AppendEntries  request
 func (r *Raft) handleAppendEntries(m pb.Message) {
+	// 判断entry是否合法
 	if m.Term < r.Term {
 		r.sendAppendResponse(m.From, true)
 		return
 	}
 
-	term, err := r.RaftLog.getTermByEntryIndex(m.Index)
+	term, err := r.RaftLog.Term(m.Index)
 	if err != nil || term != m.LogTerm {
 		r.sendAppendResponse(m.From, true)
 		return
@@ -482,14 +476,13 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	if len(m.Entries) > 0 {
 		appendStart := 0
 
-		// check is has existing entry conflicts with a new one delete the existing entry and all that
-		//	// follow it
+		// check is has existing entry conflicts with a new one delete the existing entry and all that follow it
 		for i, ent := range m.Entries {
 			if ent.Index > r.RaftLog.LastIndex() {
 				appendStart = i
 				break
 			}
-			validTerm, _ := r.RaftLog.getTermByEntryIndex(ent.Index)
+			validTerm, _ := r.RaftLog.Term(ent.Index)
 			if validTerm != ent.Term {
 				r.RaftLog.RemoveEntriesAfter(ent.Index)
 				break
@@ -503,6 +496,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			}
 		}
 	}
+
 	//  If leaderCommit > commitIndex,
 	// set commitIndex = min(leaderCommit, index of last new entry)
 	// 更新commit

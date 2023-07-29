@@ -63,7 +63,7 @@ func (l *RaftLog) LastIndex() uint64 {
 	return l.last
 }
 
-func (l *RaftLog) getTermByEntryIndex(i uint64) (uint64, error) {
+func (l *RaftLog) Term(i uint64) (uint64, error) {
 	if uint64(len(l.entries)) < i {
 		return 0, errors.New("not find the log entry")
 	}
