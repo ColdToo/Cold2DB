@@ -48,7 +48,7 @@ func Warn(msg string) *Fields {
 	return newFields(msg, log, false)
 }
 
-func Error(err error) *Fields {
+func Error(msg string) *Fields {
 	if !log.Core().Enabled(zapcore.ErrorLevel) {
 		return newFields("", nil, true)
 	}

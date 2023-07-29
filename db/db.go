@@ -145,8 +145,6 @@ func (db *Cold2DB) SetHardState(st pb.HardState) error {
 }
 
 func (db *Cold2DB) Entries(lo, hi uint64) ([]pb.Entry, error) {
-	ms.Lock()
-	defer ms.Unlock()
 	offset := ms.ents[0].Index
 	if lo <= offset {
 		return nil, ErrCompacted

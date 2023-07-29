@@ -78,7 +78,6 @@ func (an *AppNode) startRaftNode() {
 		HeartbeatTick: 1,
 		Storage:       an.Storage,
 	}
-
 	if c.Storage.IsRestartNode() {
 		an.raftNode = raft.RestartRaftNode(c)
 	} else {

@@ -5,6 +5,7 @@ import (
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
+	"go.etcd.io/etcd/raft/tracker"
 )
 
 type Role uint8
@@ -17,12 +18,7 @@ const (
 	Candidate
 )
 
-type RaftConfig struct {
-	ElectionTick  int
-	HeartbeatTick int
-}
-
-type Opts struct {
+type raftOpts struct {
 	// local raft id
 	ID uint64
 
@@ -37,27 +33,6 @@ type Opts struct {
 	HeartbeatTick int
 }
 
-//raft配置文件前置检查
-func (c *Opts) validate() error {
-	if c.ID == 0 {
-		return errors.New("cannot use none as id")
-	}
-
-	if c.HeartbeatTick <= 0 {
-		return errors.New("heartbeat tick must be greater than 0")
-	}
-
-	if c.ElectionTick <= c.HeartbeatTick {
-		return errors.New("election tick must be greater than heartbeat tick")
-	}
-
-	if c.Storage == nil {
-		return errors.New("storage cannot be nil")
-	}
-
-	return nil
-}
-
 type Raft struct {
 	id uint64
 
@@ -68,6 +43,7 @@ type Raft struct {
 
 	RaftLog *RaftLog
 
+	trk         tracker.ProgressTracker
 	Progress    map[uint64]*Progress
 	voteCount   int
 	rejectCount int
@@ -94,8 +70,6 @@ type Raft struct {
 	// 有更适合当server的节点，比如说有更高的负载，更好的网络条件。
 	leadTransferee uint64
 
-	PendingConfIndex uint64
-
 	//不同的角色指向不同的stepFunc
 	stepFunc stepFunc
 
@@ -114,8 +88,7 @@ type Progress struct {
 	Match, Next uint64
 }
 
-func NewRaft(c *Opts) (raft *Raft, err error) {
-	err = c.validate()
+func NewRaft(c *raftOpts) (raft *Raft, err error) {
 	if err != nil {
 		return
 	}
@@ -142,45 +115,31 @@ func (r *Raft) Tick() {
 type stepFunc func(r *Raft, m *pb.Message) error
 
 func stepLeader(r *Raft, m *pb.Message) error {
-	//pr := r.Progress[m.From]
 	switch m.Type {
-	// send msg
+	case pb.MsgProp:
+		r.handlePropMsg(m)
 	case pb.MsgBeat:
 		r.bcastHeartbeat()
 		return nil
-	case pb.MsgProp:
-		if len(m.Entries) == 0 {
-			log.Panic("%x stepped empty MsgProp").Record()
-		}
-		if r.Progress[r.id] == nil {
-			return errors.New(code.ErrProposalDropped)
-		}
-		if r.leadTransferee != None {
-			return errors.New(code.ErrProposalDropped)
-		}
-		r.handlePropMsg(m)
-
-	case pb.MsgAppResp:
-		// todo 如果append被拒绝那么应该有probe行为 这段代码后续补充
 	case pb.MsgHeartbeatResp:
-		r.handleHeartbeatResponse(*m)
+		r.handleHeartbeatResponse(m)
+		//日志提议
+	case pb.MsgAppResp:
+		r.handleAppendResponse(m)
+
+		//todo 剩下逻辑
 	case pb.MsgSnapStatus:
-		// todo 获取snap是否传输成功后续需要补充这段逻辑
 	case pb.MsgUnreachable:
-		// During optimistic replication, if the remote becomes unreachable,
-		// there is huge probability that a MsgApp is lost.
 	case pb.MsgTransferLeader:
-		// 暂时不做leader转移
 	}
 	return nil
 }
 
 func stepFollower(r *Raft, m *pb.Message) error {
 	switch m.Type {
-	// 日志提议直接转发给leader节点
+	// todo 应该设计一个负载均衡的组件直接将提议转发到leader而不是在fowller这里来处理？这样麻烦还是简单？
 	case pb.MsgProp:
 		if r.LeaderID == None {
-			// todo zap应该格式化的就格式化，不应该所有的使用json方法格式
 			// r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
 			return errors.New(code.ErrProposalDropped)
 		}
@@ -218,7 +177,6 @@ func stepCandidate(r *Raft, m *pb.Message) error {
 	return nil
 }
 
-// tickElection is run by followers and candidates after r.electionTimeout.
 func (r *Raft) tickElection() {
 	r.electionElapsed++
 	if r.electionElapsed >= r.electionTimeout {
@@ -231,7 +189,6 @@ func (r *Raft) tickElection() {
 	}
 }
 
-// tickHeartbeat is run by leaders to send a MsgBeat after r.heartbeatTimeout.
 func (r *Raft) tickHeartbeat() {
 	if r.Role != Leader {
 		log.Panic("only leader can increase beat").Record()
@@ -285,8 +242,20 @@ func (r *Raft) handlePropMsg(m *pb.Message) (err error) {
 		})
 		lastIndex += 1
 	}
-	r.appendEntries(ents...)
-	r.bcastAppendEntries()
+	// todo 如果第一条日志的index都小于commited的话是不合理的
+	if after := ents[0].Index - 1; after < r.RaftLog.committed {
+		return err
+	}
+	r.RaftLog.AppendEntries(ents)
+	// todo match和next在这更改？还是在处理prop resp的时候更改？
+	r.Progress[r.id].Match = r.RaftLog.LastIndex()
+	r.Progress[r.id].Next = r.RaftLog.LastIndex() + 1
+
+	for peer := range r.Progress {
+		if peer != r.id {
+			r.sendAppendEntries(peer)
+		}
+	}
 	r.updateCommit()
 	return
 }
@@ -301,17 +270,19 @@ func (r *Raft) bcastAppendEntries() {
 
 func (r *Raft) sendAppendEntries(to uint64) error {
 	lastIndex := r.RaftLog.LastIndex()
+
+	// 目标节点所期望的下一条日志的上一条日志
 	preLogIndex := r.Progress[to].Next - 1
 
-	// 这种情况不用追加日志
+	// 如果最后一条日志索引>=追随者的nextIndex，才发送，否则retrun
 	if lastIndex < preLogIndex {
 		log.Info("do not need send app msg").Record()
 		return errors.New("dont need  to send")
 	}
 
+	// 目标节点所期望的下一条日志的上一条日志的term，如果获取不到说明已经被compact了
 	preLogTerm, err := r.RaftLog.getTermByEntryIndex(preLogIndex)
 	if err != nil {
-		//如果这条日志已经被compacted那么发送日志
 		if err == ErrCompacted {
 			r.sendSnapshot(to)
 			return err
@@ -319,6 +290,7 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 		return err
 	}
 
+	// 发送entries
 	entries, err := r.RaftLog.storage.Entries(preLogIndex+1, lastIndex+1)
 	if err != nil {
 		return err
@@ -383,59 +355,37 @@ func (r *Raft) sendSnapshot(to uint64) {
 	r.Progress[to].Next = snap.Metadata.Index + 1
 }
 
-// appendEntries append entry to raft log
-func (r *Raft) appendEntries(entries ...*pb.Entry) {
-	ents := make([]pb.Entry, 0)
-	for _, e := range entries {
-		// todo
-		// 配置变更的提议是不是应该单独处理
-		if e.Type == pb.EntryConfChange {
-			if r.PendingConfIndex != None {
-				continue
-			}
-			r.PendingConfIndex = e.Index
-		}
-		ents = append(ents, pb.Entry{
-			Type:  e.Type,
-			Term:  e.Term,
-			Index: e.Index,
-			Data:  e.Data,
-		})
-	}
-	r.RaftLog.AppendEntries(ents)
-	r.Progress[r.id].Match = r.RaftLog.LastIndex()
-	r.Progress[r.id].Next = r.RaftLog.LastIndex() + 1
-}
-
-func (r *Raft) handleAppendResponse(m pb.Message) {
+func (r *Raft) handleAppendResponse(m *pb.Message) {
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, None)
 		return
 	}
 	if !m.Reject {
-		r.Prs[m.From].Next = m.Index + 1
-		r.Prs[m.From].Match = m.Index
-	} else if r.Prs[m.From].Next > 0 {
-		r.Prs[m.From].Next -= 1
-		r.sendAppend(m.From)
+		r.trk.Progress[m.From].Next = m.Index + 1
+		r.trk.Progress[m.From].Match = m.Index
+
+		//todo 当被拒绝时将next-1重试，效率过低，应该设计一种新的策略进行同步
+	} else if r.trk.Progress[m.From].Next > 0 {
+		r.trk.Progress[m.From].Next -= 1
+		r.sendAppendEntries(m.From)
 		return
 	}
+
 	r.updateCommit()
-	if m.From == r.leadTransferee && m.Index == r.RaftLog.LastIndex() {
-		r.sendTimeoutNow(m.From)
-	}
 }
 
-func (r *Raft) handleHeartbeatResponse(m pb.Message) {
+func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, None)
 		return
 	}
+
 	// leader can send log to follower when
 	// it received a heartbeat response which
 	// indicate it doesn't have update-to-date log
+	// 根据follower的 term和index判断是否需要send entry
 	if r.isMoreUpToDateThan(m.LogTerm, m.Index) {
-		r.sendAppend(m.From)
+		r.sendAppendEntries(m.From)
 	}
 }
 
@@ -712,9 +662,11 @@ func (r *Raft) sendTimeoutNow(to uint64) {
 }
 
 // ------------------ public behavior ------------------
+// todo 该函数是否应该只有当收到 app resp的时候才调用？
 func (r *Raft) updateCommit() {
 	commitUpdated := false
 	for i := r.RaftLog.committed; i <= r.RaftLog.LastIndex(); i += 1 {
+		// todo 这里i为什么可能会小于 committed呢？
 		if i <= r.RaftLog.committed {
 			continue
 		}
@@ -724,6 +676,7 @@ func (r *Raft) updateCommit() {
 				matchCnt += 1
 			}
 		}
+
 		// leader only commit on it's current term (§5.4.2)
 		term, _ := r.RaftLog.getTermByEntryIndex(i)
 		if matchCnt > len(r.Progress)/2 && term == r.Term && r.RaftLog.committed != i {
@@ -734,4 +687,12 @@ func (r *Raft) updateCommit() {
 	if commitUpdated {
 		r.bcastAppendEntries()
 	}
+}
+
+func (r *Raft) isMoreUpToDateThan(logTerm, index uint64) bool {
+	lastTerm, _ := r.RaftLog.getTermByEntryIndex(r.RaftLog.LastIndex())
+	if lastTerm > logTerm || (lastTerm == logTerm && r.RaftLog.LastIndex() > index) {
+		return true
+	}
+	return false
 }

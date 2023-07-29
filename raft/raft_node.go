@@ -51,7 +51,7 @@ type RaftNode struct {
 	prevHardSt pb.HardState
 }
 
-func NewRaftNode(config *Opts) (*RaftNode, error) {
+func NewRaftNode(config *raftOpts) (*RaftNode, error) {
 	raft, err := NewRaft(config)
 	if err != nil {
 		return nil, err
@@ -61,7 +61,7 @@ func NewRaftNode(config *Opts) (*RaftNode, error) {
 	return &RaftNode{Raft: raft, ReadyC: ReadyC, AdvanceC: AdvanceC}, nil
 }
 
-func StartRaftNode(c *Opts, peers []Peer) *RaftNode {
+func StartRaftNode(c *raftOpts, peers []Peer) *RaftNode {
 	if len(peers) == 0 {
 		panic("no peers given; use RestartNode instead")
 	}
@@ -73,7 +73,7 @@ func StartRaftNode(c *Opts, peers []Peer) *RaftNode {
 	return rn
 }
 
-func RestartRaftNode(c *Opts) *RaftNode {
+func RestartRaftNode(c *raftOpts) *RaftNode {
 	//从storage恢复一些hard state
 	rn, err := NewRaftNode(c)
 	if err != nil {

@@ -22,10 +22,10 @@ type RaftLog struct {
 
 	last uint64
 
-	// 所有还未压缩的日志
-	entries []pb.Entry
+	// raftlog中暂时保存的日志
+	entries []*pb.Entry
 
-	// 持久化从first到stabled这一块的日志
+	// db 持久化保存的日志
 	storage Storage
 }
 
@@ -70,6 +70,6 @@ func (l *RaftLog) getTermByEntryIndex(i uint64) (uint64, error) {
 	return l.entries[i].Term, nil
 }
 
-func (l *RaftLog) AppendEntries(ents []pb.Entry) {
+func (l *RaftLog) AppendEntries(ents []*pb.Entry) {
 	l.entries = append(l.entries, ents...)
 }
