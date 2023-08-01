@@ -10,7 +10,7 @@ import (
 type Align uint8
 
 const (
-	// Align1 align 0. 不进行边界对齐
+	// Align1 align 0  不进行边界对齐
 	Align1 = 0
 	// Align8 align 7  以8字节进行边界对齐
 	Align8 = 7

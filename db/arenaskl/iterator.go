@@ -30,15 +30,12 @@ func (it *Iterator) Init(list *Skiplist) {
 	it.value = make([]uint64, 3) //根据实际情况确定可能的value数量
 }
 
-// Valid returns true iff the iterator is positioned at a valid node.
 func (it *Iterator) Valid() bool { return it.nd != nil }
 
-// Key returns the key at the current position.
 func (it *Iterator) Key() []byte {
 	return it.nd.getKey(it.arena)
 }
 
-// Value returns the value at the current position.
 func (it *Iterator) Value() (values [][]byte) {
 	for _, val := range it.value {
 		valOffset, valSize := decodeValue(val)
@@ -48,24 +45,16 @@ func (it *Iterator) Value() (values [][]byte) {
 	return
 }
 
-// Next advances to the next position. If there are no following nodes, then
-// Valid() will be false after this call.
 func (it *Iterator) Next() {
 	next := it.list.getNext(it.nd, 0)
 	it.setNode(next, false)
 }
 
-// Prev moves to the previous position. If there are no previous nodes, then
-// Valid() will be false after this call.
 func (it *Iterator) Prev() {
 	prev := it.list.getPrev(it.nd, 0)
 	it.setNode(prev, true)
 }
 
-// Seek searches for the record with the given key. If it is present in the
-// skiplist, then Seek positions the iterator on that record and returns true.
-// If the record is not present, then Seek positions the iterator on the
-// following node (if it exists) and returns false.
 func (it *Iterator) Seek(key []byte) (found bool) {
 	var next *node
 	_, next, found = it.seekForBaseSplice(key)
@@ -73,42 +62,20 @@ func (it *Iterator) Seek(key []byte) (found bool) {
 	return found && present
 }
 
-// Set updates the value of the current iteration record if it has not been
-// updated or deleted since iterating or seeking to it. If the record has been
-// updated, then Set positions the iterator on the most current value and
-// returns ErrRecordUpdated. If the record has been deleted, then Set keeps
-// the iterator positioned on the current record with the current value and
-// returns ErrRecordDeleted.
+// Set set value 并不会更改之前的value而是为这个key添加一个新的value offset
 func (it *Iterator) Set(val []byte) error {
 	newVal, err := it.list.allocVal(val)
 	if err != nil {
 		return err
 	}
-
-	return it.trySetValue(newVal)
-}
-
-func (it *Iterator) trySetValue(new uint64) error {
-	if !atomic.CompareAndSwapUint64(&it.nd.value, it.value, new) {
-		old := atomic.LoadUint64(&it.nd.value)
-		if old == deletedVal {
-			return ErrRecordDeleted
-		}
-
-		it.value = old
-		return ErrRecordUpdated
-	}
-
-	it.value = new
+	it.value = append(it.value, newVal)
 	return nil
 }
 
-// Put creates a new key/value record if it does not yet exist and positions the
-// iterator on it. If the record already exists, then Add positions the iterator
-// on the most current value and returns ErrRecordExists. If there isn't enough
-// room in the arena, it will grow the arena buf size automatically.
 func (it *Iterator) Put(key []byte, val []byte) error {
 	var spl [maxHeight]splice
+
+	//若能找到key,直接更新值
 	if it.seekForSplice(key, &spl) {
 		// Found a matching node, but handle case where it's been deleted.
 		return it.setValueIfDeleted(spl[0].next, val)
@@ -129,9 +96,6 @@ func (it *Iterator) Put(key []byte, val []byte) error {
 	value := nd.value
 	ndOffset := it.arena.GetPointerOffset(unsafe.Pointer(nd))
 
-	// We always insert from the base level and up. After you add a node in base
-	// level, we cannot create a node in the level above because it would have
-	// discovered the node in the base level.
 	var found bool
 	for i := 0; i < int(height); i++ {
 		prev := spl[i].prev
@@ -219,40 +183,70 @@ func (it *Iterator) Put(key []byte, val []byte) error {
 	return nil
 }
 
-// SeekToFirst seeks position at the first entry in list.
-// Final state of iterator is Valid() iff list is not empty.
+// SeekToFirst move to head node
 func (it *Iterator) SeekToFirst() {
 	it.setNode(it.list.getNext(it.list.head, 0), false)
 }
 
-// SeekToLast seeks position at the last entry in list.
-// Final state of iterator is Valid() iff list is not empty.
+// SeekToLast move to tail node
 func (it *Iterator) SeekToLast() {
 	it.setNode(it.list.getPrev(it.list.tail, 0), true)
 }
 
 func (it *Iterator) setNode(nd *node, reverse bool) bool {
-	var value uint64
+	success := false
+	if nd != nil {
+		it.value = nd.value
+		it.nd = nd
+		success = true
+	}
+	return success
+}
 
-	success := true
-	for nd != nil {
-		// Skip past deleted nodes.
-		value = atomic.LoadUint64(&nd.value)
-		if value != deletedVal {
+func (it *Iterator) seekForSplice(key []byte, spl *[maxHeight]splice) (found bool) {
+	var prev, next *node
+	level := int(it.list.Height() - 1)
+	prev = it.list.head
+
+	//从最高层的头节点开始找key
+	for {
+		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
+		if next == nil {
+			next = it.list.tail
+		}
+		// build spl
+		spl[level].init(prev, next)
+		if level == 0 {
 			break
 		}
-
-		success = false
-		if reverse {
-			nd = it.list.getPrev(nd, 0)
-		} else {
-			nd = it.list.getNext(nd, 0)
-		}
+		level--
 	}
+	return
+}
 
-	it.value = value
-	it.nd = nd
-	return success
+func (it *Iterator) seekForBaseSplice(key []byte) (prev, next *node, found bool) {
+	level := int(it.list.Height() - 1)
+
+	prev = it.list.head
+	//从最高层的头节点开始找key
+	for {
+		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
+		if found {
+			break
+		}
+		if level == 0 {
+			break
+		}
+		level--
+	}
+	return
+}
+
+func (it *Iterator) PutOrUpdate(key, mv []byte) (err error) {
+	if it.Seek(key) {
+		return it.Set(mv)
+	}
+	return it.Put(key, mv)
 }
 
 func (it *Iterator) setValueIfDeleted(nd *node, val []byte) error {
@@ -280,48 +274,4 @@ func (it *Iterator) setValueIfDeleted(nd *node, val []byte) error {
 	it.value = newVal
 	it.nd = nd
 	return err
-}
-
-func (it *Iterator) seekForSplice(key []byte, spl *[maxHeight]splice) (found bool) {
-	var prev, next *node
-	level := int(it.list.Height() - 1)
-	prev = it.list.head
-
-	for {
-		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
-		if next == nil {
-			next = it.list.tail
-		}
-
-		spl[level].init(prev, next)
-		if level == 0 {
-			break
-		}
-		level--
-	}
-	return
-}
-
-func (it *Iterator) seekForBaseSplice(key []byte) (prev, next *node, found bool) {
-	level := int(it.list.Height() - 1)
-
-	prev = it.list.head
-	for {
-		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
-		if found {
-			break
-		}
-		if level == 0 {
-			break
-		}
-		level--
-	}
-	return
-}
-
-func (it *Iterator) PutOrUpdate(key, mv []byte) (err error) {
-	if it.Seek(key) {
-		return it.Set(mv)
-	}
-	return it.Put(key, mv)
 }

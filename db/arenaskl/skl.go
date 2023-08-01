@@ -134,6 +134,7 @@ func (s *Skiplist) randomHeight() uint32 {
 	return h
 }
 
+// 在arena中为key分配一段内存,并将返回key在arena中的offset
 func (s *Skiplist) allocKey(key []byte) (keyOffset uint32, keySize uint32, err error) {
 	keySize = uint32(len(key))
 	if keySize > math.MaxUint32 {
@@ -147,6 +148,7 @@ func (s *Skiplist) allocKey(key []byte) (keyOffset uint32, keySize uint32, err e
 	return
 }
 
+// 在arena中为val分配一段内存,并将返回val在arena中的offset
 func (s *Skiplist) allocVal(val []byte) (uint64, error) {
 	if len(val) > math.MaxUint32 {
 		panic("value is too large")
@@ -166,7 +168,6 @@ func (s *Skiplist) findSpliceForLevel(key []byte, level int, start *node) (prev,
 	prev = start
 
 	for {
-		// Assume prev.key < key.
 		next = s.getNext(prev, level)
 		nextKey := next.getKey(s.arena)
 		if nextKey == nil {
