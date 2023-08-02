@@ -43,7 +43,8 @@ type Raft struct {
 
 	RaftLog *RaftLog
 
-	trk         tracker.ProgressTracker
+	trk tracker.ProgressTracker
+
 	Progress    map[uint64]*Progress
 	voteCount   int
 	rejectCount int
@@ -167,8 +168,6 @@ func stepFollower(r *Raft, m *pb.Message) error {
 
 func stepCandidate(r *Raft, m *pb.Message) error {
 	switch m.Type {
-	case pb.MsgHup:
-		r.campaign()
 	case pb.MsgVoteResp:
 		r.handleVoteResponse(*m)
 	case pb.MsgVote:
@@ -246,21 +245,14 @@ func (r *Raft) handlePropMsg(m *pb.Message) (err error) {
 		})
 		lastIndex += 1
 	}
-	// todo 如果第一条日志的index都小于commited的话是不合理的
-	if after := ents[0].Index - 1; after < r.RaftLog.committed {
-		return err
-	}
-	r.RaftLog.AppendEntries(ents)
-	// todo match和next在这更改？还是在处理prop resp的时候更改？
-	r.Progress[r.id].Match = r.RaftLog.LastIndex()
-	r.Progress[r.id].Next = r.RaftLog.LastIndex() + 1
 
-	for peer := range r.Progress {
+	r.RaftLog.AppendEntries(ents)
+
+	for peer := range r.trk.Progress {
 		if peer != r.id {
 			r.sendAppendEntries(peer)
 		}
 	}
-	r.updateCommit()
 	return
 }
 
@@ -278,13 +270,12 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 	// 目标节点所期望的下一条日志的上一条日志
 	preLogIndex := r.Progress[to].Next - 1
 
-	// 如果最后一条日志索引>=追随者的nextIndex，才发送，否则retrun
+	// 如果最后一条日志索引>=追随者的nextIndex，才会发送entries
 	if lastIndex < preLogIndex {
-		log.Info("do not need send app msg").Record()
 		return errors.New("dont need  to send")
 	}
 
-	// 目标节点所期望的下一条日志的上一条日志的term，如果获取不到说明已经被compact了
+	// 目标节点所期望的下一条日志的上一条日志
 	preLogTerm, err := r.RaftLog.Term(preLogIndex)
 	if err != nil {
 		if err == ErrCompacted {
@@ -294,8 +285,9 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 		return err
 	}
 
-	// 发送entries
-	entries, err := r.RaftLog.storage.Entries(preLogIndex+1, lastIndex+1)
+	// 发送节点需要的entry
+	// nextLog ----- lastLog
+	entries, err := r.RaftLog.Entries(preLogIndex+1, lastIndex)
 	if err != nil {
 		return err
 	}
@@ -396,12 +388,6 @@ func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
 
 // ------------------ candidate behavior ------------------
 
-// campaign becomes a candidate and start to request vote
-func (r *Raft) campaign() {
-	r.becomeCandidate()
-	r.bcastVoteRequest()
-}
-
 // bcastVoteRequest is used by candidate to send vote request
 func (r *Raft) bcastVoteRequest() {
 	lastIndex := r.RaftLog.LastIndex()
@@ -442,24 +428,8 @@ func (r *Raft) handleVoteResponse(m pb.Message) {
 	}
 }
 
-// addNode add a new node to raft group
-func (r *Raft) addNode(id uint64) {
-
-}
-
-// removeNode remove a node from raft group
-func (r *Raft) removeNode(id uint64) {
-
-}
-
-// special condition to abort leader transfer
-func (r *Raft) abortLeaderTransfer() {
-	r.leadTransferee = None
-}
-
 // ------------------ follower behavior ------------------
 
-// handleAppendEntries handle AppendEntries  request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// 判断entry是否合法
 	if m.Term < r.Term {
@@ -511,7 +481,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	r.sendAppendResponse(m.From, false)
 }
 
-// sendAppendResponse send append response
 func (r *Raft) sendAppendResponse(to uint64, reject bool) {
 	msg := pb.Message{
 		Type:   pb.MsgAppResp,
@@ -524,24 +493,7 @@ func (r *Raft) sendAppendResponse(to uint64, reject bool) {
 	r.msgs = append(r.msgs, msg)
 }
 
-// sendHeartbeatResponse send heartbeat response
-func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
-	msg := pb.Message{
-		MsgType: pb.MessageType_MsgHeartbeatResponse,
-		From:    r.id,
-		To:      to,
-		Term:    r.Term,
-		Reject:  reject,
-		Index:   r.RaftLog.LastIndex(),
-	}
-	r.msgs = append(r.msgs, msg)
-}
-
-// handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
-	// Your Code Here (2A).
-	// most logic is same as `AppendEntries`
-	// Reply false if term < currentTerm (§5.1)
 	if m.Term < r.Term {
 		r.sendHeartbeatResponse(m.From, true)
 		return
@@ -560,7 +512,18 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	r.sendHeartbeatResponse(m.From, false)
 }
 
-// handleSnapshot handle Snapshot RPC request
+func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
+	msg := pb.Message{
+		Type:   pb.MsgHeartbeatResp,
+		From:   r.id,
+		To:     to,
+		Term:   r.Term,
+		Reject: reject,
+		Index:  r.RaftLog.LastIndex(),
+	}
+	r.msgs = append(r.msgs, msg)
+}
+
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
 	meta := m.Snapshot.Metadata
@@ -585,79 +548,18 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 	r.sendAppendResponse(m.From, false)
 }
 
-// Only leader can recive vote handleVoteRequest handle vote request
-func (r *Raft) handleVoteRequest(m pb.Message) {
-	lastTerm, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
-	if r.Term > m.Term {
-		r.sendVoteResponse(m.From, true)
-		return
-	}
-	if r.isMoreUpToDateThan(m.LogTerm, m.Index) {
-		if r.Term < m.Term {
-			r.becomeFollower(m.Term, None)
-		}
-		r.sendVoteResponse(m.From, true)
-		return
-	}
-	if r.Term < m.Term {
-		r.becomeFollower(m.Term, None)
-		r.Vote = m.From
-		r.sendVoteResponse(m.From, false)
-		return
-	}
-	if r.Vote == m.From {
-		r.sendVoteResponse(m.From, false)
-		return
-	}
-	if r.isFollower() &&
-		r.Vote == None &&
-		(lastTerm < m.LogTerm || (lastTerm == m.LogTerm && m.Index >= r.RaftLog.LastIndex())) {
-		r.sendVoteResponse(m.From, false)
-		return
-	}
-	r.resetRealElectionTimeout()
-	r.sendVoteResponse(m.From, true)
-}
-
-// RemoveEntriesAfter remove entries from index lo to the last
-func (l *RaftLog) RemoveEntriesAfter(lo uint64) {
-	l.stabled = min(l.stabled, lo-1)
-	if lo-l.firstIndex >= uint64(len(l.entries)) {
-		return
-	}
-	l.entries = l.entries[:lo-l.firstIndex]
-}
-
 func (r *Raft) handleLeaderTransfer(m pb.Message) {
-	if m.From == r.id {
-		return
-	}
-	if r.leadTransferee == m.From {
-		return
-	}
-	if _, ok := r.Prs[m.From]; !ok {
-		return
-	}
-	r.leadTransferee = m.From
-	if r.Prs[m.From].Match != r.RaftLog.LastIndex() {
-		r.sendAppend(m.From)
-	} else {
-		r.sendTimeoutNow(m.From)
-	}
-}
-
-//当Follower节点接收到MsgTimeoutNow消息时，会立刻切换成Candidate状态，然后创建MsgHup消息并发起选举。
-func (r *Raft) sendTimeoutNow(to uint64) {
-	r.msgs = append(r.msgs, pb.Message{
-		Type: pb.MsgTimeoutNow,
-		To:   to,
-		From: r.id,
-	})
+	return
 }
 
 // ------------------ public behavior ------------------
-// todo 该函数是否应该只有当收到 app resp的时候才调用？
+// todo 该函数是否应该只有当收到app resp的时候才调用？
+
+// leader 收到prop信息后将该消息同步给follower节点，当大多数节点同意后，
+// 将该消息置为commited发送给follower节点，当大多数follower节点commited该entry后（放入memtable）
+// leader 根据每个节点的情况选择性commited已经被大多数节点接收的entry
 func (r *Raft) updateCommit() {
+	// todo 通过追踪器将可能的entry置为commited状态
 	commitUpdated := false
 	for i := r.RaftLog.committed; i <= r.RaftLog.LastIndex(); i += 1 {
 		// todo 这里i为什么可能会小于 committed呢？

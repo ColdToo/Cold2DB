@@ -162,8 +162,6 @@ func (db *Cold2DB) Entries(lo, hi uint64) ([]pb.Entry, error) {
 }
 
 func (db *Cold2DB) Term(i uint64) (uint64, error) {
-	ms.Lock()
-	defer ms.Unlock()
 	offset := ms.ents[0].Index
 	if i < offset {
 		return 0, ErrCompacted

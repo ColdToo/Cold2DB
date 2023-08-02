@@ -1,28 +1,24 @@
 package raft
 
 import (
-	"errors"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
 // RaftLog manage the log entries, its struct look like:
 //
-//	snapshot/first.....applied....committed....stabled.....last
-//	--------|------------------------------------------------|
+//	snapshot/first..................committed..................last
+//	--------|--------mem-table----------|----------memory--------|
 //	                          log entries
 
 type RaftLog struct {
 	first uint64
 
-	applied uint64
-
 	committed uint64
-
-	stabled uint64
 
 	last uint64
 
-	// raftlog中暂时保存的日志
+	// 未被committed的日志
+	// todo entries存在并发访问的可能性吗
 	entries []*pb.Entry
 
 	// db 持久化保存的日志
@@ -63,13 +59,23 @@ func (l *RaftLog) LastIndex() uint64 {
 	return l.last
 }
 
+// Term 根据index返回term,如果raftlog中没有那么就从memtable中获取,如果memtble也获取不到那么说明已经compact了
 func (l *RaftLog) Term(i uint64) (uint64, error) {
-	if uint64(len(l.entries)) < i {
-		return 0, errors.New("not find the log entry")
+	if i > l.committed {
+		//todo 从raftlog中获取term
+	} else {
+		term, err := l.storage.Term(i)
+		if err != nil {
+			return term, err
+		}
 	}
-	return l.entries[i].Term, nil
+	return
 }
 
 func (l *RaftLog) AppendEntries(ents []*pb.Entry) {
 	l.entries = append(l.entries, ents...)
+}
+
+func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
+	return
 }
