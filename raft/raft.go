@@ -248,11 +248,7 @@ func (r *Raft) handlePropMsg(m *pb.Message) (err error) {
 
 	r.RaftLog.AppendEntries(ents)
 
-	for peer := range r.trk.Progress {
-		if peer != r.id {
-			r.sendAppendEntries(peer)
-		}
-	}
+	r.bcastAppendEntries()
 	return
 }
 
@@ -336,30 +332,15 @@ func (r *Raft) sendHeartbeat(to uint64) {
 	r.msgs = append(r.msgs, msg)
 }
 
-func (r *Raft) sendSnapshot(to uint64) {
-	snap, err := r.RaftLog.storage.GetSnapshot()
-	if err != nil {
-		return
-	}
-	r.msgs = append(r.msgs, pb.Message{
-		Type:     pb.MsgSnap,
-		From:     r.id,
-		To:       to,
-		Term:     r.Term,
-		Snapshot: snap,
-	})
-	r.Progress[to].Next = snap.Metadata.Index + 1
-}
-
 func (r *Raft) handleAppendResponse(m *pb.Message) {
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, None)
 		return
 	}
+
 	if !m.Reject {
 		r.trk.Progress[m.From].Next = m.Index + 1
 		r.trk.Progress[m.From].Match = m.Index
-
 		//todo 当被拒绝时将next-1重试，效率过低，应该设计一种新的策略进行同步
 	} else if r.trk.Progress[m.From].Next > 0 {
 		r.trk.Progress[m.From].Next -= 1
@@ -384,6 +365,22 @@ func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
 	if r.isMoreUpToDateThan(m.LogTerm, m.Index) {
 		r.sendAppendEntries(m.From)
 	}
+}
+
+// todo
+func (r *Raft) sendSnapshot(to uint64) {
+	snap, err := r.RaftLog.storage.GetSnapshot()
+	if err != nil {
+		return
+	}
+	r.msgs = append(r.msgs, pb.Message{
+		Type:     pb.MsgSnap,
+		From:     r.id,
+		To:       to,
+		Term:     r.Term,
+		Snapshot: snap,
+	})
+	r.Progress[to].Next = snap.Metadata.Index + 1
 }
 
 // ------------------ candidate behavior ------------------
