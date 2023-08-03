@@ -121,10 +121,8 @@ func stepLeader(r *Raft, m *pb.Message) error {
 		r.handlePropMsg(m)
 	case pb.MsgBeat:
 		r.bcastHeartbeat()
-		return nil
 	case pb.MsgHeartbeatResp:
 		r.handleHeartbeatResponse(m)
-		//日志提议
 	case pb.MsgAppResp:
 		r.handleAppendResponse(m)
 
@@ -138,17 +136,14 @@ func stepLeader(r *Raft, m *pb.Message) error {
 
 func stepFollower(r *Raft, m *pb.Message) error {
 	switch m.Type {
-	// todo 应该设计一个负载均衡的组件直接将提议转发到leader而不是在fowller这里来处理？这样麻烦还是简单？
+	// todo 应该设计一个负载均衡的组件直接将提议发送给leader，而不是在follower这里转发给leader？
 	case pb.MsgProp:
 		if r.LeaderID == None {
-			// r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
+			log.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
 			return errors.New(code.ErrProposalDropped)
 		}
 		m.To = r.LeaderID
-		//r.send(m)
 	case pb.MsgApp:
-		r.electionElapsed = 0
-		r.LeaderID = m.From
 		r.handleAppendEntries(*m)
 	case pb.MsgHeartbeat:
 		r.electionElapsed = 0
@@ -233,7 +228,7 @@ func (r *Raft) becomeLeader() {
 
 // ------------------- leader behavior -------------------
 
-func (r *Raft) handlePropMsg(m *pb.Message) (err error) {
+func (r *Raft) handlePropMsg(m *pb.Message) {
 	lastIndex := r.RaftLog.LastIndex()
 	ents := make([]*pb.Entry, 0)
 	for _, e := range m.Entries {
@@ -322,6 +317,7 @@ func (r *Raft) bcastHeartbeat() {
 	}
 }
 
+// todo 发送心跳的时候是否也可以将commited信息同步给fowller节点？
 func (r *Raft) sendHeartbeat(to uint64) {
 	msg := pb.Message{
 		Type: pb.MsgBeat,
@@ -345,11 +341,10 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 		r.trk.Progress[m.From].Next = m.RejectHint
 		r.sendAppendEntries(m.From)
 	} else {
-		//follower节点所期望的下一条日志
 		r.trk.Progress[m.From].Next = m.Index
 	}
 
-	//todo 当大多数节点认可了一个日志后将该日志置换为commited
+	//todo 当大多数节点认可了一个日志后将该日志置为commited
 	r.updateCommit()
 }
 
@@ -359,9 +354,6 @@ func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
 		return
 	}
 
-	// leader can send log to follower when
-	// it received a heartbeat response which
-	// indicate it doesn't have update-to-date log
 	// 根据follower的 term和index判断是否需要send entry
 	if r.isMoreUpToDateThan(m.LogTerm, m.Index) {
 		r.sendAppendEntries(m.From)
@@ -429,52 +421,35 @@ func (r *Raft) handleVoteResponse(m pb.Message) {
 // ------------------ follower behavior ------------------
 
 func (r *Raft) handleAppendEntries(m pb.Message) {
-	// 判断entry是否合法
+	r.electionElapsed = 0
 	if m.Term < r.Term {
 		r.sendAppendResponse(m.From, true)
 		return
 	}
+	r.LeaderID = m.From
 
+	//检查日志是否匹配
 	term, err := r.RaftLog.Term(m.Index)
 	if err != nil || term != m.LogTerm {
 		r.sendAppendResponse(m.From, true)
 		return
 	}
 
+	//todo 不会有冲突的日志,直接append?
 	if len(m.Entries) > 0 {
-		appendStart := 0
-
-		// check is has existing entry conflicts with a new one delete the existing entry and all that follow it
-		for i, ent := range m.Entries {
-			if ent.Index > r.RaftLog.LastIndex() {
-				appendStart = i
-				break
-			}
-			validTerm, _ := r.RaftLog.Term(ent.Index)
-			if validTerm != ent.Term {
-				r.RaftLog.RemoveEntriesAfter(ent.Index)
-				break
-			}
-			appendStart = i
-		}
-
-		if m.Entries[appendStart].Index > r.RaftLog.LastIndex() {
-			for _, e := range m.Entries[appendStart:] {
-				r.RaftLog.entries = append(r.RaftLog.entries, *e)
-			}
-		}
+		r.RaftLog.committed = r.RaftLog.AppendEntries(m.Entries)
 	}
 
-	//  If leaderCommit > commitIndex,
-	// set commitIndex = min(leaderCommit, index of last new entry)
-	// 更新commit
-	if m.Commit > r.RaftLog.committed {
-		lastNewEntry := m.Index
-		if len(m.Entries) > 0 {
-			lastNewEntry = m.Entries[len(m.Entries)-1].Index
-		}
-		r.RaftLog.committed = min(m.Commit, lastNewEntry)
+	//将leader的committed大于本地committed的所有entry apply到memtable中
+	unApplied, err := r.RaftLog.Entries(r.RaftLog.applied, m.Commit)
+	if err != nil {
+		//todo error
 	}
+	applied, err := r.RaftLog.ApplyEntries(unApplied)
+	if err != nil {
+		//todo
+	}
+	r.RaftLog.applied = applied
 
 	r.sendAppendResponse(m.From, false)
 }
@@ -557,7 +532,6 @@ func (r *Raft) handleLeaderTransfer(m pb.Message) {
 func (r *Raft) updateCommit() {
 	commitUpdated := false
 	for i := r.RaftLog.committed; i <= r.RaftLog.LastIndex(); i += 1 {
-
 		matchCnt := 0
 		for _, p := range r.Progress {
 			if p.Match >= i {

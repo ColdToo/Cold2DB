@@ -4,14 +4,22 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
-// RaftLog manage the log entries, its struct look like:
+//leader log structure
 //
-//	snapshot/first..................committed..................last
-//	--------|--------mem-table----------|----------memory--------|
-//	                          log entries
+//	snapshot/first.................. applied............ committed...............
+//	--------|--------mem-table----------|------------------memory---------------|
+//	                              log entries
+
+//follower log structure
+//
+//	snapshot/first.................. applied.....................................
+//	--------|--------mem-table----------|------------------memory---------------|
+//
 
 type RaftLog struct {
 	first uint64
+
+	applied uint64
 
 	committed uint64
 
@@ -72,7 +80,11 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 	return
 }
 
-func (l *RaftLog) AppendEntries(ents []*pb.Entry) {
+func (l *RaftLog) AppendEntries(ents []*pb.Entry) (committed uint64) {
+	l.entries = append(l.entries, ents...)
+}
+
+func (l *RaftLog) ApplyEntries(ents []*pb.Entry) (applied uint64, err error) {
 	l.entries = append(l.entries, ents...)
 }
 
