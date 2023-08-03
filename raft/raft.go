@@ -338,17 +338,18 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 		return
 	}
 
-	if !m.Reject {
-		r.trk.Progress[m.From].Next = m.Index + 1
-		r.trk.Progress[m.From].Match = m.Index
-		//todo 当被拒绝时将next-1重试，效率过低，应该设计一种新的策略进行同步
-	} else if r.trk.Progress[m.From].Next > 0 {
-		r.trk.Progress[m.From].Next -= 1
+	//当被follower拒绝时，与follower对齐剩下日志
+	if m.Reject {
+		log.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d",
+			r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
+		r.trk.Progress[m.From].Next = m.RejectHint
 		r.sendAppendEntries(m.From)
-		return
+	} else {
+		//follower节点所期望的下一条日志
+		r.trk.Progress[m.From].Next = m.Index
 	}
 
-	//todo 当follower在接收了日志条目update commit后应该立即向follower同步commit信息还是通过心跳发送comit信息？
+	//todo 当大多数节点认可了一个日志后将该日志置换为commited
 	r.updateCommit()
 }
 
@@ -549,20 +550,14 @@ func (r *Raft) handleLeaderTransfer(m pb.Message) {
 	return
 }
 
-// ------------------ public behavior ------------------
-// todo 该函数是否应该只有当收到app resp的时候才调用？
-
+// ------------------------------------ public behavior -----------------------------------------
 // leader 收到prop信息后将该消息同步给follower节点，当大多数节点同意后，
 // 将该消息置为commited发送给follower节点，当大多数follower节点commited该entry后（放入memtable）
 // leader 根据每个节点的情况选择性commited已经被大多数节点接收的entry
 func (r *Raft) updateCommit() {
-	// todo 通过追踪器将可能的entry置为commited状态
 	commitUpdated := false
 	for i := r.RaftLog.committed; i <= r.RaftLog.LastIndex(); i += 1 {
-		// todo 这里i为什么可能会小于 committed呢？
-		if i <= r.RaftLog.committed {
-			continue
-		}
+
 		matchCnt := 0
 		for _, p := range r.Progress {
 			if p.Match >= i {
@@ -570,8 +565,7 @@ func (r *Raft) updateCommit() {
 			}
 		}
 
-		// leader only commit on it's current term (§5.4.2)
-		term, _ := r.RaftLog.getTermByEntryIndex(i)
+		term, _ := r.RaftLog.Term(i)
 		if matchCnt > len(r.Progress)/2 && term == r.Term && r.RaftLog.committed != i {
 			r.RaftLog.committed = i
 			commitUpdated = true
