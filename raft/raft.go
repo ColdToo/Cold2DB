@@ -421,8 +421,7 @@ func (r *Raft) updateCommit() {
 // ------------------ candidate behavior ------------------
 
 func (r *Raft) bcastVoteRequest() {
-	lastIndex := r.RaftLog.LastIndex()
-	lastTerm, _ := r.RaftLog.Term(lastIndex)
+	appliedTerm, _ := r.RaftLog.Term(r.RaftLog.applied)
 	for peer := range r.Progress {
 		if peer != r.id {
 			msg := pb.Message{
@@ -430,8 +429,8 @@ func (r *Raft) bcastVoteRequest() {
 				From:    r.id,
 				To:      peer,
 				Term:    r.Term,
-				LogTerm: lastTerm,
-				Index:   lastIndex,
+				LogTerm: appliedTerm,
+				Index:   r.RaftLog.applied,
 			}
 			r.msgs = append(r.msgs, msg)
 		}
@@ -487,8 +486,8 @@ func (r *Raft) handleVoteRequest(m *pb.Message) {
 	}
 
 	appliedTerm, _ := r.RaftLog.Term(r.RaftLog.applied)
-	//若日志的term小于本节点最后一条日志的term或
-	if r.VoteFor == None && (lastTerm < m.LogTerm || (lastTerm == m.LogTerm && m.Index >= r.RaftLog.LastIndex())) {
+	//比较applied index 的大小 todo  是否还需要比较其他东西？
+	if r.VoteFor == None && (appliedTerm > m.LogTerm) {
 		r.sendVoteResponse(m.From, false)
 		return
 	}
