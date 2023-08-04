@@ -21,12 +21,11 @@ type RaftLog struct {
 
 	applied uint64
 
+	//只有leader节点有这个字段
 	committed uint64
 
 	last uint64
 
-	// 未被committed的日志
-	// todo entries存在并发访问的可能性吗
 	entries []*pb.Entry
 
 	// db 持久化保存的日志
