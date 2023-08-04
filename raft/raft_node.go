@@ -98,14 +98,12 @@ func (rn *RaftNode) Step(m *pb.Message) error {
 	return ErrStepPeerNotFound
 }
 
-// Campaign causes this RaftNode to transition to candidate state.
 func (rn *RaftNode) Campaign() error {
 	return rn.Raft.Step(&pb.Message{
 		Type: pb.MsgHup,
 	})
 }
 
-// Propose proposes data be appended to the raft log.
 func (rn *RaftNode) Propose(buffer bytes.Buffer) error {
 	ent := pb.Entry{Data: buffer.Bytes()}
 	ents := make([]*pb.Entry, 0)
@@ -116,12 +114,10 @@ func (rn *RaftNode) Propose(buffer bytes.Buffer) error {
 		Entries: ents})
 }
 
-// TransferLeader tries to transfer leadership to the given transferee.
 func (rn *RaftNode) TransferLeader(transferee uint64) {
-	_ = rn.Raft.Step(&pb.Message{MsgType: pb.MessageType_MsgTransferLeader, From: transferee})
+	_ = rn.Raft.Step(&pb.Message{Type: pb.MsgTransferLeader, From: transferee})
 }
 
-// ProposeConfChange proposes a config change.
 func (rn *RaftNode) ProposeConfChange(cc pb.ConfChange) error {
 	data, err := cc.Marshal()
 	if err != nil {
@@ -129,12 +125,11 @@ func (rn *RaftNode) ProposeConfChange(cc pb.ConfChange) error {
 	}
 	ent := pb.Entry{Type: pb.EntryConfChange, Data: data}
 	return rn.Raft.Step(&pb.Message{
-		MsgType: pb.MessageType_MsgPropose,
+		Type:    pb.MsgProp,
 		Entries: []*pb.Entry{&ent},
 	})
 }
 
-// ApplyConfChange applies a config change to the local node.
 func (rn *RaftNode) ApplyConfChange(cc *pb.ConfChange) *pb.ConfState {
 	if cc.NodeId == None {
 		return &pb.ConfState{Nodes: nodes(rn.Raft)}
@@ -150,7 +145,6 @@ func (rn *RaftNode) ApplyConfChange(cc *pb.ConfChange) *pb.ConfState {
 	return &pb.ConfState{Nodes: nodes(rn.Raft)}
 }
 
-// GetProgress return the Progress of this node and its peers, if this node is leader.
 func (rn *RaftNode) GetProgress() map[uint64]Progress {
 	prs := make(map[uint64]Progress)
 	if rn.Raft.Role == Leader {

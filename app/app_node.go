@@ -262,7 +262,7 @@ func (an *AppNode) commitEntries(ents []pb.Entry) (<-chan struct{}, bool) {
 	return applyDoneC, true
 }
 
-//  实现Rat网络层接口,网络层通过该接口与RaftNode交互
+//  Rat网络层接口,网络层通过该接口与RaftNode交互
 
 func (an *AppNode) Process(ctx context.Context, m *pb.Message) error {
 	return an.raftNode.Step(m)
