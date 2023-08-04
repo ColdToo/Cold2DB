@@ -396,6 +396,7 @@ type Message struct {
 	// index=101, and the term of entry at index 100 is 5.
 	// (type=MsgAppResp,reject=true,index=100,logTerm=5) means follower rejects some
 	// entries from its leader as it already has an entry with term 5 at index 100.
+	// 不同的消息logTerm和index的解释不一样
 	LogTerm uint64 `protobuf:"varint,5,opt,name=logTerm" json:"logTerm"`
 	Index   uint64 `protobuf:"varint,6,opt,name=index"   json:"index"`
 

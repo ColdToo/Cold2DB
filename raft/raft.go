@@ -45,7 +45,8 @@ type Raft struct {
 
 	trk tracker.ProgressTracker
 
-	Progress    map[uint64]*Progress
+	Progress map[uint64]*Progress
+
 	voteCount   int
 	rejectCount int
 
@@ -149,14 +150,10 @@ func stepFollower(r *Raft, m *pb.Message) error {
 		r.electionElapsed = 0
 		r.LeaderID = m.From
 		r.handleHeartbeat(*m)
-	case pb.MsgSnap:
-		r.electionElapsed = 0
-		r.LeaderID = m.From
-		r.handleSnapshot(*m)
-
-		//作为follower 也可能会收到投票请求
 	case pb.MsgVote:
 		r.handleVoteRequest(*m)
+	case pb.MsgSnap:
+
 	}
 	return nil
 }
@@ -169,8 +166,6 @@ func stepCandidate(r *Raft, m *pb.Message) error {
 		r.handleVoteRequest(*m)
 	case pb.MsgApp:
 		r.handleAppendEntries(*m)
-	case pb.MsgSnap:
-		r.handleSnapshot(*m)
 	}
 	return nil
 }
@@ -348,19 +343,14 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 	r.updateCommit()
 }
 
+//todo hearbeat response是否应该也携带一部分消息传递给follower
 func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, None)
 		return
 	}
-
-	// 根据follower的 term和index判断是否需要send entry
-	if r.isMoreUpToDateThan(m.LogTerm, m.Index) {
-		r.sendAppendEntries(m.From)
-	}
 }
 
-// todo
 func (r *Raft) sendSnapshot(to uint64) {
 	snap, err := r.RaftLog.storage.GetSnapshot()
 	if err != nil {
@@ -376,159 +366,6 @@ func (r *Raft) sendSnapshot(to uint64) {
 	r.Progress[to].Next = snap.Metadata.Index + 1
 }
 
-// ------------------ candidate behavior ------------------
-
-// bcastVoteRequest is used by candidate to send vote request
-func (r *Raft) bcastVoteRequest() {
-	lastIndex := r.RaftLog.LastIndex()
-	lastTerm, _ := r.RaftLog.getTermByEntryIndex(lastIndex)
-	for peer := range r.Progress {
-		if peer != r.id {
-			msg := pb.Message{
-				Type:    pb.MsgVote,
-				From:    r.id,
-				To:      peer,
-				Term:    r.Term,
-				LogTerm: lastTerm,
-				Index:   lastIndex,
-			}
-			r.msgs = append(r.msgs, msg)
-		}
-	}
-}
-
-// handleVoteResponse handle vote response
-func (r *Raft) handleVoteResponse(m pb.Message) {
-	if m.Term > r.Term {
-		r.becomeFollower(m.Term, r.Lead)
-		r.Vote = m.From
-		return
-	}
-	if !m.Reject {
-		r.votes[m.From] = true
-		r.voteCount += 1
-	} else {
-		r.votes[m.From] = false
-		r.denialCount += 1
-	}
-	if r.voteCount > len(r.Prs)/2 {
-		r.becomeLeader()
-	} else if r.denialCount > len(r.Prs)/2 {
-		r.becomeFollower(r.Term, r.Lead)
-	}
-}
-
-// ------------------ follower behavior ------------------
-
-func (r *Raft) handleAppendEntries(m pb.Message) {
-	r.electionElapsed = 0
-	if m.Term < r.Term {
-		r.sendAppendResponse(m.From, true)
-		return
-	}
-	r.LeaderID = m.From
-
-	//检查日志是否匹配
-	term, err := r.RaftLog.Term(m.Index)
-	if err != nil || term != m.LogTerm {
-		r.sendAppendResponse(m.From, true)
-		return
-	}
-
-	//todo 不会有冲突的日志,直接append?
-	if len(m.Entries) > 0 {
-		r.RaftLog.committed = r.RaftLog.AppendEntries(m.Entries)
-	}
-
-	//将leader的committed大于本地committed的所有entry apply到memtable中
-	unApplied, err := r.RaftLog.Entries(r.RaftLog.applied, m.Commit)
-	if err != nil {
-		//todo error
-	}
-	applied, err := r.RaftLog.ApplyEntries(unApplied)
-	if err != nil {
-		//todo
-	}
-	r.RaftLog.applied = applied
-
-	r.sendAppendResponse(m.From, false)
-}
-
-func (r *Raft) sendAppendResponse(to uint64, reject bool) {
-	msg := pb.Message{
-		Type:   pb.MsgAppResp,
-		From:   r.id,
-		To:     to,
-		Term:   r.Term,
-		Reject: reject,
-		Index:  r.RaftLog.LastIndex(),
-	}
-	r.msgs = append(r.msgs, msg)
-}
-
-func (r *Raft) handleHeartbeat(m pb.Message) {
-	if m.Term < r.Term {
-		r.sendHeartbeatResponse(m.From, true)
-		return
-	}
-	r.becomeFollower(m.Term, m.From)
-	// Reply false if log doesn’t contain an entry at prevLogIndex
-	// whose term matches prevLogTerm (§5.3)
-	term, err := r.RaftLog.Term(m.Index)
-	if err != nil || term != m.LogTerm {
-		r.sendHeartbeatResponse(m.From, true)
-		return
-	}
-	if m.Commit > r.RaftLog.committed {
-		r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
-	}
-	r.sendHeartbeatResponse(m.From, false)
-}
-
-func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
-	msg := pb.Message{
-		Type:   pb.MsgHeartbeatResp,
-		From:   r.id,
-		To:     to,
-		Term:   r.Term,
-		Reject: reject,
-		Index:  r.RaftLog.LastIndex(),
-	}
-	r.msgs = append(r.msgs, msg)
-}
-
-func (r *Raft) handleSnapshot(m pb.Message) {
-	// Your Code Here (2C).
-	meta := m.Snapshot.Metadata
-	if meta.Index <= r.RaftLog.committed {
-		r.sendAppendResponse(m.From, false)
-		return
-	}
-	r.becomeFollower(max(r.Term, m.Term), m.From)
-	// clear log
-	r.RaftLog.entries = nil
-	// install snapshot
-	r.RaftLog.firstIndex = meta.Index + 1
-	r.RaftLog.applied = meta.Index
-	r.RaftLog.committed = meta.Index
-	r.RaftLog.stabled = meta.Index
-	r.RaftLog.pendingSnapshot = m.Snapshot
-	// update conf
-	r.Prs = make(map[uint64]*Progress)
-	for _, p := range meta.ConfState.Nodes {
-		r.Prs[p] = &Progress{}
-	}
-	r.sendAppendResponse(m.From, false)
-}
-
-func (r *Raft) handleLeaderTransfer(m pb.Message) {
-	return
-}
-
-// ------------------------------------ public behavior -----------------------------------------
-// leader 收到prop信息后将该消息同步给follower节点，当大多数节点同意后，
-// 将该消息置为commited发送给follower节点，当大多数follower节点commited该entry后（放入memtable）
-// leader 根据每个节点的情况选择性commited已经被大多数节点接收的entry
 func (r *Raft) updateCommit() {
 	commitUpdated := false
 	for i := r.RaftLog.committed; i <= r.RaftLog.LastIndex(); i += 1 {
@@ -550,10 +387,185 @@ func (r *Raft) updateCommit() {
 	}
 }
 
-func (r *Raft) isMoreUpToDateThan(logTerm, index uint64) bool {
-	lastTerm, _ := r.RaftLog.getTermByEntryIndex(r.RaftLog.LastIndex())
-	if lastTerm > logTerm || (lastTerm == logTerm && r.RaftLog.LastIndex() > index) {
-		return true
+// ------------------ candidate behavior ------------------
+
+// bcastVoteRequest is used by candidate to send vote request
+func (r *Raft) bcastVoteRequest() {
+	lastIndex := r.RaftLog.LastIndex()
+	lastTerm, _ := r.RaftLog.Term(lastIndex)
+	for peer := range r.Progress {
+		if peer != r.id {
+			msg := pb.Message{
+				Type:    pb.MsgVote,
+				From:    r.id,
+				To:      peer,
+				Term:    r.Term,
+				LogTerm: lastTerm,
+				Index:   lastIndex,
+			}
+			r.msgs = append(r.msgs, msg)
+		}
 	}
-	return false
+}
+
+// handleVoteResponse handle vote response
+func (r *Raft) handleVoteResponse(m pb.Message) {
+	if m.Term > r.Term {
+		r.becomeFollower(m.Term, r.LeaderID)
+		r.VoteFor = m.From
+		return
+	}
+	if !m.Reject {
+		r.votes[m.From] = true
+		r.voteCount += 1
+	} else {
+		r.votes[m.From] = false
+		r.rejectCount += 1
+	}
+	if r.voteCount > len(r.Progress)/2 {
+		r.becomeLeader()
+	} else if r.rejectCount > len(r.Progress)/2 {
+		r.becomeFollower(r.Term, r.LeaderID)
+	}
+}
+
+// handleVoteRequest handle vote request
+func (r *Raft) handleVoteRequest(m pb.Message) {
+	lastTerm, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
+	if r.Term > m.Term {
+		r.sendVoteResponse(m.From, true)
+		return
+	}
+	if r.isMoreUpToDateThan(m.LogTerm, m.Index) {
+		if r.Term < m.Term {
+			r.becomeFollower(m.Term, None)
+		}
+		r.sendVoteResponse(m.From, true)
+		return
+	}
+	if r.Term < m.Term {
+		r.becomeFollower(m.Term, None)
+		r.VoteFor = m.From
+		r.sendVoteResponse(m.From, false)
+		return
+	}
+	if r.VoteFor == m.From {
+		r.sendVoteResponse(m.From, false)
+		return
+	}
+	if r.isFollower() &&
+		r.Vote == None &&
+		(lastTerm < m.LogTerm || (lastTerm == m.LogTerm && m.Index >= r.RaftLog.LastIndex())) {
+		r.sendVoteResponse(m.From, false)
+		return
+	}
+	r.resetRealElectionTimeout()
+	r.sendVoteResponse(m.From, true)
+}
+
+// sendVoteResponse send vote response
+func (r *Raft) sendVoteResponse(nvote uint64, reject bool) {
+	msg := pb.Message{
+		Type:   pb.MsgVoteResp,
+		From:   r.id,
+		To:     nvote,
+		Term:   r.Term,
+		Reject: reject,
+	}
+	r.msgs = append(r.msgs, msg)
+}
+
+// ------------------ follower behavior ------------------
+
+func (r *Raft) handleAppendEntries(m pb.Message) {
+	r.electionElapsed = 0
+	if m.Term < r.Term {
+		r.sendAppendResponse(m.From, true)
+		return
+	}
+	r.LeaderID = m.From
+
+	//检查日志是否匹配
+	term, err := r.RaftLog.Term(m.Index)
+	if err != nil || term != m.LogTerm {
+		r.sendAppendResponse(m.From, true)
+		return
+	}
+
+	//todo 不会有冲突的日志,直接append
+	if len(m.Entries) > 0 {
+		r.RaftLog.committed = r.RaftLog.AppendEntries(m.Entries)
+	}
+
+	//将leader已经committed的所有entry apply到memtable中
+	unApplied, err := r.RaftLog.Entries(r.RaftLog.applied, m.Commit)
+	if err != nil {
+		//todo error
+	}
+
+	applied, err := r.RaftLog.ApplyEntries(unApplied)
+	if err != nil {
+		//todo
+	}
+	r.RaftLog.applied = applied
+
+	r.sendAppendResponse(m.From, false)
+}
+
+func (r *Raft) sendAppendResponse(to uint64, reject bool) {
+	msg := pb.Message{
+		Type:   pb.MsgAppResp,
+		From:   r.id,
+		To:     to,
+		Term:   r.Term,
+		Reject: reject,
+		Index:  r.RaftLog.LastIndex(),
+	}
+	r.msgs = append(r.msgs, msg)
+}
+
+// 处理leader发送过来的心跳信息时
+func (r *Raft) handleHeartbeat(m pb.Message) {
+	if m.Term < r.Term {
+		r.sendHeartbeatResponse(m.From, true)
+		return
+	}
+
+	r.becomeFollower(m.Term, m.From)
+	//将leader已经committed的所有entry apply到memtable中
+	unApplied, err := r.RaftLog.Entries(r.RaftLog.applied, m.Commit)
+	if err != nil {
+		//todo error
+	}
+
+	applied, err := r.RaftLog.ApplyEntries(unApplied)
+	if err != nil {
+		//todo
+	}
+
+	r.RaftLog.applied = applied
+
+	r.sendHeartbeatResponse(m.From, false)
+}
+
+func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
+	msg := pb.Message{
+		Type:   pb.MsgHeartbeatResp,
+		From:   r.id,
+		To:     to,
+		Term:   r.Term,
+		Reject: reject,
+		Index:  r.RaftLog.LastIndex(),
+	}
+	r.msgs = append(r.msgs, msg)
+}
+
+func (r *Raft) handleSnapshot(m pb.Message) {
+	r.electionElapsed = 0
+	r.LeaderID = m.From
+	return
+}
+
+func (r *Raft) handleLeaderTransfer(m pb.Message) {
+	return
 }
