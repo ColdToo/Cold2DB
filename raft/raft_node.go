@@ -221,10 +221,12 @@ func (rn *RaftNode) newReady() Ready {
 
 func (rn *RaftNode) HasReady() bool {
 	hardState := pb.HardState{
-		Term:   rn.Raft.Term,
-		Vote:   rn.Raft.VoteFor,
-		Commit: rn.Raft.RaftLog.committed,
+		Term:    rn.Raft.Term,
+		Vote:    rn.Raft.VoteFor,
+		Applied: rn.Raft.RaftLog.applied,
 	}
+	// follower 通过 leader的committed来applied entry,leader通过follower的applied来 applied entry
+	// follower 的进度是快于leader的进度的
 	if !IsEmptyHardState(hardState) && !isHardStateEqual(rn.prevHardSt, hardState) {
 		return true
 	}

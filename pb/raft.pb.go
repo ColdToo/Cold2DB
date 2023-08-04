@@ -447,9 +447,10 @@ func (m *Message) XXX_DiscardUnknown() {
 var xxx_messageInfo_Message proto.InternalMessageInfo
 
 type HardState struct {
-	Term   uint64 `protobuf:"varint,1,opt,name=term" json:"term"`
-	Vote   uint64 `protobuf:"varint,2,opt,name=vote" json:"vote"`
-	Commit uint64 `protobuf:"varint,3,opt,name=commit" json:"commit"`
+	Term    uint64 `protobuf:"varint,1,opt,name=term" json:"term"`
+	Vote    uint64 `protobuf:"varint,2,opt,name=vote" json:"vote"`
+	Commit  uint64 `protobuf:"varint,3,opt,name=commit" json:"commit"`
+	Applied uint64 `protobuf:"varint,4,opt,name=applied" json:"applied"`
 }
 
 func (m *HardState) Reset()         { *m = HardState{} }
