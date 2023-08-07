@@ -172,7 +172,7 @@ func (db *Cold2DB) Term(i uint64) (uint64, error) {
 	return ms.ents[i-offset].Term, nil
 }
 
-func (db *Cold2DB) LastIndex() (uint64, error) {
+func (db *Cold2DB) AppliedIndex() (uint64, error) {
 	ms.Lock()
 	defer ms.Unlock()
 	return ms.lastIndex(), nil

@@ -22,23 +22,20 @@ var ErrUnavailable = errors.New("requested entry at index is unavailable")
 var ErrSnapshotTemporarilyUnavailable = errors.New("snapshot is temporarily unavailable")
 
 type Storage interface {
-	// InitialState 返回保存的持久化状态
 	InitialState() (pb.HardState, pb.ConfState, error)
 
 	// Entries 返回指定范围的Entries
 	Entries(lo, hi uint64) ([]pb.Entry, error)
 
-	// Term returns the term of entry i, which must be in the range
-	// [FirstIndex()-1, LastIndex()]. The term of the entry before
 	Term(i uint64) (uint64, error)
 
-	LastIndex() (uint64, error)
+	AppliedIndex() (uint64, error)
 
 	FirstIndex() (uint64, error)
 
 	// GetSnapshot  返回最新的快照
 	GetSnapshot() (pb.Snapshot, error)
 
-	// 通过wal文件判断是否是重启节点
+	// IsRestartNode 通过wal文件判断是否是重启节点
 	IsRestartNode() bool
 }

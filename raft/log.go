@@ -4,24 +4,17 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
-//leader log structure
+// log structure
 //
 //	snapshot/first.................. applied............ committed...............
-//	--------|--------mem-table----------|------------------memory---------------|
-//	                              log entries
-
-//follower log structure
-//
-//	snapshot/first.................. applied.....................................
-//	--------|--------mem-table----------|------------------memory---------------|
-//
+//	--------|--------mem-table----------|--------------memory entries-----------|
+//	                                                      entries
 
 type RaftLog struct {
 	first uint64
 
 	applied uint64
 
-	//只有leader节点有这个字段
 	committed uint64
 
 	last uint64
@@ -38,52 +31,39 @@ func newRaftLog(storage Storage) (*RaftLog, error) {
 
 		return nil, err
 	}
-	lastIndex, err := storage.LastIndex()
+	appliedIndex, err := storage.AppliedIndex()
 	if err != nil {
 		return nil, err
 	}
-	allEntrys, err := storage.Entries(firstIndex, lastIndex+1)
 
-	return &RaftLog{storage: storage, first: firstIndex, last: lastIndex, entries: allEntrys}, nil
+	emptyEntsS := make([]*pb.Entry, 0)
+
+	return &RaftLog{storage: storage, first: firstIndex, applied: appliedIndex, entries: emptyEntsS}, nil
 }
 
-func (l *RaftLog) getAllEntries() []pb.Entry {
-	return l.entries
+func (l *RaftLog) nextApplyEnts() (ents []*pb.Entry) {
+	return l.entries[l.applied+1 : l.committed+1]
 }
 
-// unstableEntries return all the unstable entries
-func (l *RaftLog) unstableEntries() []pb.Entry {
-	return l.entries[l.first : l.stabled+1]
-}
-
-// nextEnts returns all the committed but not applied entries
-func (l *RaftLog) nextApplyEnts() (ents []pb.Entry) {
-	return l.entries[l.applied : l.committed+1]
-}
-
-// LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	return l.last
 }
 
-// Term 根据index返回term,如果raftlog中没有那么就从memtable中获取,如果memtble也获取不到那么说明已经compact了
+// Term 根据index返回term,如果raft log中没有那么就从mem table中获取,如果mem table也获取不到那么说明这条日志已经被compact了
 func (l *RaftLog) Term(i uint64) (uint64, error) {
-	if i > l.committed {
-		//todo 从raftlog中获取term
+	if i > l.applied {
+		return l.entries[i-l.applied].Index, nil
 	} else {
 		term, err := l.storage.Term(i)
 		if err != nil {
 			return term, err
 		}
 	}
-	return
+	//todo 不应该走到这个分支
+	return 0, ErrUnavailable
 }
 
-func (l *RaftLog) AppendEntries(ents []*pb.Entry) (committed uint64) {
-	l.entries = append(l.entries, ents...)
-}
-
-func (l *RaftLog) ApplyEntries(ents []*pb.Entry) (applied uint64, err error) {
+func (l *RaftLog) AppendEntries(ents []*pb.Entry) {
 	l.entries = append(l.entries, ents...)
 }
 
