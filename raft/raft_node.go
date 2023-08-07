@@ -3,6 +3,7 @@ package raft
 import (
 	"bytes"
 	"errors"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
@@ -30,7 +31,7 @@ type Ready struct {
 
 	pb.HardState
 
-	CommittedEntries []pb.Entry // 待apply
+	CommittedEntries []*pb.Entry // 待apply的entry
 
 	Messages []pb.Message // 待发送给其他节点的message
 }
@@ -163,7 +164,7 @@ func (rn *RaftNode) run() {
 	r := rn.Raft
 
 	for {
-		// advance channel不为空，说明应用层还在处理上一轮ready
+		// 应用层通过将advanceC置为nil来标识
 		if advanceC != nil {
 			readyC = nil
 		} else if rn.HasReady() {
@@ -172,16 +173,16 @@ func (rn *RaftNode) run() {
 		}
 
 		select {
+		//从网络层获取要处理的message
 		case m := <-rn.recvC:
 			if pr := r.Progress[m.From]; pr != nil {
 				err := r.Step(&m)
 				if err != nil {
-					return
+					log.Errorf("", err)
 				}
 			}
 
 		case readyC <- rd:
-			rn.alterRaftStatus(rd)
 			advanceC = rn.AdvanceC
 
 		case <-rn.stop:
@@ -194,17 +195,19 @@ func (rn *RaftNode) run() {
 
 func (rn *RaftNode) newReady() Ready {
 	rd := Ready{
-		Entries:          rn.Raft.RaftLog.unstableEntries(),
 		CommittedEntries: rn.Raft.RaftLog.nextApplyEnts(),
 	}
 	if len(rn.Raft.msgs) > 0 {
 		rd.Messages = rn.Raft.msgs
 	}
+
+	//todo 应用层拿soft state干嘛？
 	if rn.prevSoftSt.LeaderID != rn.Raft.LeaderID || rn.prevSoftSt.RaftRole != rn.Raft.Role {
 		rn.prevSoftSt.LeaderID = rn.Raft.LeaderID
 		rn.prevSoftSt.RaftRole = rn.Raft.Role
 		rd.SoftState = rn.prevSoftSt
 	}
+
 	hardState := pb.HardState{
 		Term:   rn.Raft.Term,
 		Vote:   rn.Raft.VoteFor,
@@ -214,7 +217,7 @@ func (rn *RaftNode) newReady() Ready {
 		rd.HardState = hardState
 	}
 
-	// clear msg
+	//todo 此时会不会有协程写入数据到msgs？
 	rn.Raft.msgs = make([]pb.Message, 0)
 	return rd
 }
@@ -225,36 +228,18 @@ func (rn *RaftNode) HasReady() bool {
 		Vote:    rn.Raft.VoteFor,
 		Applied: rn.Raft.RaftLog.applied,
 	}
-	// follower 通过 leader的committed来applied entry,leader通过follower的applied来 applied entry
-	// follower 的进度是快于leader的进度的
+
 	if !IsEmptyHardState(hardState) && !isHardStateEqual(rn.prevHardSt, hardState) {
 		return true
 	}
-	if len(rn.Raft.msgs) > 0 || len(rn.Raft.RaftLog.nextApplyEnts()) > 0 || len(rn.Raft.RaftLog.unstableEntries()) > 0 {
+	if len(rn.Raft.msgs) > 0 || len(rn.Raft.RaftLog.nextApplyEnts()) > 0 {
 		return true
 	}
 	return false
 }
 
 func (rn *RaftNode) Advance(rd Ready) {
-	if len(rd.Entries) > 0 {
-		rn.Raft.RaftLog.stabled = rd.Entries[len(rd.Entries)-1].Index
-	}
-	if len(rd.CommittedEntries) > 0 {
-		rn.Raft.RaftLog.applied = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
-	}
-	if !IsEmptyHardState(rd.HardState) {
-		rn.prevHardSt = rd.HardState
-	}
-}
-
-// 每一轮算法层投递完 Ready 后，会重置raft的一些状态比如把 raft.msgs 置为空，保证消息不被重复发送到应用层
-func (rn *RaftNode) alterRaftStatus(rd Ready) {
-	if rd.SoftState != nil {
-		rn.prevSoftSt = rd.SoftState
-	}
-	//每一轮算法层投递完 Ready 后，会把 raft.msgs 置为空，保证消息不被重复发送到应用层：
-	rn.Raft.msgs = nil
+	rn.AdvanceC = nil
 }
 
 //网络层报告接口

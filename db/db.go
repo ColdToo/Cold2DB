@@ -137,7 +137,7 @@ func (db *Cold2DB) Put(entries []logfile.WalEntry) (err error) {
 // raft
 
 func (db *Cold2DB) InitialState() (pb.HardState, pb.ConfState, error) {
-	return db.hardState, *ms.snapshot.Metadata.ConfState, nil
+	return
 }
 
 func (db *Cold2DB) SetHardState(st pb.HardState) error {
@@ -145,53 +145,27 @@ func (db *Cold2DB) SetHardState(st pb.HardState) error {
 }
 
 func (db *Cold2DB) Entries(lo, hi uint64) ([]pb.Entry, error) {
-	offset := ms.ents[0].Index
-	if lo <= offset {
-		return nil, ErrCompacted
-	}
-	if hi > ms.lastIndex()+1 {
-		log.Panicf("entries' hi(%d) is out of bound lastindex(%d)", hi, ms.lastIndex())
-	}
-
-	ents := ms.ents[lo-offset : hi-offset]
-	if len(ms.ents) == 1 && len(ents) != 0 {
-		// only contains dummy entries.
-		return nil, ErrUnavailable
-	}
-	return ents, nil
+	return nil, nil
 }
 
 func (db *Cold2DB) Term(i uint64) (uint64, error) {
-	offset := ms.ents[0].Index
-	if i < offset {
-		return 0, ErrCompacted
-	}
-	if int(i-offset) >= len(ms.ents) {
-		return 0, ErrUnavailable
-	}
-	return ms.ents[i-offset].Term, nil
+	return 0, nil
 }
 
 func (db *Cold2DB) AppliedIndex() (uint64, error) {
-	ms.Lock()
-	defer ms.Unlock()
-	return ms.lastIndex(), nil
+	return 0, nil
 }
 
 func (db *Cold2DB) FirstIndex() (uint64, error) {
-	ms.Lock()
-	defer ms.Unlock()
-	return ms.firstIndex(), nil
+	return 0, nil
 }
 
 func (db *Cold2DB) GetSnapshot() (pb.Snapshot, error) {
-	ms.Lock()
-	defer ms.Unlock()
-	return ms.snapshot, nil
+	return pb.Snapshot{}, nil
 }
 
 func (db *Cold2DB) IsRestartNode() bool {
-	DirEntries, err := os.ReadDir(db.walDirPath)
+	DirEntries, err := os.ReadDir(db.memManager.walDirPath)
 	if err != nil {
 		log.Errorf("open wal dir failed")
 	}

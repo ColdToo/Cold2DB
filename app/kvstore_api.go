@@ -46,7 +46,6 @@ func (s *KvStore) Lookup(key []byte) ([]byte, error) {
 }
 
 func (s *KvStore) Scan(lowKey, highKey []byte) ([]byte, error) {
-	// 线性一致性读
 	val, err := s.db.Scan(lowKey, highKey)
 	if err != nil {
 		return nil, err

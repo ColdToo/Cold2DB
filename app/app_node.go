@@ -31,7 +31,7 @@ type AppNode struct {
 
 	proposeC    <-chan bytes.Buffer  // 提议 (k,v)
 	confChangeC <-chan pb.ConfChange // 提议更改配置文件
-	commitC     chan<- []pb.Entry    // 提交 (k,v)
+	commitC     chan<- []*pb.Entry   // 提交 (k,v)
 	errorC      chan<- error         // errors from raft session
 	stopc       chan struct{}        // signals proposal channel closed
 	httpstopc   chan struct{}        // signals http server to shutdown
@@ -58,7 +58,7 @@ func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan byt
 	an.startRaftNode()
 
 	// 启动一个goroutine,处理appLayer与raftLayer的交互
-	go an.serveRaftLayer()
+	go an.serveRaftNode()
 	// 启动一个goroutine,监听当前节点与集群中其他节点之间的网络连接
 	go an.servePeerRaft()
 
@@ -85,7 +85,7 @@ func (an *AppNode) startRaftNode() {
 	}
 }
 
-func (an *AppNode) serveRaftLayer() {
+func (an *AppNode) serveRaftNode() {
 	go an.servePropCAndConfC()
 
 	//AppNode 会启动一个定时器，每个 tick 默认为 100ms，然后定时调用 Node.Tick 方法驱动算法层执行定时函数：
@@ -102,16 +102,15 @@ func (an *AppNode) serveRaftLayer() {
 		//需要调用通信模块为算法层执行消息发送动作（Ready.Messages），需要与数据状态机应用算法层已确认提交的预写日志.
 		//当以上步骤处理完成时，AppNode 会调用 Node.Advance 方法对算法层进行响应.
 		case rd := <-an.raftNode.ReadyC:
-			// todo 先写入hardstate 还是commited entries，这两个应该同时写入否则信息不完整
-			applyDoneC, ok := an.commitEntries(an.checkEntries(rd.CommittedEntries))
+			applyDoneC, ok := an.handleReady(rd)
 			if !ok {
 				an.stop()
 				return
 			}
-			// 需要同步到其他节点的信息
-			an.transport.Send(rd.Messages)
-			<-applyDoneC
 
+			an.transport.Send(rd.Messages)
+
+			<-applyDoneC
 			//通知算法层进行下一轮
 			an.raftNode.Advance(raft.Ready{})
 
@@ -198,38 +197,23 @@ func (an *AppNode) listenAndServePeerRaft() {
 	close(an.httpdonec)
 }
 
-func (an *AppNode) checkEntries(ents []pb.Entry) (nents []pb.Entry) {
-	if len(ents) == 0 {
-		return ents
-	}
-	firstIdx := ents[0].Index
-	if firstIdx > an.appliedIndex+1 {
-		log.Infof("first index of committed entry[%d] should <= progress.appliedIndex[%d]+1", firstIdx, an.appliedIndex)
-	}
-	if an.appliedIndex-firstIdx+1 < uint64(len(ents)) {
-		nents = ents[an.appliedIndex-firstIdx+1:]
-	}
-	return nents
-}
+func (an *AppNode) handleReady(rd raft.Ready) (<-chan struct{}, bool) {
+	ents := rd.CommittedEntries
+	entries := make([]*pb.Entry, len(ents))
 
-func (an *AppNode) commitEntries(ents []pb.Entry) (<-chan struct{}, bool) {
-	if len(ents) == 0 {
-		return nil, true
-	}
-
-	entries := make([]pb.Entry, len(ents))
+	//apply entries
 	for i, entry := range ents {
 		switch ents[i].Type {
 		case pb.EntryNormal:
 			if len(ents[i].Data) == 0 {
-				break
+				continue
 			}
 			entries = append(entries, entry)
 
+			//todo 节点变更
 		case pb.EntryConfChange:
 			var cc *pb.ConfChange
 			cc.Unmarshal(ents[i].Data)
-			//通过算法层应用配置更新请求
 			an.confState = an.raftNode.ApplyConfChange(cc)
 			switch cc.Type {
 			case pb.ConfChangeAddNode:
@@ -242,7 +226,6 @@ func (an *AppNode) commitEntries(ents []pb.Entry) (<-chan struct{}, bool) {
 				}
 				an.transport.RemovePeer(types.ID(cc.NodeID))
 			}
-			// todo inform change ok
 		}
 	}
 
@@ -256,8 +239,6 @@ func (an *AppNode) commitEntries(ents []pb.Entry) (<-chan struct{}, bool) {
 			return nil, false
 		}
 	}
-
-	an.appliedIndex = ents[len(ents)-1].Index
 
 	return applyDoneC, true
 }
