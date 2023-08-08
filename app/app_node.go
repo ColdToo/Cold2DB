@@ -96,7 +96,7 @@ func (an *AppNode) serveRaftNode() {
 
 			an.transport.Send(rd.Messages)
 			//通知算法层进行下一轮
-			an.raftNode.Advance(raft.Ready{})
+			an.raftNode.Advance()
 
 		case err := <-an.transport.ErrorC:
 			an.writeError(err)
@@ -135,7 +135,7 @@ func (an *AppNode) servePropCAndConfC() {
 	close(an.stopc)
 }
 
-func (an *AppNode) handleReady(rd raft.Ready) (<-chan struct{}, bool) {
+func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 	ents := rd.CommittedEntries
 	entries := make([]*pb.Entry, len(ents))
 
@@ -160,7 +160,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (<-chan struct{}, bool) {
 				}
 			case pb.ConfChangeRemoveNode:
 				if cc.NodeID == uint64(an.localId) {
-					return nil, false
+					return
 				}
 				an.transport.RemovePeer(types.ID(cc.NodeID))
 			}
@@ -190,12 +190,14 @@ func (an *AppNode) handleReady(rd raft.Ready) (<-chan struct{}, bool) {
 
 	err := an.KvStore.db.Put(walEntries)
 	if err != nil {
-		log.Error(err)
+		log.Errorf("", err)
+		return
 	}
 
 	for _, id := range walEntriesid {
 		close(an.KvStore.monitorKV[id])
 	}
+	return false
 }
 
 func (an *AppNode) servePeerRaft() {

@@ -16,11 +16,6 @@ type SoftState struct {
 	RaftRole Role
 }
 
-type msgWithResult struct {
-	m      pb.Message
-	result chan error
-}
-
 type Peer struct {
 	ID      uint64
 	Context []byte
@@ -39,13 +34,12 @@ type Ready struct {
 type RaftNode struct {
 	Raft *Raft
 
-	propC    chan msgWithResult
-	recvC    chan pb.Message
-	confC    chan pb.ConfChange
-	tickC    chan struct{}
+	recvC  chan pb.Message
+	confC  chan pb.ConfChange
+	ReadyC chan Ready
+
 	done     chan struct{}
 	stop     chan struct{}
-	ReadyC   chan Ready
 	AdvanceC chan struct{}
 
 	prevSoftSt *SoftState
@@ -207,7 +201,7 @@ func (rn *RaftNode) HasReady() bool {
 	return false
 }
 
-func (rn *RaftNode) Advance(rd Ready) {
+func (rn *RaftNode) Advance() {
 	rn.AdvanceC = nil
 }
 
