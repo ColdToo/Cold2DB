@@ -49,13 +49,20 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		h.store.Propose([]byte(key), v, false, 0)
-
-		w.WriteHeader(http.StatusNoContent)
+		ok, err := h.store.Propose([]byte(key), v, false, 0)
+		if err != nil {
+			return
+		}
+		if ok {
+			w.WriteHeader(http.StatusNoContent)
+		}
 
 	case r.Method == DELETE:
 		//todo 支持批量delete
-		h.store.Propose([]byte(key), nil, true, 0)
+		propose, err := h.store.Propose([]byte(key), nil, true, 0)
+		if err != nil {
+			return
+		}
 
 		w.WriteHeader(http.StatusNoContent)
 

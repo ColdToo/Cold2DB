@@ -37,7 +37,6 @@ func NewKVStore(proposeC chan<- bytes.Buffer, commitC <-chan []*pb.Entry, errorC
 }
 
 func (s *KvStore) Lookup(key []byte) ([]byte, error) {
-	// 线性一致性读
 	val, err := s.db.Get(key)
 	if err != nil {
 		return nil, err
@@ -46,11 +45,7 @@ func (s *KvStore) Lookup(key []byte) ([]byte, error) {
 }
 
 func (s *KvStore) Scan(lowKey, highKey []byte) ([]byte, error) {
-	val, err := s.db.Scan(lowKey, highKey)
-	if err != nil {
-		return nil, err
-	}
-	return val, nil
+	return nil, nil
 }
 
 func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
@@ -83,34 +78,10 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 }
 
 func (s *KvStore) BatchPropose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
-	timeOutC := time.NewTimer(s.ReqTimeout)
-	uid := time.Now().UnixNano()
-	kv := &KV{
-		id:        uid,
-		Key:       key,
-		Value:     val,
-		ExpiredAt: expiredAt,
-	}
-	if delete {
-		kv.Type = logfile.TypeDelete
-	}
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(kv); err != nil {
-		return false, err
-	}
-	s.proposeC <- buf
-
-	sig := make(chan struct{})
-	s.monitorKV[uid] = sig
-
-	select {
-	case <-sig:
-		return true, nil
-	case <-timeOutC.C:
-		return false, errors.New("request time out")
-	}
+	return false, nil
 }
 
+// 通过CommitC通道将entry apply到db中
 func (s *KvStore) serveCommitC(commitC <-chan []*pb.Entry, errorC <-chan error) {
 	var kv KV
 	for entries := range commitC {
@@ -136,7 +107,7 @@ func (s *KvStore) serveCommitC(commitC <-chan []*pb.Entry, errorC <-chan error) 
 
 		err := s.db.Put(walEntries)
 		if err != nil {
-			log.Error(err)
+			log.Errorf("", err)
 			return
 		}
 
