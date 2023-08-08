@@ -57,8 +57,8 @@ func NewRaftNode(config *raftOpts) (*RaftNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	ReadyC := make(chan Ready, 0)
-	AdvanceC := make(chan struct{}, 0)
+	ReadyC := make(chan Ready)
+	AdvanceC := make(chan struct{})
 	return &RaftNode{Raft: raft, ReadyC: ReadyC, AdvanceC: AdvanceC}, nil
 }
 
@@ -113,37 +113,6 @@ func (rn *RaftNode) Propose(buffer bytes.Buffer) error {
 		Type:    pb.MsgProp,
 		From:    rn.Raft.id,
 		Entries: ents})
-}
-
-func (rn *RaftNode) TransferLeader(transferee uint64) {
-	_ = rn.Raft.Step(&pb.Message{Type: pb.MsgTransferLeader, From: transferee})
-}
-
-func (rn *RaftNode) ProposeConfChange(cc pb.ConfChange) error {
-	data, err := cc.Marshal()
-	if err != nil {
-		return err
-	}
-	ent := pb.Entry{Type: pb.EntryConfChange, Data: data}
-	return rn.Raft.Step(&pb.Message{
-		Type:    pb.MsgProp,
-		Entries: []*pb.Entry{&ent},
-	})
-}
-
-func (rn *RaftNode) ApplyConfChange(cc *pb.ConfChange) *pb.ConfState {
-	if cc.NodeId == None {
-		return &pb.ConfState{Nodes: nodes(rn.Raft)}
-	}
-	switch cc.ChangeType {
-	case pb.ConfChangeType_AddNode:
-		rn.Raft.addNode(cc.NodeId)
-	case pb.ConfChangeType_RemoveNode:
-		rn.Raft.removeNode(cc.NodeId)
-	default:
-		panic("unexpected conf type")
-	}
-	return &pb.ConfState{Nodes: nodes(rn.Raft)}
 }
 
 func (rn *RaftNode) GetProgress() map[uint64]Progress {
@@ -240,6 +209,28 @@ func (rn *RaftNode) HasReady() bool {
 
 func (rn *RaftNode) Advance(rd Ready) {
 	rn.AdvanceC = nil
+}
+
+//节点变更
+
+func (rn *RaftNode) TransferLeader(transferee uint64) {
+	_ = rn.Raft.Step(&pb.Message{Type: pb.MsgTransferLeader, From: transferee})
+}
+
+func (rn *RaftNode) ProposeConfChange(cc pb.ConfChange) error {
+	data, err := cc.Marshal()
+	if err != nil {
+		return err
+	}
+	ent := pb.Entry{Type: pb.EntryConfChange, Data: data}
+	return rn.Raft.Step(&pb.Message{
+		Type:    pb.MsgProp,
+		Entries: []*pb.Entry{&ent},
+	})
+}
+
+func (rn *RaftNode) ApplyConfChange(cc *pb.ConfChange) *pb.ConfState {
+	return nil
 }
 
 //网络层报告接口

@@ -91,19 +91,10 @@ func (an *AppNode) serveRaftNode() {
 		case <-ticker.C:
 			an.raftNode.Tick()
 
-		//当应用层通过 Node.Ready 方法接收到来自算法层的处理结果后，AppNode 需要将待commited的预写日志（Ready.Entries）进行持久化，
-		//需要调用通信模块为算法层执行消息发送动作（Ready.Messages），需要与数据状态机应用算法层已确认提交的预写日志.
-		//当以上步骤处理完成时，AppNode 会调用 Node.Advance 方法对算法层进行响应.
 		case rd := <-an.raftNode.ReadyC:
-			applyDoneC, ok := an.handleReady(rd)
-			if !ok {
-				an.stop()
-				return
-			}
+			an.handleReady(rd)
 
 			an.transport.Send(rd.Messages)
-
-			<-applyDoneC
 			//通知算法层进行下一轮
 			an.raftNode.Advance(raft.Ready{})
 
@@ -118,7 +109,6 @@ func (an *AppNode) serveRaftNode() {
 	}
 }
 
-// todo 一定需要proposeC和ConfC吗？为什么 kvstore无法调用app node的方法
 func (an *AppNode) servePropCAndConfC() {
 	confChangeCount := uint64(0)
 
@@ -162,7 +152,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (<-chan struct{}, bool) {
 		case pb.EntryConfChange:
 			var cc *pb.ConfChange
 			cc.Unmarshal(ents[i].Data)
-			an.confState = an.raftNode.ApplyConfChange(cc)
+			an.raftNode.ApplyConfChange(cc)
 			switch cc.Type {
 			case pb.ConfChangeAddNode:
 				if len(cc.Context) > 0 {
@@ -198,7 +188,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (<-chan struct{}, bool) {
 		walEntriesid = append(walEntriesid, kv.id)
 	}
 
-	err := an.KvStore.Put(walEntries)
+	err := an.KvStore.db.Put(walEntries)
 	if err != nil {
 		log.Error(err)
 	}
