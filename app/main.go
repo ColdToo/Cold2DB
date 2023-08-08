@@ -21,7 +21,7 @@ func main() {
 	defer close(proposeC)
 	confChangeC := make(chan pb.ConfChange)
 	defer close(confChangeC)
-	commitC := make(chan []pb.Entry)
+	commitC := make(chan []*pb.Entry)
 	defer close(commitC)
 	errorC := make(chan error)
 	defer close(errorC)

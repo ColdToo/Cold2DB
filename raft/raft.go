@@ -99,7 +99,6 @@ func NewRaft(c *raftOpts) (raft *Raft, err error) {
 	}
 	raft = new(Raft)
 	raft.id = c.ID
-	// 新节点默认为follower
 	raft.stepFunc = stepFollower
 	raft.Role = Follower
 	raft.electionTimeout = c.ElectionTick

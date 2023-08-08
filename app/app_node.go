@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/gob"
 	"github.com/ColdToo/Cold2DB/code"
+	"github.com/ColdToo/Cold2DB/db/logfile"
 	log "github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
@@ -41,7 +43,7 @@ type AppNode struct {
 }
 
 func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan bytes.Buffer,
-	confChangeC <-chan pb.ConfChange, commitC chan<- []pb.Entry, errorC chan<- error, kvStore *KvStore) {
+	confChangeC <-chan pb.ConfChange, commitC chan<- []*pb.Entry, errorC chan<- error, kvStore *KvStore) {
 	an := &AppNode{
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
@@ -71,14 +73,7 @@ func (an *AppNode) startRaftNode() {
 		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
 	}
 
-	// todo 从配置文件获取参数
-	c := &raft.Opts{
-		ID:            uint64(an.localId),
-		ElectionTick:  10,
-		HeartbeatTick: 1,
-		Storage:       an.Storage,
-	}
-	if c.Storage.IsRestartNode() {
+	if an.Storage.IsRestartNode() {
 		an.raftNode = raft.RestartRaftNode(c)
 	} else {
 		an.raftNode = raft.StartRaftNode(c, rpeers)
@@ -86,6 +81,7 @@ func (an *AppNode) startRaftNode() {
 }
 
 func (an *AppNode) serveRaftNode() {
+	//处理配置变更以及日志提议
 	go an.servePropCAndConfC()
 
 	//AppNode 会启动一个定时器，每个 tick 默认为 100ms，然后定时调用 Node.Tick 方法驱动算法层执行定时函数：
@@ -126,7 +122,6 @@ func (an *AppNode) serveRaftNode() {
 }
 
 func (an *AppNode) servePropCAndConfC() {
-	//处理配置变更以及日志提议
 	confChangeCount := uint64(0)
 
 	for an.proposeC != nil && an.confChangeC != nil {
@@ -150,6 +145,69 @@ func (an *AppNode) servePropCAndConfC() {
 	}
 
 	close(an.stopc)
+}
+
+func (an *AppNode) handleReady(rd raft.Ready) (<-chan struct{}, bool) {
+	ents := rd.CommittedEntries
+	entries := make([]*pb.Entry, len(ents))
+
+	//apply entries
+	for i, entry := range ents {
+		switch ents[i].Type {
+		case pb.EntryNormal:
+			if len(ents[i].Data) == 0 {
+				continue
+			}
+			entries = append(entries, entry)
+
+			//todo 节点变更
+		case pb.EntryConfChange:
+			var cc *pb.ConfChange
+			cc.Unmarshal(ents[i].Data)
+			an.confState = an.raftNode.ApplyConfChange(cc)
+			switch cc.Type {
+			case pb.ConfChangeAddNode:
+				if len(cc.Context) > 0 {
+					an.transport.AddPeer(types.ID(cc.NodeID), []string{string(cc.Context)})
+				}
+			case pb.ConfChangeRemoveNode:
+				if cc.NodeID == uint64(an.localId) {
+					return nil, false
+				}
+				an.transport.RemovePeer(types.ID(cc.NodeID))
+			}
+		}
+	}
+
+	var kv KV
+	walEntries := make([]logfile.WalEntry, len(entries))
+	walEntriesid := make([]int64, 0)
+	for _, entry := range entries {
+		err := gob.NewDecoder(bytes.NewBuffer(entry.Data)).Decode(&kv)
+		if err != nil {
+			log.Errorf("decode err:", err)
+			continue
+		}
+		walEntry := logfile.WalEntry{
+			Index:     entry.Index,
+			Term:      entry.Term,
+			Key:       kv.Key,
+			Value:     kv.Value,
+			ExpiredAt: kv.ExpiredAt,
+			Type:      kv.Type,
+		}
+		walEntries = append(walEntries, walEntry)
+		walEntriesid = append(walEntriesid, kv.id)
+	}
+
+	err := an.KvStore.Put(walEntries)
+	if err != nil {
+		log.Error(err)
+	}
+
+	for _, id := range walEntriesid {
+		close(an.KvStore.monitorKV[id])
+	}
 }
 
 func (an *AppNode) servePeerRaft() {
@@ -195,52 +253,6 @@ func (an *AppNode) listenAndServePeerRaft() {
 		log.Panic("raftexample: Failed to serve transport (%v)")
 	}
 	close(an.httpdonec)
-}
-
-func (an *AppNode) handleReady(rd raft.Ready) (<-chan struct{}, bool) {
-	ents := rd.CommittedEntries
-	entries := make([]*pb.Entry, len(ents))
-
-	//apply entries
-	for i, entry := range ents {
-		switch ents[i].Type {
-		case pb.EntryNormal:
-			if len(ents[i].Data) == 0 {
-				continue
-			}
-			entries = append(entries, entry)
-
-			//todo 节点变更
-		case pb.EntryConfChange:
-			var cc *pb.ConfChange
-			cc.Unmarshal(ents[i].Data)
-			an.confState = an.raftNode.ApplyConfChange(cc)
-			switch cc.Type {
-			case pb.ConfChangeAddNode:
-				if len(cc.Context) > 0 {
-					an.transport.AddPeer(types.ID(cc.NodeID), []string{string(cc.Context)})
-				}
-			case pb.ConfChangeRemoveNode:
-				if cc.NodeID == uint64(an.localId) {
-					return nil, false
-				}
-				an.transport.RemovePeer(types.ID(cc.NodeID))
-			}
-		}
-	}
-
-	var applyDoneC chan struct{}
-
-	if len(entries) > 0 {
-		applyDoneC = make(chan struct{}, 0)
-		select {
-		case an.commitC <- entries:
-		case <-an.stopc:
-			return nil, false
-		}
-	}
-
-	return applyDoneC, true
 }
 
 //  Rat网络层接口,网络层通过该接口与RaftNode交互

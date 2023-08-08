@@ -26,7 +26,7 @@ type KvStore struct {
 	ReqTimeout time.Duration
 }
 
-func NewKVStore(proposeC chan<- bytes.Buffer, commitC <-chan []pb.Entry, errorC <-chan error) *KvStore {
+func NewKVStore(proposeC chan<- bytes.Buffer, commitC <-chan []*pb.Entry, errorC <-chan error) *KvStore {
 	cold2DB, err := db.GetDB()
 	if err != nil {
 		log.Panicf("get db failed", err)
@@ -111,7 +111,7 @@ func (s *KvStore) BatchPropose(key, val []byte, delete bool, expiredAt int64) (b
 	}
 }
 
-func (s *KvStore) serveCommitC(commitC <-chan []pb.Entry, errorC <-chan error) {
+func (s *KvStore) serveCommitC(commitC <-chan []*pb.Entry, errorC <-chan error) {
 	var kv KV
 	for entries := range commitC {
 		walEntries := make([]logfile.WalEntry, len(entries))
