@@ -67,6 +67,7 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	s.proposeC <- buf
 
 	sig := make(chan struct{})
+	//监听该kv，当该kv被applied时返回客户端
 	s.monitorKV[uid] = sig
 
 	select {
@@ -81,7 +82,7 @@ func (s *KvStore) BatchPropose(key, val []byte, delete bool, expiredAt int64) (b
 	return false, nil
 }
 
-// 通过CommitC通道将entry apply到db中
+// todo CommitC的存在必要性？
 func (s *KvStore) serveCommitC(commitC <-chan []*pb.Entry, errorC <-chan error) {
 	var kv KV
 	for entries := range commitC {

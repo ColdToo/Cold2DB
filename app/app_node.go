@@ -22,13 +22,10 @@ type AppNode struct {
 	peersUrl []string
 	join     bool
 
-	confState     *pb.ConfState
-	snapshotIndex uint64
-	appliedIndex  uint64
+	KvStore *KvStore
+	Storage raft.Storage
 
 	raftNode  *raft.RaftNode
-	KvStore   *KvStore
-	Storage   raft.Storage
 	transport *transport.Transport
 
 	proposeC    <-chan bytes.Buffer  // 提议 (k,v)
@@ -121,6 +118,7 @@ func (an *AppNode) serveRaftNode() {
 	}
 }
 
+// todo 一定需要proposeC和ConfC吗？为什么 kvstore无法调用app node的方法
 func (an *AppNode) servePropCAndConfC() {
 	confChangeCount := uint64(0)
 

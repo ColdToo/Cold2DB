@@ -59,12 +59,13 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	case r.Method == DELETE:
 		//todo 支持批量delete
-		propose, err := h.store.Propose([]byte(key), nil, true, 0)
+		ok, err := h.store.Propose([]byte(key), nil, true, 0)
 		if err != nil {
 			return
 		}
-
-		w.WriteHeader(http.StatusNoContent)
+		if ok {
+			w.WriteHeader(http.StatusNoContent)
+		}
 
 		//更改节点配置相关
 	case r.Method == POST:
