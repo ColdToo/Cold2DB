@@ -34,13 +34,14 @@ type Ready struct {
 type RaftNode struct {
 	Raft *Raft
 
-	recvC  chan pb.Message
-	confC  chan pb.ConfChange
-	ReadyC chan Ready
+	recvC chan pb.Message
+	confC chan pb.ConfChange
 
-	done     chan struct{}
-	stop     chan struct{}
+	ReadyC   chan Ready
 	AdvanceC chan struct{}
+
+	done chan struct{}
+	stop chan struct{}
 
 	prevSoftSt *SoftState
 	prevHardSt pb.HardState
@@ -124,8 +125,6 @@ func (rn *RaftNode) run() {
 	var advanceC chan struct{}
 	var rd Ready
 
-	r := rn.Raft
-
 	for {
 		// 应用层通过将advanceC置为nil来标识
 		if advanceC != nil {
@@ -136,10 +135,10 @@ func (rn *RaftNode) run() {
 		}
 
 		select {
-		//从网络层获取要处理的message
+		// todo 网络层获取要处理的message,网络层应该直接通过Propose调用，还是通过该channel进行异步调用？
 		case m := <-rn.recvC:
-			if pr := r.Progress[m.From]; pr != nil {
-				err := r.Step(&m)
+			if pr := rn.Raft.Progress[m.From]; pr != nil {
+				err := rn.Raft.Step(&m)
 				if err != nil {
 					log.Errorf("", err)
 				}

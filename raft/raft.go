@@ -549,18 +549,10 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	}
 
 	r.becomeFollower(m.Term, m.From)
-	//将leader已经committed的所有entry apply到memtable中
-	unApplied, err := r.RaftLog.Entries(r.RaftLog.applied, m.Commit)
-	if err != nil {
-		//todo error
+	// todo 根据leader的committed位置挪动本地节点committed的位置
+	if r.RaftLog.committed > m.Commit {
+		r.RaftLog.committed = m.Commit
 	}
-
-	applied, err := r.RaftLog.ApplyEntries(unApplied)
-	if err != nil {
-		//todo
-	}
-
-	r.RaftLog.applied = applied
 
 	r.sendHeartbeatResponse(m.From, false)
 }
