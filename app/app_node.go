@@ -188,7 +188,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 		walEntriesid = append(walEntriesid, kv.id)
 	}
 
-	err := an.KvStore.db.Put(walEntries)
+	err = an.KvStore.db.Put(walEntries)
 	if err != nil {
 		log.Errorf("", err)
 		return
@@ -197,7 +197,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 	for _, id := range walEntriesid {
 		close(an.KvStore.monitorKV[id])
 	}
-	return false
+	return nil
 }
 
 func (an *AppNode) servePeerRaft() {
