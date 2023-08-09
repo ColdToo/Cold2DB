@@ -145,8 +145,8 @@ func (db *Cold2DB) SetHardState(st pb.HardState) error {
 	return nil
 }
 
-func (db *Cold2DB) Entries(lo, hi uint64) ([]pb.Entry, error) {
-	return nil, nil
+func (db *Cold2DB) Entries(lo, hi uint64) []*pb.Entry {
+	return nil
 }
 
 func (db *Cold2DB) Term(i uint64) (uint64, error) {

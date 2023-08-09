@@ -1,14 +1,15 @@
 package raft
 
 import (
+	"errors"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
 // log structure
 //
-//	snapshot/first.................. applied............ committed...............
+//	snapshot/first.................. applied............ committed.............last
 //	--------|--------mem-table----------|--------------memory entries-----------|
-//	                                                      entries
+//	                   wal
 
 type RaftLog struct {
 	first uint64
@@ -59,7 +60,7 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 			return term, err
 		}
 	}
-	//todo 不应该走到这个分支
+
 	return 0, ErrUnavailable
 }
 
@@ -68,5 +69,29 @@ func (l *RaftLog) AppendEntries(ents []*pb.Entry) {
 }
 
 func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
+	if low > high {
+		return nil, errors.New("low should not > high")
+	}
+
+	if low < l.first {
+		//这条entries已经被压缩了无法返回
+		return nil, errors.New("the low is < first log index")
+	}
+
+	if low > l.applied {
+		return l.entries[low : high+1], nil
+	}
+
+	if high < l.applied {
+		return l.storage.Entries(low, high), nil
+	}
+
+	if low < l.applied && high > l.applied {
+		entries := l.storage.Entries(low, l.applied)
+		ents = append(ents, entries...)
+		entries = l.entries[l.applied+1 : high]
+		ents = append(ents, entries...)
+	}
+
 	return
 }

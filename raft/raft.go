@@ -102,6 +102,7 @@ func NewRaft(c *RaftOpts) (raft *Raft, err error) {
 		return
 	}
 	raft = new(Raft)
+	raft.RaftLog, err = newRaftLog(c.Storage)
 	raft.id = c.ID
 	raft.stepFunc = stepFollower
 	raft.Role = Follower

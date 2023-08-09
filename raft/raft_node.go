@@ -71,8 +71,6 @@ func StartRaftNode(c *RaftOpts, peers []Peer) *RaftNode {
 
 func RestartRaftNode(c *RaftOpts) *RaftNode {
 	rn, err := NewRaftNode(c)
-	//从storage恢复一些hard state
-	rn.Raft.RaftLog.applied, _ = c.Storage.AppliedIndex()
 	if err != nil {
 		panic(err)
 	}
@@ -204,10 +202,8 @@ func (rn *RaftNode) HasReady() bool {
 }
 
 func (rn *RaftNode) Advance() {
-	select {
-	case rn.AdvanceC <- struct{}{}:
-	case <-rn.done:
-	}
+	//todo appnode处理完一次后需要更新raftlog的first applied
+	rn.AdvanceC <- struct{}{}
 }
 
 //节点变更
