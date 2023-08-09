@@ -523,22 +523,9 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		return
 	}
 
-	//todo 不会有冲突的日志,直接append
 	if len(m.Entries) > 0 {
-		r.RaftLog.committed = r.RaftLog.AppendEntries(m.Entries)
+		r.RaftLog.AppendEntries(m.Entries)
 	}
-
-	//将leader已经committed的所有entry apply到memtable中
-	unApplied, err := r.RaftLog.Entries(r.RaftLog.applied, m.Commit)
-	if err != nil {
-		//todo error
-	}
-
-	applied, err := r.RaftLog.ApplyEntries(unApplied)
-	if err != nil {
-		//todo
-	}
-	r.RaftLog.applied = applied
 
 	r.sendAppendResponse(m.From, false)
 }
