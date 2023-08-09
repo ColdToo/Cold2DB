@@ -7,7 +7,6 @@ import (
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
-	"github.com/ColdToo/Cold2DB/pb"
 	"time"
 )
 
@@ -26,13 +25,12 @@ type KvStore struct {
 	ReqTimeout time.Duration
 }
 
-func NewKVStore(proposeC chan<- bytes.Buffer, commitC <-chan []*pb.Entry, errorC <-chan error) *KvStore {
+func NewKVStore(proposeC chan<- bytes.Buffer) *KvStore {
 	cold2DB, err := db.GetDB()
 	if err != nil {
 		log.Panicf("get db failed", err)
 	}
 	s := &KvStore{db: cold2DB, proposeC: proposeC}
-	go s.serveCommitC(commitC, errorC)
 	return s
 }
 
@@ -80,45 +78,4 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 
 func (s *KvStore) BatchPropose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
 	return false, nil
-}
-
-// todo CommitC的存在必要性？
-func (s *KvStore) serveCommitC(commitC <-chan []*pb.Entry, errorC <-chan error) {
-	var kv KV
-	for entries := range commitC {
-		walEntries := make([]logfile.WalEntry, len(entries))
-		walEntriesid := make([]int64, 0)
-		for _, entry := range entries {
-			err := gob.NewDecoder(bytes.NewBuffer(entry.Data)).Decode(&kv)
-			if err != nil {
-				log.Errorf("decode err:", err)
-				continue
-			}
-			walEntry := logfile.WalEntry{
-				Index:     entry.Index,
-				Term:      entry.Term,
-				Key:       kv.Key,
-				Value:     kv.Value,
-				ExpiredAt: kv.ExpiredAt,
-				Type:      kv.Type,
-			}
-			walEntries = append(walEntries, walEntry)
-			walEntriesid = append(walEntriesid, kv.id)
-		}
-
-		err := s.db.Put(walEntries)
-		if err != nil {
-			log.Errorf("", err)
-			return
-		}
-
-		for _, id := range walEntriesid {
-			close(s.monitorKV[id])
-		}
-	}
-
-	if err, ok := <-errorC; ok {
-		log.Errorf("found err exit serveCommitC:", err)
-		return
-	}
 }

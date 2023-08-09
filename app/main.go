@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"flag"
+	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/pb"
 	"strings"
 )
@@ -21,12 +22,11 @@ func main() {
 	defer close(proposeC)
 	confChangeC := make(chan pb.ConfChange)
 	defer close(confChangeC)
-	commitC := make(chan []*pb.Entry)
-	defer close(commitC)
 	errorC := make(chan error)
 	defer close(errorC)
+	cold2DB, err := db.GetDB()
 
-	kvStore := NewKVStore(proposeC, commitC, errorC)
-	StartAppNode(*localId, strings.Split(*cluster, ","), *join, proposeC, confChangeC, commitC, errorC, kvStore)
+	kvStore := NewKVStore(proposeC, errorC)
+	StartAppNode(*localId, strings.Split(*cluster, ","), *join, proposeC, confChangeC, errorC)
 	ServeHttpKVAPI(kvStore, *kvport, confChangeC, errorC)
 }

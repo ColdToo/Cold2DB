@@ -33,7 +33,6 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == GET:
-		// todo 支持 scan
 		if v, err := h.store.Lookup([]byte(key)); err != nil {
 			w.Write(v)
 		} else {
@@ -41,7 +40,6 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case r.Method == PUT:
-		// todo 支持批量put
 		v, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			log.Printf("Failed to read on PUT (%v)\n", err)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/gob"
 	"github.com/ColdToo/Cold2DB/code"
+	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	log "github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -22,9 +23,7 @@ type AppNode struct {
 	peersUrl []string
 	join     bool
 
-	KvStore *KvStore
-	Storage raft.Storage
-
+	db        *db.Cold2DB
 	raftNode  *raft.RaftNode
 	transport *transport.Transport
 
@@ -40,11 +39,10 @@ type AppNode struct {
 }
 
 func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan bytes.Buffer,
-	confChangeC <-chan pb.ConfChange, commitC chan<- []*pb.Entry, errorC chan<- error, kvStore *KvStore) {
+	confChangeC <-chan pb.ConfChange, errorC chan<- error) {
 	an := &AppNode{
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
-		commitC:     commitC,
 		errorC:      errorC,
 		localId:     localId,
 		peersUrl:    peersUrl,
@@ -52,7 +50,6 @@ func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan byt
 		stopc:       make(chan struct{}),
 		httpstopc:   make(chan struct{}),
 		httpdonec:   make(chan struct{}),
-		KvStore:     kvStore,
 	}
 	an.startRaftNode()
 
