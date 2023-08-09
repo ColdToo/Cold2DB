@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db/logfile"
+	"github.com/ColdToo/Cold2DB/domain"
 	log "github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
@@ -68,10 +69,15 @@ func (an *AppNode) startRaftNode() {
 		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
 	}
 
+	cfg := domain.GetConfig()
+	opts := &raft.RaftOpts{ID: uint64(an.localId),
+		Storage:       an.kvStore.db,
+		ElectionTick:  cfg.RaftConfig.ElectionTick,
+		HeartbeatTick: cfg.RaftConfig.ElectionTick}
 	if an.IsRestartNode() {
-		an.raftNode = raft.RestartRaftNode(c)
+		an.raftNode = raft.RestartRaftNode(opts)
 	} else {
-		an.raftNode = raft.StartRaftNode(c, rpeers)
+		an.raftNode = raft.StartRaftNode(opts, rpeers)
 	}
 }
 

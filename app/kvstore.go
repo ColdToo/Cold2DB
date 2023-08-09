@@ -19,7 +19,7 @@ type KV struct {
 }
 
 type KvStore struct {
-	db         db.DB
+	db         *db.Cold2DB
 	proposeC   chan<- bytes.Buffer     // channel for proposing updates
 	monitorKV  map[int64]chan struct{} //todo 使用这方式会不会导致内存过大
 	ReqTimeout time.Duration

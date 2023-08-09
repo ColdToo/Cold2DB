@@ -19,15 +19,19 @@ const (
 	Candidate
 )
 
-type raftOpts struct {
+type RaftConfig struct {
+	ElectionTick int
+
+	HeartbeatTick int
+}
+
+type RaftOpts struct {
 	// local raft id
 	ID uint64
 
-	peers []uint64 //peers ip
+	//peers []uint64 //peers ip
 
 	Storage Storage
-
-	Applied uint64
 
 	ElectionTick int
 
@@ -93,7 +97,7 @@ type Progress struct {
 	Match, Next uint64
 }
 
-func NewRaft(c *raftOpts) (raft *Raft, err error) {
+func NewRaft(c *RaftOpts) (raft *Raft, err error) {
 	if err != nil {
 		return
 	}

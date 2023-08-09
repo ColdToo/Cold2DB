@@ -41,6 +41,6 @@ func InitViper() *viper.Viper {
 	return v
 }
 
-func configPreCheck() {
-
+func GetConfig() *Config {
+	return Conf
 }

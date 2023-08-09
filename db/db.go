@@ -43,7 +43,7 @@ type Cold2DB struct {
 	snapShotter SnapShotter
 }
 
-func GetDB() (DB, error) {
+func GetDB() (*Cold2DB, error) {
 	if Cold2 != nil {
 		return Cold2, nil
 	} else {
