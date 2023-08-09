@@ -105,7 +105,7 @@ func (db *Cold2DB) CompactionAndFlush() {
 // kv
 
 func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
-	flag, val := db.activeMem.get(key)
+	flag, val := db.memManager.activeMem.get(key)
 	if !flag {
 		return nil, errors.New("the key is not exist")
 	}
@@ -122,12 +122,12 @@ func (db *Cold2DB) PutBatch(entries []logfile.WalEntry) (err error) {
 
 func (db *Cold2DB) Put(entries []logfile.WalEntry) (err error) {
 	if len(entries) == 1 {
-		err := db.activeMem.put(entries[0])
+		err := db.memManager.activeMem.put(entries[0])
 		if err != nil {
 			return err
 		}
 	} else {
-		err := db.activeMem.putBatch(entries)
+		err := db.memManager.activeMem.putBatch(entries)
 		if err != nil {
 			return err
 		}
