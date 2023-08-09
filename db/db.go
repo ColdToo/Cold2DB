@@ -18,6 +18,7 @@ type DB interface {
 	Get(key []byte) (val []byte, err error)
 	Put(entries []logfile.WalEntry) (err error)
 	Scan(lowKey []byte, highKey []byte) (err error)
+	IsRestartNode() bool
 }
 
 type Cold2DB struct {
@@ -42,7 +43,7 @@ type Cold2DB struct {
 	snapShotter SnapShotter
 }
 
-func GetDB() (*Cold2DB, error) {
+func GetDB() (DB, error) {
 	if Cold2 != nil {
 		return Cold2, nil
 	} else {
@@ -137,7 +138,7 @@ func (db *Cold2DB) Put(entries []logfile.WalEntry) (err error) {
 // raft
 
 func (db *Cold2DB) InitialState() (pb.HardState, pb.ConfState, error) {
-	return
+	return pb.HardState{}, pb.ConfState{}, nil
 }
 
 func (db *Cold2DB) SetHardState(st pb.HardState) error {

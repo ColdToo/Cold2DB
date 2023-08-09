@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/gob"
 	"github.com/ColdToo/Cold2DB/code"
-	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	log "github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -23,13 +22,12 @@ type AppNode struct {
 	peersUrl []string
 	join     bool
 
-	db        *db.Cold2DB
+	kvStore   *KvStore
 	raftNode  *raft.RaftNode
 	transport *transport.Transport
 
 	proposeC    <-chan bytes.Buffer  // 提议 (k,v)
 	confChangeC <-chan pb.ConfChange // 提议更改配置文件
-	commitC     chan<- []*pb.Entry   // 提交 (k,v)
 	errorC      chan<- error         // errors from raft session
 	stopc       chan struct{}        // signals proposal channel closed
 	httpstopc   chan struct{}        // signals http server to shutdown
@@ -39,7 +37,7 @@ type AppNode struct {
 }
 
 func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan bytes.Buffer,
-	confChangeC <-chan pb.ConfChange, errorC chan<- error) {
+	confChangeC <-chan pb.ConfChange, errorC chan<- error, kvStore *KvStore) {
 	an := &AppNode{
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
@@ -50,9 +48,12 @@ func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan byt
 		stopc:       make(chan struct{}),
 		httpstopc:   make(chan struct{}),
 		httpdonec:   make(chan struct{}),
+		kvStore:     kvStore,
 	}
 	an.startRaftNode()
 
+	//处理配置变更以及日志提议
+	go an.servePropCAndConfC()
 	// 启动一个goroutine,处理appLayer与raftLayer的交互
 	go an.serveRaftNode()
 	// 启动一个goroutine,监听当前节点与集群中其他节点之间的网络连接
@@ -67,7 +68,7 @@ func (an *AppNode) startRaftNode() {
 		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
 	}
 
-	if an.Storage.IsRestartNode() {
+	if an.IsRestartNode() {
 		an.raftNode = raft.RestartRaftNode(c)
 	} else {
 		an.raftNode = raft.StartRaftNode(c, rpeers)
@@ -75,10 +76,6 @@ func (an *AppNode) startRaftNode() {
 }
 
 func (an *AppNode) serveRaftNode() {
-	//处理配置变更以及日志提议
-	go an.servePropCAndConfC()
-
-	//AppNode 会启动一个定时器，每个 tick 默认为 100ms，然后定时调用 Node.Tick 方法驱动算法层执行定时函数：
 	//todo 定时器应该做成可配置选项
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -89,7 +86,10 @@ func (an *AppNode) serveRaftNode() {
 			an.raftNode.Tick()
 
 		case rd := <-an.raftNode.ReadyC:
-			an.handleReady(rd)
+			err := an.handleReady(rd)
+			if err != nil {
+				log.Errorf("", err)
+			}
 
 			an.transport.Send(rd.Messages)
 			//通知算法层进行下一轮
@@ -185,14 +185,14 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 		walEntriesid = append(walEntriesid, kv.id)
 	}
 
-	err = an.KvStore.db.Put(walEntries)
+	err = an.kvStore.db.Put(walEntries)
 	if err != nil {
 		log.Errorf("", err)
 		return
 	}
 
 	for _, id := range walEntriesid {
-		close(an.KvStore.monitorKV[id])
+		close(an.kvStore.monitorKV[id])
 	}
 	return nil
 }
@@ -276,4 +276,8 @@ func (an *AppNode) writeError(err error) {
 	an.errorC <- err
 	close(an.errorC)
 	an.raftNode.Stop()
+}
+
+func (an *AppNode) IsRestartNode() (flag bool) {
+	return an.kvStore.db.IsRestartNode()
 }
