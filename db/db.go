@@ -19,6 +19,7 @@ type DB interface {
 	Put(entries []logfile.WalEntry) (err error)
 	Scan(lowKey []byte, highKey []byte) (err error)
 	IsRestartNode() bool
+	SetHardState(st pb.HardState) error
 }
 
 type Cold2DB struct {
@@ -102,7 +103,7 @@ func (db *Cold2DB) CompactionAndFlush() {
 
 }
 
-// kv
+// raft write interface
 
 func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
 	flag, val := db.memManager.activeMem.get(key)
@@ -135,36 +136,6 @@ func (db *Cold2DB) Put(entries []logfile.WalEntry) (err error) {
 	return
 }
 
-// raft
-
-func (db *Cold2DB) InitialState() (pb.HardState, pb.ConfState, error) {
-	return pb.HardState{}, pb.ConfState{}, nil
-}
-
-func (db *Cold2DB) SetHardState(st pb.HardState) error {
-	return nil
-}
-
-func (db *Cold2DB) Entries(lo, hi uint64) []*pb.Entry {
-	return nil
-}
-
-func (db *Cold2DB) Term(i uint64) (uint64, error) {
-	return 0, nil
-}
-
-func (db *Cold2DB) AppliedIndex() (uint64, error) {
-	return 0, nil
-}
-
-func (db *Cold2DB) FirstIndex() (uint64, error) {
-	return 0, nil
-}
-
-func (db *Cold2DB) GetSnapshot() (pb.Snapshot, error) {
-	return pb.Snapshot{}, nil
-}
-
 func (db *Cold2DB) IsRestartNode() bool {
 	DirEntries, err := os.ReadDir(db.memManager.walDirPath)
 	if err != nil {
@@ -175,4 +146,34 @@ func (db *Cold2DB) IsRestartNode() bool {
 		return true
 	}
 	return false
+}
+
+func (db *Cold2DB) SetHardState(st pb.HardState) error {
+	return nil
+}
+
+// raft read interface
+
+func (db *Cold2DB) GetHardState() (pb.HardState, pb.ConfState, error) {
+	return pb.HardState{}, pb.ConfState{}, nil
+}
+
+func (db *Cold2DB) Entries(lo, hi uint64) []*pb.Entry {
+	return nil
+}
+
+func (db *Cold2DB) Term(i uint64) (uint64, error) {
+	return 0, nil
+}
+
+func (db *Cold2DB) AppliedIndex() uint64 {
+	return 0
+}
+
+func (db *Cold2DB) FirstIndex() uint64 {
+	return 0
+}
+
+func (db *Cold2DB) GetSnapshot() (pb.Snapshot, error) {
+	return pb.Snapshot{}, nil
 }
