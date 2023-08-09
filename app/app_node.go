@@ -92,7 +92,8 @@ func (an *AppNode) serveRaftNode() {
 			}
 
 			an.transport.Send(rd.Messages)
-			//通知算法层进行下一轮
+
+			//通知raftNode本轮ready已经处理完可以进行下一轮处理
 			an.raftNode.Advance()
 
 		case err := <-an.transport.ErrorC:

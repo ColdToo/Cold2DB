@@ -126,7 +126,7 @@ func (rn *RaftNode) run() {
 	var rd Ready
 
 	for {
-		// 应用层通过将advanceC置为nil来标识
+		// 应用层通过将advanceC置为nil来标识,如果advanceC
 		if advanceC != nil {
 			readyC = nil
 		} else if rn.HasReady() {
@@ -147,12 +147,14 @@ func (rn *RaftNode) run() {
 		case readyC <- rd:
 			advanceC = rn.AdvanceC
 
+		case <-advanceC:
+			advanceC = nil
+
 		case <-rn.stop:
 			close(rn.done)
 			return
 		}
 	}
-
 }
 
 func (rn *RaftNode) newReady() Ready {
@@ -201,7 +203,10 @@ func (rn *RaftNode) HasReady() bool {
 }
 
 func (rn *RaftNode) Advance() {
-	rn.AdvanceC = nil
+	select {
+	case rn.AdvanceC <- struct{}{}:
+	case <-rn.done:
+	}
 }
 
 //节点变更
