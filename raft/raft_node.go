@@ -120,15 +120,14 @@ func (rn *RaftNode) newReady() Ready {
 	}
 
 	hardState := pb.HardState{
-		Term:   rn.Raft.Term,
-		Vote:   rn.Raft.VoteFor,
-		Commit: rn.Raft.RaftLog.committed,
+		Term:    rn.Raft.Term,
+		Vote:    rn.Raft.VoteFor,
+		Applied: rn.Raft.RaftLog.applied,
 	}
 	if !isHardStateEqual(rn.prevHardSt, hardState) {
 		rd.HardState = hardState
 	}
 
-	//todo 此时会不会有协程写入数据到msgs？
 	rn.Raft.msgs = make([]pb.Message, 0)
 	return rd
 }
@@ -140,6 +139,7 @@ func (rn *RaftNode) HasReady() bool {
 		Applied: rn.Raft.RaftLog.applied,
 	}
 
+	//硬状态有改变、有待applied的entries、有待发送给其他节点的msg
 	if !IsEmptyHardState(hardState) && !isHardStateEqual(rn.prevHardSt, hardState) {
 		return true
 	}
