@@ -27,18 +27,9 @@ type RaftLog struct {
 }
 
 func newRaftLog(storage Storage) (*RaftLog, error) {
-	firstIndex, err := storage.FirstIndex()
-	if err != nil {
-
-		return nil, err
-	}
-	appliedIndex, err := storage.AppliedIndex()
-	if err != nil {
-		return nil, err
-	}
-
+	firstIndex := storage.FirstIndex()
+	appliedIndex := storage.AppliedIndex()
 	emptyEntsS := make([]*pb.Entry, 0)
-
 	return &RaftLog{storage: storage, first: firstIndex, applied: appliedIndex, entries: emptyEntsS}, nil
 }
 
@@ -94,4 +85,9 @@ func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
 	}
 
 	return
+}
+
+func (l *RaftLog) RefreshFirstAndAppliedIndex() {
+	l.first = l.storage.FirstIndex()
+	l.applied = l.storage.AppliedIndex()
 }

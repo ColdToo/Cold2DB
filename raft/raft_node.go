@@ -70,6 +70,7 @@ func StartRaftNode(c *RaftOpts, peers []Peer) *RaftNode {
 }
 
 func RestartRaftNode(c *RaftOpts) *RaftNode {
+	//todo restart和start的区别是什么
 	rn, err := NewRaftNode(c)
 	if err != nil {
 		panic(err)
@@ -83,7 +84,6 @@ func (rn *RaftNode) Tick() {
 }
 
 func (rn *RaftNode) Step(m *pb.Message) error {
-	// ignore unexpected local messages receiving over network
 	if IsLocalMsg(m.Type) {
 		return ErrStepLocalMsg
 	}
@@ -93,12 +93,7 @@ func (rn *RaftNode) Step(m *pb.Message) error {
 	return ErrStepPeerNotFound
 }
 
-func (rn *RaftNode) Campaign() error {
-	return rn.Raft.Step(&pb.Message{
-		Type: pb.MsgHup,
-	})
-}
-
+// Propose 用于kv请求propose
 func (rn *RaftNode) Propose(buffer bytes.Buffer) error {
 	ent := pb.Entry{Data: buffer.Bytes()}
 	ents := make([]*pb.Entry, 0)
@@ -107,53 +102,6 @@ func (rn *RaftNode) Propose(buffer bytes.Buffer) error {
 		Type:    pb.MsgProp,
 		From:    rn.Raft.id,
 		Entries: ents})
-}
-
-func (rn *RaftNode) GetProgress() map[uint64]Progress {
-	prs := make(map[uint64]Progress)
-	if rn.Raft.Role == Leader {
-		for id, p := range rn.Raft.Progress {
-			prs[id] = *p
-		}
-	}
-	return prs
-}
-
-func (rn *RaftNode) run() {
-	var readyC chan Ready
-	var advanceC chan struct{}
-	var rd Ready
-
-	for {
-		// 应用层通过将advanceC置为nil来标识,如果advanceC
-		if advanceC != nil {
-			readyC = nil
-		} else if rn.HasReady() {
-			rd = rn.newReady()
-			readyC = rn.ReadyC
-		}
-
-		select {
-		// todo 网络层获取要处理的message,网络层应该直接通过Propose调用，还是通过该channel进行异步调用？
-		case m := <-rn.recvC:
-			if pr := rn.Raft.Progress[m.From]; pr != nil {
-				err := rn.Raft.Step(&m)
-				if err != nil {
-					log.Errorf("", err)
-				}
-			}
-
-		case readyC <- rd:
-			advanceC = rn.AdvanceC
-
-		case <-advanceC:
-			advanceC = nil
-
-		case <-rn.stop:
-			close(rn.done)
-			return
-		}
-	}
 }
 
 func (rn *RaftNode) newReady() Ready {
@@ -202,8 +150,53 @@ func (rn *RaftNode) HasReady() bool {
 }
 
 func (rn *RaftNode) Advance() {
-	//todo appnode处理完一次后需要更新raftlog的first applied
+	//todo  appnode处理完一次后需要更新raftlog的first applied
+	rn.Raft.RaftLog.RefreshFirstAndAppliedIndex()
 	rn.AdvanceC <- struct{}{}
+}
+
+func (rn *RaftNode) run() {
+	var readyC chan Ready
+	var advanceC chan struct{}
+	var rd Ready
+
+	for {
+		// 应用层通过将advanceC置为nil来标识,如果advanceC
+		if advanceC != nil {
+			readyC = nil
+		} else if rn.HasReady() {
+			rd = rn.newReady()
+			readyC = rn.ReadyC
+		}
+
+		select {
+		// todo 网络层获取要处理的message,网络层应该直接通过Propose调用，还是通过该channel进行异步调用？
+		case m := <-rn.recvC:
+			if pr := rn.Raft.Progress[m.From]; pr != nil {
+				err := rn.Raft.Step(&m)
+				if err != nil {
+					log.Errorf("", err)
+				}
+			}
+
+		case readyC <- rd:
+			advanceC = rn.AdvanceC
+
+		case <-advanceC:
+			advanceC = nil
+
+		case <-rn.stop:
+			close(rn.done)
+			return
+		}
+	}
+}
+
+// Campaign todo leaderTransfree
+func (rn *RaftNode) Campaign() error {
+	return rn.Raft.Step(&pb.Message{
+		Type: pb.MsgHup,
+	})
 }
 
 //节点变更
