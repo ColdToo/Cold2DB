@@ -265,14 +265,12 @@ func (an *AppNode) stopHTTP() {
 
 func (an *AppNode) stop() {
 	an.stopHTTP()
-	close(an.commitC)
 	close(an.errorC)
 	an.raftNode.Stop()
 }
 
 func (an *AppNode) writeError(err error) {
 	an.stopHTTP()
-	close(an.commitC)
 	an.errorC <- err
 	close(an.errorC)
 	an.raftNode.Stop()
