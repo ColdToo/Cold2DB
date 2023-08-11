@@ -110,6 +110,7 @@ func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
 	if !flag {
 		return nil, errors.New("the key is not exist")
 	}
+	//todo 若memtable找不到则查询索引
 	return
 }
 

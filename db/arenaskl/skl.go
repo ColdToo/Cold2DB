@@ -93,6 +93,7 @@ func (s *Skiplist) Arena() *Arena { return s.arena }
 
 func (s *Skiplist) Size() uint32 { return s.arena.Size() }
 
+// 初始化一个新的key
 func (s *Skiplist) newNode(key, val []byte) (nd *node, height uint32, err error) {
 	height = s.randomHeight()
 	nd, err = newNode(s.arena, height)

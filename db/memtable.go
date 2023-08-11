@@ -211,7 +211,7 @@ func (mt *memtable) put(entry logfile.WalEntry) error {
 	if err := mt.syncWAL(); err != nil {
 		return err
 	}
-	go mt.putInMemtable(entry)
+	mt.putInMemtable(entry)
 	return nil
 }
 
@@ -227,7 +227,7 @@ func (mt *memtable) putBatch(entries []logfile.WalEntry) error {
 	}
 
 	// todo 写入WAL就返回还是写入Memtable再返回？
-	go mt.putInMemtableBatch(entries)
+	mt.putInMemtableBatch(entries)
 	return nil
 }
 
@@ -236,11 +236,11 @@ func (mt *memtable) putInMemtable(entry logfile.WalEntry) {
 	mvBuf := mv.encode()
 	err := mt.sklIter.PutOrUpdate(entry.Key, mvBuf)
 	if err != nil {
-		log.Error(err)
+		log.Errorf("", err)
 		return
 	}
 	if err != nil {
-		log.Error(err)
+		log.Errorf("", err)
 	}
 }
 
@@ -257,14 +257,14 @@ func (mt *memtable) get(key []byte) (bool, []byte) {
 		return false, nil
 	}
 
-	//根据判断多个value选取最新的value返回
-	valuse := mt.sklIter.Value()
-	mv := decodeMemValue(mt.sklIter.Value())
-	// ignore deleted key.
-	if mv.typ == byte(logfile.TypeDelete) {
+	//选取index最大的value返回
+	values := mt.sklIter.Value()
+	mv := decodeMemValue(values[len(values)-1])
+
+	if mv.typ == logfile.TypeDelete {
 		return true, nil
 	}
-	// ignore expired key.
+
 	if mv.expiredAt > 0 && mv.expiredAt <= time.Now().Unix() {
 		return true, nil
 	}

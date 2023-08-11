@@ -32,19 +32,6 @@ func (it *Iterator) Init(list *Skiplist) {
 
 func (it *Iterator) Valid() bool { return it.nd != nil }
 
-func (it *Iterator) Key() []byte {
-	return it.nd.getKey(it.arena)
-}
-
-func (it *Iterator) Value() (values [][]byte) {
-	for _, val := range it.value {
-		valOffset, valSize := decodeValue(val)
-		v := it.arena.GetBytes(valOffset, valSize)
-		values = append(values, v)
-	}
-	return
-}
-
 func (it *Iterator) Next() {
 	next := it.list.getNext(it.nd, 0)
 	it.setNode(next, false)
@@ -53,6 +40,101 @@ func (it *Iterator) Next() {
 func (it *Iterator) Prev() {
 	prev := it.list.getPrev(it.nd, 0)
 	it.setNode(prev, true)
+}
+
+// SeekToFirst move to head node
+func (it *Iterator) SeekToFirst() {
+	it.setNode(it.list.getNext(it.list.head, 0), false)
+}
+
+// SeekToLast move to tail node
+func (it *Iterator) SeekToLast() {
+	it.setNode(it.list.getPrev(it.list.tail, 0), true)
+}
+
+func (it *Iterator) setNode(nd *node, reverse bool) bool {
+	success := false
+	if nd != nil {
+		it.value = nd.value
+		it.nd = nd
+		success = true
+	}
+	return success
+}
+
+func (it *Iterator) seekForSplice(key []byte, spl *[maxHeight]splice) (found bool) {
+	var prev, next *node
+	level := int(it.list.Height() - 1)
+	prev = it.list.head
+
+	//从最高层的头节点开始找key
+	for {
+		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
+		if next == nil {
+			next = it.list.tail
+		}
+		// build spl
+		spl[level].init(prev, next)
+		if level == 0 {
+			break
+		}
+		level--
+	}
+	return
+}
+
+func (it *Iterator) seekForBaseSplice(key []byte) (prev, next *node, found bool) {
+	level := int(it.list.Height() - 1)
+
+	prev = it.list.head
+	//从最高层的头节点开始找key
+	for {
+		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
+		if found {
+			break
+		}
+		if level == 0 {
+			break
+		}
+		level--
+	}
+	return
+}
+
+func (it *Iterator) setValueIfDeleted(nd *node, val []byte) error {
+	var newVal uint64
+	var err error
+
+	for {
+		old := atomic.LoadUint64(&nd.value)
+		if old != deletedVal {
+			it.value = old
+			it.nd = nd
+			return ErrRecordExists
+		}
+		if newVal == 0 {
+			newVal, err = it.list.allocVal(val)
+			if err != nil {
+				return err
+			}
+		}
+		if atomic.CompareAndSwapUint64(&nd.value, old, newVal) {
+			break
+		}
+	}
+
+	it.value = newVal
+	it.nd = nd
+	return err
+}
+
+// put update
+
+func (it *Iterator) PutOrUpdate(key, mv []byte) (err error) {
+	if it.Seek(key) {
+		return it.Set(mv)
+	}
+	return it.Put(key, mv)
 }
 
 func (it *Iterator) Seek(key []byte) (found bool) {
@@ -75,11 +157,8 @@ func (it *Iterator) Set(val []byte) error {
 func (it *Iterator) Put(key []byte, val []byte) error {
 	var spl [maxHeight]splice
 
-	//若能找到key,直接更新值
-	if it.seekForSplice(key, &spl) {
-		// Found a matching node, but handle case where it's been deleted.
-		return it.setValueIfDeleted(spl[0].next, val)
-	}
+	//寻找到要插入的位置
+	it.seekForSplice(key, &spl)
 
 	if it.list.testing {
 		//这段代码是为了更好地测试并发性能
@@ -183,95 +262,17 @@ func (it *Iterator) Put(key []byte, val []byte) error {
 	return nil
 }
 
-// SeekToFirst move to head node
-func (it *Iterator) SeekToFirst() {
-	it.setNode(it.list.getNext(it.list.head, 0), false)
+// get
+
+func (it *Iterator) Key() []byte {
+	return it.nd.getKey(it.arena)
 }
 
-// SeekToLast move to tail node
-func (it *Iterator) SeekToLast() {
-	it.setNode(it.list.getPrev(it.list.tail, 0), true)
-}
-
-func (it *Iterator) setNode(nd *node, reverse bool) bool {
-	success := false
-	if nd != nil {
-		it.value = nd.value
-		it.nd = nd
-		success = true
-	}
-	return success
-}
-
-func (it *Iterator) seekForSplice(key []byte, spl *[maxHeight]splice) (found bool) {
-	var prev, next *node
-	level := int(it.list.Height() - 1)
-	prev = it.list.head
-
-	//从最高层的头节点开始找key
-	for {
-		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
-		if next == nil {
-			next = it.list.tail
-		}
-		// build spl
-		spl[level].init(prev, next)
-		if level == 0 {
-			break
-		}
-		level--
+func (it *Iterator) Value() (values [][]byte) {
+	for _, val := range it.value {
+		valOffset, valSize := decodeValue(val)
+		v := it.arena.GetBytes(valOffset, valSize)
+		values = append(values, v)
 	}
 	return
-}
-
-func (it *Iterator) seekForBaseSplice(key []byte) (prev, next *node, found bool) {
-	level := int(it.list.Height() - 1)
-
-	prev = it.list.head
-	//从最高层的头节点开始找key
-	for {
-		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
-		if found {
-			break
-		}
-		if level == 0 {
-			break
-		}
-		level--
-	}
-	return
-}
-
-func (it *Iterator) PutOrUpdate(key, mv []byte) (err error) {
-	if it.Seek(key) {
-		return it.Set(mv)
-	}
-	return it.Put(key, mv)
-}
-
-func (it *Iterator) setValueIfDeleted(nd *node, val []byte) error {
-	var newVal uint64
-	var err error
-
-	for {
-		old := atomic.LoadUint64(&nd.value)
-		if old != deletedVal {
-			it.value = old
-			it.nd = nd
-			return ErrRecordExists
-		}
-		if newVal == 0 {
-			newVal, err = it.list.allocVal(val)
-			if err != nil {
-				return err
-			}
-		}
-		if atomic.CompareAndSwapUint64(&nd.value, old, newVal) {
-			break
-		}
-	}
-
-	it.value = newVal
-	it.nd = nd
-	return err
 }
