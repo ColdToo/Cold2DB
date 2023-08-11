@@ -168,7 +168,7 @@ func (it *Iterator) Put(key []byte, val []byte, index uint64) error {
 		runtime.Gosched()
 	}
 
-	nd, height, err := it.list.newNode(key, val)
+	nd, height, err := it.list.newNode(key, val, index)
 	if err != nil {
 		return err
 	}

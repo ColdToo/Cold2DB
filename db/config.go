@@ -60,6 +60,10 @@ type ValueLogConfig struct {
 	ValueLogMmap bool
 }
 
+type HardStateLogConfig struct {
+	HardStateLogDir string
+}
+
 type MemTableConfig struct {
 	// MemtableSize represents the maximum size in bytes for a memtable.
 	// It means that each memtable will occupy so much memory.

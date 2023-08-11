@@ -37,11 +37,14 @@ type memManager struct {
 }
 
 type memtable struct {
+	CreatAt uint64
 	sync.RWMutex
-	sklIter *arenaskl.Iterator
-	skl     *arenaskl.Skiplist
-	wal     *logfile.LogFile
-	memOpt  memOpt
+	sklIter  *arenaskl.Iterator
+	skl      *arenaskl.Skiplist
+	wal      *logfile.LogFile
+	memOpt   memOpt
+	maxIndex uint64
+	minIndex uint64
 }
 
 // options held by memtable for opening new memtables.

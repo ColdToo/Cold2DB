@@ -20,14 +20,13 @@ package arenaskl
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"math/rand"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/require"
 )
 
 const arenaSize = 1 << 20
@@ -116,9 +115,9 @@ func TestBasic(t *testing.T) {
 	val4 := newValue(72)
 
 	// Try adding values.
-	it.Put([]byte("key1"), val1)
-	it.Put([]byte("key3"), val3)
-	it.Put([]byte("key2"), val2)
+	it.Put([]byte("key1"), val1, 1)
+	it.Put([]byte("key3"), val3, 2)
+	it.Put([]byte("key2"), val2, 3)
 
 	require.False(t, it.Seek([]byte("key")))
 

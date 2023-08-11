@@ -28,6 +28,8 @@ type Cold2DB struct {
 
 	vlog *valueLog
 
+	hardStateLog *hardStateLog
+
 	flushLock sync.RWMutex // guarantee flush and compaction exclusive.
 
 	mu sync.RWMutex
@@ -71,6 +73,11 @@ func InitDB(dbCfg DBConfig) error {
 	}
 
 	err = initValueLog(dbCfg.ValueLogConfig)
+	if err != nil {
+		return err
+	}
+
+	err = initHardStateLog(dbCfg.ValueLogConfig)
 	if err != nil {
 		return err
 	}
@@ -164,7 +171,7 @@ func (db *Cold2DB) Entries(lo, hi uint64) []*pb.Entry {
 }
 
 func (db *Cold2DB) Term(i uint64) (uint64, error) {
-	return 0, nil
+	return db.memManager.activeMem
 }
 
 func (db *Cold2DB) AppliedIndex() uint64 {
