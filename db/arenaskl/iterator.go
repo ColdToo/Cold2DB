@@ -34,25 +34,25 @@ func (it *Iterator) Valid() bool { return it.nd != nil }
 
 func (it *Iterator) Next() {
 	next := it.list.getNext(it.nd, 0)
-	it.setNode(next, false)
+	it.setNode(next)
 }
 
 func (it *Iterator) Prev() {
 	prev := it.list.getPrev(it.nd, 0)
-	it.setNode(prev, true)
+	it.setNode(prev)
 }
 
 // SeekToFirst move to head node
 func (it *Iterator) SeekToFirst() {
-	it.setNode(it.list.getNext(it.list.head, 0), false)
+	it.setNode(it.list.getNext(it.list.head, 0))
 }
 
 // SeekToLast move to tail node
 func (it *Iterator) SeekToLast() {
-	it.setNode(it.list.getPrev(it.list.tail, 0), true)
+	it.setNode(it.list.getPrev(it.list.tail, 0))
 }
 
-func (it *Iterator) setNode(nd *node, reverse bool) bool {
+func (it *Iterator) setNode(nd *node) bool {
 	success := false
 	if nd != nil {
 		it.value = nd.value
@@ -130,31 +130,32 @@ func (it *Iterator) setValueIfDeleted(nd *node, val []byte) error {
 
 // put update
 
-func (it *Iterator) PutOrUpdate(key, mv []byte) (err error) {
+func (it *Iterator) PutOrUpdate(key, mv []byte, index uint64) (err error) {
 	if it.Seek(key) {
-		return it.Set(mv)
+		return it.Set(mv, index)
 	}
-	return it.Put(key, mv)
+	return it.Put(key, mv, index)
 }
 
 func (it *Iterator) Seek(key []byte) (found bool) {
 	var next *node
 	_, next, found = it.seekForBaseSplice(key)
-	present := it.setNode(next, false)
+	present := it.setNode(next)
 	return found && present
 }
 
 // Set set value 并不会更改之前的value而是为这个key添加一个新的value offset
-func (it *Iterator) Set(val []byte) error {
+func (it *Iterator) Set(val []byte, index uint64) error {
 	newVal, err := it.list.allocVal(val)
 	if err != nil {
 		return err
 	}
 	it.value = append(it.value, newVal)
+	it.list.indexMap[index] = newVal
 	return nil
 }
 
-func (it *Iterator) Put(key []byte, val []byte) error {
+func (it *Iterator) Put(key []byte, val []byte, index uint64) error {
 	var spl [maxHeight]splice
 
 	//寻找到要插入的位置

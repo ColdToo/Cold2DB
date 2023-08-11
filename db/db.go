@@ -168,11 +168,11 @@ func (db *Cold2DB) Term(i uint64) (uint64, error) {
 }
 
 func (db *Cold2DB) AppliedIndex() uint64 {
-	return 0
+	return db.memManager.appliedIndex
 }
 
 func (db *Cold2DB) FirstIndex() uint64 {
-	return 0
+	return db.memManager.firstIndex
 }
 
 func (db *Cold2DB) GetSnapshot() (pb.Snapshot, error) {

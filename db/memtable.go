@@ -23,6 +23,10 @@ const (
 )
 
 type memManager struct {
+	firstIndex uint64
+
+	appliedIndex uint64
+
 	activeMem *memtable
 
 	immuMems []*memtable
@@ -56,6 +60,7 @@ type memValue struct {
 	Term      uint64
 	expiredAt int64
 	typ       logfile.EntryType
+	key       []byte
 	value     []byte
 }
 
@@ -232,9 +237,9 @@ func (mt *memtable) putBatch(entries []logfile.WalEntry) error {
 }
 
 func (mt *memtable) putInMemtable(entry logfile.WalEntry) {
-	mv := memValue{Term: entry.Term, Index: entry.Index, value: entry.Value, typ: entry.Type, expiredAt: entry.ExpiredAt}
+	mv := memValue{Term: entry.Term, Index: entry.Index, key: entry.Key, value: entry.Value, typ: entry.Type, expiredAt: entry.ExpiredAt}
 	mvBuf := mv.encode()
-	err := mt.sklIter.PutOrUpdate(entry.Key, mvBuf)
+	err := mt.sklIter.PutOrUpdate(entry.Key, mvBuf, entry.Index)
 	if err != nil {
 		log.Errorf("", err)
 		return
