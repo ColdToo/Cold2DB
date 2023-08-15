@@ -55,7 +55,7 @@ type Skiplist struct {
 	height uint32 // Current height. 1 <= height <= maxHeight. CAS.
 	// If set to true by tests, it easier to detect unusual race conditions.
 	testing  bool
-	indexMap map[uint64]uint64 // store node cursor
+	IndexMap map[uint64]uint64 // store node cursor
 }
 
 func NewSkiplist(arena *Arena) *Skiplist {

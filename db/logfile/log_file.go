@@ -185,7 +185,7 @@ func (lf *LogFile) getLogFileName(path string, fid int64, ftype FileType) (fname
 		fname = fname + WalSuffixName
 	case ValueLog:
 		fname = fname + VLogSuffixName
-	case RaftHardState:
+	case HardStateLog:
 		fname = fname + RaftHardStateSuffixName
 	default:
 		err = ErrUnsupportedLogFileType

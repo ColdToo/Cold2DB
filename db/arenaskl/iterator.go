@@ -277,3 +277,8 @@ func (it *Iterator) Value() (values [][]byte) {
 	}
 	return
 }
+
+func (it *Iterator) GetValueByPosition(val uint64) (eBytes []byte) {
+	valOffset, valSize := decodeValue(val)
+	return it.arena.GetBytes(valOffset, valSize)
+}

@@ -36,37 +36,6 @@ type memManager struct {
 	walDirPath string
 }
 
-type memtable struct {
-	CreatAt uint64
-	sync.RWMutex
-	sklIter  *arenaskl.Iterator
-	skl      *arenaskl.Skiplist
-	wal      *logfile.LogFile
-	memOpt   memOpt
-	maxIndex uint64
-	minIndex uint64
-}
-
-// options held by memtable for opening new memtables.
-type memOpt struct {
-	walDirPath string
-	walFileId  int64
-	fsize      int64
-	ioType     logfile.IOType
-	memSize    uint32
-	bytesFlush uint32
-}
-
-// 8 + 8 + 1 + 8 + len(value)
-type memValue struct {
-	Index     uint64
-	Term      uint64
-	expiredAt int64
-	typ       logfile.EntryType
-	key       []byte
-	value     []byte
-}
-
 func NewMemManger(memCfg MemConfig) (manager *memManager, err error) {
 	memManger := new(memManager)
 	Cold2.memManager = memManger
@@ -94,6 +63,22 @@ func NewMemManger(memCfg MemConfig) (manager *memManager, err error) {
 	go memManger.reopenImMemtable(memOpt)
 
 	return memManger, nil
+}
+
+func (m *memManager) newMemtable(memOpt memOpt) (*memtable, error) {
+	var sklIter = new(arenaskl.Iterator)
+	arena := arenaskl.NewArena(memOpt.memSize + uint32(arenaskl.MaxNodeSize))
+	skl := arenaskl.NewSkiplist(arena)
+	sklIter.Init(skl)
+	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
+
+	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WAL, memOpt.ioType)
+	if err != nil {
+		return nil, err
+	}
+	table.wal = wal
+
+	return table, nil
 }
 
 func (m *memManager) reopenImMemtable(memOpt memOpt) {
@@ -194,20 +179,31 @@ func (m *memManager) openMemtable(memOpt memOpt) (*memtable, error) {
 	return table, nil
 }
 
-func (m *memManager) newMemtable(memOpt memOpt) (*memtable, error) {
-	var sklIter = new(arenaskl.Iterator)
-	arena := arenaskl.NewArena(memOpt.memSize + uint32(arenaskl.MaxNodeSize))
-	skl := arenaskl.NewSkiplist(arena)
-	sklIter.Init(skl)
-	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
+func (m *memManager) getEntryByIndex(mem *memtable, index uint64) []byte {
+	value := mem.skl.IndexMap[index]
+	return decodeMemValue(mem.sklIter.GetValueByPosition(value))
+}
 
-	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WAL, memOpt.ioType)
-	if err != nil {
-		return nil, err
-	}
-	table.wal = wal
+type memtable struct {
+	CreatAt uint64
+	sync.RWMutex
+	//todo iterator里既有arena也有skiplist是否合理？
+	sklIter  *arenaskl.Iterator
+	skl      *arenaskl.Skiplist
+	wal      *logfile.LogFile
+	memOpt   memOpt
+	maxIndex uint64
+	minIndex uint64
+}
 
-	return table, nil
+// options held by memtable for opening new memtables.
+type memOpt struct {
+	walDirPath string
+	walFileId  int64
+	fsize      int64
+	ioType     logfile.IOType
+	memSize    uint32
+	bytesFlush uint32
 }
 
 // todo 写入WAL就返回还是写入Memtable再返回？
@@ -297,7 +293,7 @@ func (mt *memtable) isFull(delta uint32) bool {
 	return walSize >= int64(mt.memOpt.memSize)
 }
 
-func (mt *memtable) logFileId() int64 {
+func (mt *memtable) walFileId() int64 {
 	return mt.wal.Fid
 }
 
@@ -307,7 +303,17 @@ func (mt *memtable) deleteWal() error {
 	return mt.wal.Delete()
 }
 
-// todo encode memvalue
+// 8 + 8 + 1 + 8 + len(value)
+type memValue struct {
+	Index     uint64
+	Term      uint64
+	expiredAt int64
+	typ       logfile.EntryType
+	key       []byte
+	value     []byte
+}
+
+//  encode memvalue
 func (mv *memValue) encode() []byte {
 	buf := make([]byte, iSize+tSize+eaSize+etSize+len(mv.value))
 	binary.LittleEndian.PutUint64(buf[:], mv.Index)

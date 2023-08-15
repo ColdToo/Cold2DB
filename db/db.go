@@ -161,12 +161,19 @@ func (db *Cold2DB) SetHardState(st pb.HardState) error {
 
 // raft read interface
 
-func (db *Cold2DB) GetHardState() (pb.HardState, pb.ConfState, error) {
-	return pb.HardState{}, pb.ConfState{}, nil
-}
+func (db *Cold2DB) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
+	//先确定low和high在哪个memtable,先确定low的区间，再确定high的区间
+	//先查询是否在active memtable
 
-func (db *Cold2DB) Entries(lo, hi uint64) []*pb.Entry {
-	return nil
+	//low和high都在active memtable
+	if _, ok := db.memManager.activeMem.skl.IndexMap[lo]; ok {
+		if _, ok := db.memManager.activeMem.skl.IndexMap[hi]; ok {
+			for i := lo; i < hi; i++ {
+				db.memManager.getEntryByIndex(db.memManager.activeMem, i)
+			}
+		}
+	}
+
 }
 
 func (db *Cold2DB) Term(i uint64) (uint64, error) {
@@ -181,6 +188,11 @@ func (db *Cold2DB) FirstIndex() uint64 {
 	return db.memManager.firstIndex
 }
 
+// 通过snapshoter获取
 func (db *Cold2DB) GetSnapshot() (pb.Snapshot, error) {
 	return pb.Snapshot{}, nil
+}
+
+func (db *Cold2DB) GetHardState() (pb.HardState, pb.ConfState, error) {
+	return pb.HardState{}, pb.ConfState{}, nil
 }
