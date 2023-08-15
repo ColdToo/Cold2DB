@@ -12,6 +12,8 @@ type DBConfig struct {
 	ValueLogConfig ValueLogConfig
 
 	IndexConfig IndexConfig
+
+	HardStateLogConfig HardStateLogConfig
 }
 
 type MemConfig struct {

@@ -50,7 +50,7 @@ type vlogOptions struct {
 	gcInterval time.Duration
 }
 
-func initValueLog(vlogCfg ValueLogConfig) error {
+func initValueLog(vlogCfg ValueLogConfig) (valueLog *valueLog, err error) {
 	var ioType = logfile.BufferedIO
 	if vlogCfg.ValueLogMmap {
 		ioType = logfile.MMap
@@ -113,7 +113,6 @@ func initValueLog(vlogCfg ValueLogConfig) error {
 		return nil, err
 	}
 	go vlog.handleCompaction()
-	Cold2.vlog = vlog
 	return nil
 }
 

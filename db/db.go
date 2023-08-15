@@ -72,17 +72,16 @@ func InitDB(dbCfg DBConfig) error {
 		return err
 	}
 
-	Cold2.vlog, err = initHardStateLog(dbCfg.ValueLogConfig)
+	Cold2.hardStateLog, err = initHardStateLog(dbCfg.HardStateLogConfig)
 	if err != nil {
 		return err
 	}
 
-	err = initValueLog(dbCfg.ValueLogConfig)
+	Cold2.vlog, err = initValueLog(dbCfg.ValueLogConfig)
 	if err != nil {
 		return err
 	}
 
-	go Cold2.CompactionAndFlush()
 	return nil
 }
 
@@ -105,7 +104,7 @@ func dbCfgCheck(dbCfg DBConfig) error {
 	return nil
 }
 
-// ListenAndFlush 定期将immtable刷入vlog,更新内存索引
+// CompactionAndFlush 定期将immtable刷入vlog,更新内存索引以及压缩部分日志
 func (db *Cold2DB) CompactionAndFlush() {
 
 }
