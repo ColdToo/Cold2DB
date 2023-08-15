@@ -42,8 +42,8 @@ const (
 	// ValueLog value log.
 	ValueLog
 
-	// RaftHardState persist raft status
-	RaftHardState
+	// HardStateLog persist raft status
+	HardStateLog
 )
 
 // IOType represents different types of file io

@@ -5,58 +5,50 @@ import (
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type hardStateLog struct {
 	sync.RWMutex
-	opt vlogOptions
+	opt       hLogOptions
+	hsLogFile *logfile.LogFile
 }
 
 type hLogOptions struct {
 	path string
 }
 
-func initHardStateLog(hardStateLogCfg HardStateLogConfig) error {
+func initHardStateLog(hardStateLogCfg HardStateLogConfig) (hsLog *hardStateLog, err error) {
 	var ioType = logfile.DirectIO
-
 	hLogOptions := hLogOptions{
 		path: hardStateLogCfg.HardStateLogDir,
 	}
 
-	logFile, err := logfile.OpenLogFile(vlogOpt.path, int64(fids[len(fids)-1]), vlogOpt.blockSize, logfile.ValueLog, vlogOpt.ioType)
-
-	vlog := &HardStateLog{
-		opt:           vlogOpt,
-		activeLogFile: logFile,
-		logFiles:      make(map[uint32]*logfile.LogFile),
-		discard:       discard,
+	hsLog.hsLogFile, err = logfile.OpenLogFile(hLogOptions.path, time.Now().Unix(), 102, logfile.HardStateLog, ioType)
+	if err != nil {
+		return nil, err
 	}
-
-	// load other log files when reading from it.
-	for i := 0; i < len(fids)-1; i++ {
-		vlog.logFiles[fids[i]] = &logfile.LogFile{Fid: fids[i]}
-	}
-	return nil
+	return
 }
 
-func (vlog *valueLog) Read(fid uint32, offset int64) (*logfile.LogEntry, error) {
+func (hs *hardStateLog) Read(fid uint32, offset int64) (*logfile.LogEntry, error) {
 	var logFile *logfile.LogFile
-	if fid == vlog.activeLogFile.Fid {
-		logFile = vlog.activeLogFile
+	if fid == hs.activeLogFile.Fid {
+		logFile = hs.activeLogFile
 	} else {
-		vlog.RLock()
-		logFile = vlog.logFiles[fid]
+		hs.RLock()
+		logFile = hs.logFiles[fid]
 		if logFile != nil && logFile.IoSelector == nil {
-			opt := vlog.opt
+			opt := hs.opt
 			lf, err := logfile.OpenLogFile(opt.path, fid, opt.blockSize, logfile.ValueLog, opt.ioType)
 			if err != nil {
-				vlog.RUnlock()
+				hs.RUnlock()
 				return nil, err
 			}
-			vlog.logFiles[fid] = lf
+			hs.logFiles[fid] = lf
 			logFile = lf
 		}
-		vlog.RUnlock()
+		hs.RUnlock()
 	}
 	if logFile == nil {
 		return nil, fmt.Errorf(ErrLogFileNil.Error(), fid)
@@ -69,42 +61,38 @@ func (vlog *valueLog) Read(fid uint32, offset int64) (*logfile.LogEntry, error) 
 	return entry, err
 }
 
-func (vlog *valueLog) Write(ent *logfile.LogEntry) (*valuePos, int, error) {
-	vlog.Lock()
-	defer vlog.Unlock()
+func (hs *hardStateLog) Write(ent *logfile.LogEntry) (*valuePos, int, error) {
+	hs.Lock()
+	defer hs.Unlock()
 	buf, eSize := logfile.EncodeEntry(ent)
 	// if active is reach to thereshold, close it and open a new one.
-	if vlog.activeLogFile.WriteAt+int64(eSize) >= vlog.opt.blockSize {
-		if err := vlog.Sync(); err != nil {
+	if hs.activeLogFile.WriteAt+int64(eSize) >= hs.opt.blockSize {
+		if err := hs.Sync(); err != nil {
 			return nil, 0, err
 		}
-		vlog.logFiles[vlog.activeLogFile.Fid] = vlog.activeLogFile
+		hs.logFiles[hs.activeLogFile.Fid] = hs.activeLogFile
 
-		logFile, err := vlog.createLogFile()
+		logFile, err := hs.createLogFile()
 		if err != nil {
 			return nil, 0, err
 		}
-		vlog.activeLogFile = logFile
+		hs.activeLogFile = logFile
 	}
 
-	err := vlog.activeLogFile.Write(buf)
+	err := hs.activeLogFile.Write(buf)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	writeAt := atomic.LoadInt64(&vlog.activeLogFile.WriteAt)
+	writeAt := atomic.LoadInt64(&hs.activeLogFile.WriteAt)
 	return &valuePos{
-		Fid:    vlog.activeLogFile.Fid,
+		Fid:    hs.activeLogFile.Fid,
 		Offset: writeAt - int64(eSize),
 	}, eSize, nil
 }
 
-func (vlog *valueLog) Close() error {
-	if vlog.activeLogFile == nil {
-		return ErrActiveLogFileNil
-	}
-
-	vlog.activeLogFile.Lock()
-	defer vlog.activeLogFile.Unlock()
-	return vlog.activeLogFile.Close()
+func (hs *hardStateLog) Close() error {
+	hs.Lock()
+	defer hs.Unlock()
+	return hs.hsLogFile.Close()
 }

@@ -72,12 +72,12 @@ func InitDB(dbCfg DBConfig) error {
 		return err
 	}
 
-	err = initValueLog(dbCfg.ValueLogConfig)
+	Cold2.vlog, err = initHardStateLog(dbCfg.ValueLogConfig)
 	if err != nil {
 		return err
 	}
 
-	err = initHardStateLog(dbCfg.ValueLogConfig)
+	err = initValueLog(dbCfg.ValueLogConfig)
 	if err != nil {
 		return err
 	}
