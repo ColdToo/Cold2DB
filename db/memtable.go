@@ -207,7 +207,7 @@ type memOpt struct {
 
 // todo 写入WAL就返回还是写入Memtable再返回？
 func (mt *memtable) put(entry logfile.WalEntry) error {
-	buf, _ := logfile.EncodeWalEntry(&entry)
+	buf, _ := entry.EncodeWalEntry()
 	if err := mt.wal.Write(buf); err != nil {
 		return err
 	}
@@ -220,7 +220,7 @@ func (mt *memtable) put(entry logfile.WalEntry) error {
 
 func (mt *memtable) putBatch(entries []logfile.WalEntry) error {
 	for _, entry := range entries {
-		buf, _ := logfile.EncodeWalEntry(&entry)
+		buf, _ := entry.EncodeWalEntry()
 		if err := mt.wal.Write(buf); err != nil {
 			return err
 		}
