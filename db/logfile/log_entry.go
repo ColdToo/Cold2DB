@@ -25,6 +25,14 @@ const (
 	TypeDelete EntryType = iota + 1
 )
 
+type KV struct {
+	Id        int64
+	Key       []byte
+	Value     []byte
+	Type      EntryType
+	ExpiredAt int64
+}
+
 type entryHeader struct {
 	crc32     uint32 // check sum
 	typ       EntryType
@@ -66,14 +74,6 @@ func getEntryCrc(e *WalEntry, h []byte) uint32 {
 	return crc
 }
 
-type KV struct {
-	Id        int64
-	Key       []byte
-	Value     []byte
-	Type      EntryType
-	ExpiredAt int64
-}
-
 type WalEntry struct {
 	Index     uint64
 	Term      uint64
@@ -90,7 +90,7 @@ type WalEntry struct {
 // +-------+----------+------------+-----------+---------+---------+---------+-------+---------+
 // |---------------HEADER----------|----------------------------VALUE--------------------------|
 //         |--------------------------crc check------------------------------------------------|
-func EncodeWalEntry(e *WalEntry) ([]byte, int) {
+func (e *WalEntry) encodeWalEntry() ([]byte, int) {
 	if e == nil {
 		return nil, 0
 	}
@@ -121,7 +121,7 @@ func EncodeWalEntry(e *WalEntry) ([]byte, int) {
 	return buf, size
 }
 
-func (e *WalEntry) encode() []byte {
+func (e *WalEntry) encodeMemWalEntry() []byte {
 	buf := make([]byte, IndexSize+TermSize+ExpiredAtSize+EntryTypeSize+len(e.Value))
 	binary.LittleEndian.PutUint64(buf[:], e.Index)
 	binary.LittleEndian.PutUint64(buf[IndexSize:], e.Term)
