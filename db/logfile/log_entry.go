@@ -25,7 +25,49 @@ const (
 	TypeDelete EntryType = iota + 1
 )
 
-type LogEntry struct {
+type entryHeader struct {
+	crc32     uint32 // check sum
+	typ       EntryType
+	kSize     uint32
+	vSize     uint32
+	expiredAt int64 // time.Unix
+}
+
+func decodeHeader(buf []byte) (*entryHeader, int64) {
+	// 重构
+	if len(buf) <= 4 {
+		return nil, 0
+	}
+	h := &entryHeader{
+		crc32: binary.LittleEndian.Uint32(buf[:4]),
+		typ:   EntryType(buf[4]),
+	}
+	var index = 5
+	ksize, n := binary.Varint(buf[index:])
+	h.kSize = uint32(ksize)
+	index += n
+
+	vsize, n := binary.Varint(buf[index:])
+	h.vSize = uint32(vsize)
+	index += n
+
+	expiredAt, n := binary.Varint(buf[index:])
+	h.expiredAt = expiredAt
+	return h, int64(index + n)
+}
+
+func getEntryCrc(e *WalEntry, h []byte) uint32 {
+	if e == nil {
+		return 0
+	}
+	crc := crc32.ChecksumIEEE(h[:])
+	crc = crc32.Update(crc, crc32.IEEETable, e.Key)
+	crc = crc32.Update(crc, crc32.IEEETable, e.Value)
+	return crc
+}
+
+type KV struct {
+	Id        int64
 	Key       []byte
 	Value     []byte
 	Type      EntryType
@@ -39,14 +81,6 @@ type WalEntry struct {
 	Value     []byte
 	Type      EntryType
 	ExpiredAt int64
-}
-
-type entryHeader struct {
-	crc32     uint32 // check sum
-	typ       EntryType
-	kSize     uint32
-	vSize     uint32
-	expiredAt int64 // time.Unix
 }
 
 // EncodeWalEntry  will encode entry into a byte slice.
@@ -87,39 +121,41 @@ func EncodeWalEntry(e *WalEntry) ([]byte, int) {
 	return buf, size
 }
 
-func decodeHeader(buf []byte) (*entryHeader, int64) {
-	// 重构
-	if len(buf) <= 4 {
-		return nil, 0
-	}
-	h := &entryHeader{
-		crc32: binary.LittleEndian.Uint32(buf[:4]),
-		typ:   EntryType(buf[4]),
-	}
-	var index = 5
-	ksize, n := binary.Varint(buf[index:])
-	h.kSize = uint32(ksize)
-	index += n
-
-	vsize, n := binary.Varint(buf[index:])
-	h.vSize = uint32(vsize)
-	index += n
-
-	expiredAt, n := binary.Varint(buf[index:])
-	h.expiredAt = expiredAt
-	return h, int64(index + n)
+func (e *WalEntry) encode() []byte {
+	buf := make([]byte, IndexSize+TermSize+ExpiredAtSize+EntryTypeSize+len(e.Value))
+	binary.LittleEndian.PutUint64(buf[:], e.Index)
+	binary.LittleEndian.PutUint64(buf[IndexSize:], e.Term)
+	binary.LittleEndian.PutUint64(buf[IndexSize+TermSize:], uint64(e.ExpiredAt))
+	copy(buf[IndexSize+TermSize+ExpiredAtSize:], string(e.Type))
+	copy(buf[IndexSize+TermSize+ExpiredAtSize+EntryTypeSize:], string(e.Type))
+	return buf
 }
 
-func getEntryCrc(e *WalEntry, h []byte) uint32 {
-	if e == nil {
-		return 0
-	}
-	crc := crc32.ChecksumIEEE(h[:])
-	crc = crc32.Update(crc, crc32.IEEETable, e.Key)
-	crc = crc32.Update(crc, crc32.IEEETable, e.Value)
-	return crc
+func decodeMemWalEntry(buf []byte) (e *WalEntry) {
+	typ := make([]byte, 1)
+	e.Index = binary.LittleEndian.Uint64(buf[:4])
+	e.Index = binary.LittleEndian.Uint64(buf[4:9])
+	e.Index = binary.LittleEndian.Uint64(buf[9:13])
+	copy(typ, buf[13:14])
+	copy(e.Value, buf[14:])
+	e.Type = EntryType(typ[0])
+	return
 }
 
+type LogEntry struct {
+	Key       []byte
+	Value     []byte
+	Type      EntryType
+	ExpiredAt int64
+}
+
+// EncodeLogEntry  will encode entry into a byte slice.
+// The encoded Entry looks like:
+// +-------+----------+------------+-----------+---------+---------+---------+-------+---------+
+// |  crc  | key size | value size | expiredAt |  index  |   term  |   type  |  key  |  value  |
+// +-------+----------+------------+-----------+---------+---------+---------+-------+---------+
+// |---------------HEADER----------|----------------------------VALUE--------------------------|
+//         |--------------------------crc check------------------------------------------------|
 func EncodeLogEntry(e *LogEntry) ([]byte, int) {
 	if e == nil {
 		return nil, 0

@@ -10,13 +10,7 @@ import (
 	"time"
 )
 
-type KV struct {
-	id        int64
-	Key       []byte
-	Value     []byte
-	Type      logfile.EntryType
-	ExpiredAt int64
-}
+type KV = logfile.KV
 
 type KvStore struct {
 	db         *db.Cold2DB
@@ -50,7 +44,7 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	timeOutC := time.NewTimer(s.ReqTimeout)
 	uid := time.Now().UnixNano()
 	kv := &KV{
-		id:        uid,
+		Id:        uid,
 		Key:       key,
 		Value:     val,
 		ExpiredAt: expiredAt,

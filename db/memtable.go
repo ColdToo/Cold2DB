@@ -1,7 +1,6 @@
 package db
 
 import (
-	"encoding/binary"
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
@@ -301,36 +300,4 @@ func (mt *memtable) deleteWal() error {
 	mt.wal.Lock()
 	defer mt.wal.Unlock()
 	return mt.wal.Delete()
-}
-
-// 8 + 8 + 1 + 8 + len(value)
-type memValue struct {
-	Index     uint64
-	Term      uint64
-	expiredAt int64
-	typ       logfile.EntryType
-	key       []byte
-	value     []byte
-}
-
-//  encode memvalue
-func (mv *memValue) encode() []byte {
-	buf := make([]byte, iSize+tSize+eaSize+etSize+len(mv.value))
-	binary.LittleEndian.PutUint64(buf[:], mv.Index)
-	binary.LittleEndian.PutUint64(buf[iSize:], mv.Term)
-	binary.LittleEndian.PutUint64(buf[iSize+tSize:], uint64(mv.expiredAt))
-	copy(buf[iSize+tSize+eaSize:], string(mv.typ))
-	copy(buf[iSize+tSize+eaSize+etSize:], string(mv.typ))
-	return buf
-}
-
-func decodeMemValue(buf []byte) (memValue memValue) {
-	typ := make([]byte, 1)
-	memValue.Index = binary.LittleEndian.Uint64(buf[:4])
-	memValue.Index = binary.LittleEndian.Uint64(buf[4:9])
-	memValue.Index = binary.LittleEndian.Uint64(buf[9:13])
-	copy(typ, buf[13:14])
-	copy(memValue.value, buf[14:])
-	memValue.typ = logfile.EntryType(typ[0])
-	return
 }

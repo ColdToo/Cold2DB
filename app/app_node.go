@@ -173,7 +173,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 
 	var kv KV
 	walEntries := make([]logfile.WalEntry, len(entries))
-	walEntriesid := make([]int64, 0)
+	walEntriesId := make([]int64, 0)
 	for _, entry := range entries {
 		err := gob.NewDecoder(bytes.NewBuffer(entry.Data)).Decode(&kv)
 		if err != nil {
@@ -189,7 +189,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 			Type:      kv.Type,
 		}
 		walEntries = append(walEntries, walEntry)
-		walEntriesid = append(walEntriesid, kv.id)
+		walEntriesId = append(walEntriesId, kv.Id)
 	}
 
 	err = an.kvStore.db.Put(walEntries)
@@ -198,7 +198,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 		return
 	}
 
-	for _, id := range walEntriesid {
+	for _, id := range walEntriesId {
 		close(an.kvStore.monitorKV[id])
 	}
 	return nil
