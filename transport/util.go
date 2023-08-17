@@ -21,8 +21,6 @@ var (
 	errMemberNotFound = fmt.Errorf("member not found")
 )
 
-// NewListener returns a listener for raft message transfer between peers.
-// It uses timeout listener to identify broken streams promptly.
 func NewListener(u url.URL, tlsinfo *transport.TLSInfo) (net.Listener, error) {
 	return transport.NewTimeoutListener(u.Host, u.Scheme, tlsinfo, ConnReadTimeout, ConnWriteTimeout)
 }
@@ -35,12 +33,8 @@ func newStreamRoundTripper(tlsInfo transport.TLSInfo, dialTimeout time.Duration)
 	return NewTimeoutTransport(tlsInfo, dialTimeout, ConnReadTimeout, ConnWriteTimeout)
 }
 
-// NewTimeoutTransport returns a transport created using the given TLS info.
-// If read/write on the created connection blocks longer than its time limit,
-// it will return timeout error.
-// If read/write timeout is set, transport will not be able to reuse connection.
-func NewTimeoutTransport(info TLSInfo, dialtimeoutd, rdtimeoutd, wtimeoutd time.Duration) (*http.Transport, error) {
-	tr, err := NewTransport(info, dialtimeoutd)
+func NewTimeoutTransport(info transport.TLSInfo, dialtimeoutd, rdtimeoutd, wtimeoutd time.Duration) (*http.Transport, error) {
+	tr, err := transport.NewTransport(info, dialtimeoutd)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +48,7 @@ func NewTimeoutTransport(info TLSInfo, dialtimeoutd, rdtimeoutd, wtimeoutd time.
 		tr.MaxIdleConnsPerHost = 1024
 	}
 
-	tr.Dial = (&rwTimeoutDialer{
+	tr.Dial = (&transport.rwTimeoutDialer{
 		Dialer: net.Dialer{
 			Timeout:   dialtimeoutd,
 			KeepAlive: 30 * time.Second,
@@ -65,7 +59,6 @@ func NewTimeoutTransport(info TLSInfo, dialtimeoutd, rdtimeoutd, wtimeoutd time.
 	return tr, nil
 }
 
-// createPostRequest creates a HTTP POST request that sends raft message.
 func createPostRequest(u url.URL, path string, body io.Reader, contentType string, urls types.URLs, from, clusterId types.ID) *http.Request {
 	uu := u
 	uu.Path = path
@@ -82,8 +75,6 @@ func createPostRequest(u url.URL, path string, body io.Reader, contentType strin
 	return req
 }
 
-// checkPostResponse checks the response of the HTTP POST request that sends
-// raft message.
 func checkPostResponse(resp *http.Response, body []byte, req *http.Request, to types.ID) error {
 	switch resp.StatusCode {
 	case http.StatusPreconditionFailed:
@@ -104,11 +95,6 @@ func checkPostResponse(resp *http.Response, body []byte, req *http.Request, to t
 	}
 }
 
-// reportCriticalError reports the given error through sending it into
-// the given error channel.
-// If the error channel is filled up when sending error, it drops the error
-// because the fact that error has happened is reported, which is
-// good enough.
 func reportCriticalError(err error, errc chan<- error) {
 	select {
 	case errc <- err:
@@ -116,9 +102,6 @@ func reportCriticalError(err error, errc chan<- error) {
 	}
 }
 
-// compareMajorMinorVersion returns an integer comparing two versions based on
-// their major and minor version. The result will be 0 if a==b, -1 if a < b,
-// and 1 if a > b.
 func compareMajorMinorVersion(a, b *semver.Version) int {
 	na := &semver.Version{Major: a.Major, Minor: a.Minor}
 	nb := &semver.Version{Major: b.Major, Minor: b.Minor}

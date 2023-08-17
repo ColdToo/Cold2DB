@@ -78,7 +78,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	limitedr := pioutil.NewLimitedBufferReader(r.Body, connReadLimitByte)
 	b, err := ioutil.ReadAll(limitedr)
 	if err != nil {
-		log.Warn("failed to read Raft message").Str(code.LocalMemberId, h.localID.Str()).Err(code.FailedReadMessage, err).Record()
+		log.Warn("failed to read Raft message").Str(code.LocalId, h.localID.Str()).Err(code.FailedReadMessage, err).Record()
 		http.Error(w, "error reading raft message", http.StatusBadRequest)
 		return
 	}
@@ -158,14 +158,14 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fromStr := path.Base(r.URL.Path)
 	from, err := types.IDFromString(fromStr)
 	if err != nil {
-		log.Warn("failed to parse path into ID").Str(code.LocalMemberId, h.tr.LocalID.Str()).Record()
+		log.Warn("failed to parse path into ID").Str(code.LocalId, h.tr.LocalID.Str()).Record()
 
 		http.Error(w, "invalid from", http.StatusNotFound)
 		return
 	}
 
 	if h.r.IsIDRemoved(uint64(from)) {
-		log.Info("rejected stream from remote peer because it was removed").Str(code.RemotePeerId, fromStr).Record()
+		log.Info("rejected stream from remote peer because it was removed").Str(code.RemoteId, fromStr).Record()
 		http.Error(w, "removed member", http.StatusGone)
 		return
 	}
@@ -173,8 +173,8 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	wto := h.id.Str()
 	if gto := r.Header.Get("X-Raft-To"); gto != wto {
-		log.Warn("ignored streaming request; ID mismatch").Str(code.LocalMemberId, h.tr.LocalID.Str()).
-			Str(code.RemotePeerReqId, gto).Str(code.ClusterId, h.clusterId.Str()).Record()
+		log.Warn("ignored streaming request; ID mismatch").Str(code.LocalId, h.tr.LocalID.Str()).
+			Str(code.RemoteReqId, gto).Str(code.ClusterId, h.clusterId.Str()).Record()
 		http.Error(w, "to field mismatch", http.StatusPreconditionFailed)
 		return
 	}

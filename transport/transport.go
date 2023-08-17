@@ -54,15 +54,15 @@ type Transporter interface {
 }
 
 type Transport struct {
-	//DialTimeout是请求超时时间，而DialRetryFrequency定义了每个对等节点的重试频率限制，即每秒最多重试10次。
+	//DialTimeout是请求超时时间，而DialRetryFrequency定义了每个对等节点的重试频率限制
 	DialTimeout time.Duration
 
 	DialRetryFrequency time.Duration
 
 	TLSInfo transport.TLSInfo // TLS information used when creating connection
 
-	LocalID   types.ID      // local member ID
-	URLs      types.URLs    // local peer URLs
+	LocalID   types.ID      // 本地节点的ID
+	URLs      types.URLs    // peers URLs
 	ClusterID types.ID      // raft cluster ID for request validation
 	Raft      RaftTransport // raft state machine, to which the Transport forwards received messages and reports status
 
