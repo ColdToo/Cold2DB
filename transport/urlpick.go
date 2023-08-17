@@ -6,6 +6,10 @@ import (
 	"sync"
 )
 
+/*
+	每个节点可能提供了多个URL供其他节点正常访问，当其中一个访问失败时，我们应该可以尝试访问另一个。
+	urlPicker提供的主要功能就是在这些URL之间进行切换
+*/
 type urlPicker struct {
 	mu     sync.Mutex // guards urls and picked
 	urls   types.URLs

@@ -33,8 +33,8 @@ func (hs *hardStateLog) Read(fid uint32, offset int64) (*logfile.LogEntry, error
 	return nil, nil
 }
 
-func (hs *hardStateLog) Write(ent *logfile.LogEntry) (*valuePos, int, error) {
-	return nil, 0, nil
+func (hs *hardStateLog) Write(ent *logfile.LogEntry) (int, error) {
+	return 0, nil
 }
 
 func (hs *hardStateLog) Close() error {

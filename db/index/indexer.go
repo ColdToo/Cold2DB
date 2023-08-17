@@ -3,7 +3,6 @@ package index
 import (
 	"encoding/binary"
 	"errors"
-	"github.com/ColdToo/Cold2DB/db"
 	"os"
 )
 
@@ -65,7 +64,7 @@ type Indexer interface {
 }
 
 // NewIndexer create a new Indexer by the given options, return an error, if any.
-func NewIndexer(indexCfg db.IndexConfig) (Indexer, error) {
+/*func NewIndexer(indexCfg db.IndexConfig) (Indexer, error) {
 	switch IndexerType(indexCfg.IndexerType) {
 	case BptreeBoltDB:
 	case ArenaSkipList:
@@ -74,7 +73,7 @@ func NewIndexer(indexCfg db.IndexConfig) (Indexer, error) {
 		panic("unknown indexer type")
 	}
 	return nil, nil
-}
+}*/
 
 // IndexerIter .
 type IndexerIter interface {

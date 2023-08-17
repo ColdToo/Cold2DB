@@ -14,7 +14,7 @@ import (
 var log *zap.Logger
 
 func InitLog() {
-	if ok, _ := utils.PathExists(domain.Conf.ZapConf.Director); !ok { // 判断是否有Director文件夹
+	if ok := utils.PathExist(domain.Conf.ZapConf.Director); !ok { // 判断是否有Director文件夹
 		fmt.Printf("create %v directory\n", domain.Conf.ZapConf.Director)
 		_ = os.Mkdir(domain.Conf.ZapConf.Director, os.ModePerm)
 	}

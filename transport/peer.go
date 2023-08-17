@@ -64,18 +64,14 @@ type Peer interface {
 // stream是一个初始化的长轮询连接，它始终打开以传输消息。除了一般的stream之外，peer还有一个优化的stream用于发送msgApp，因为msgApp占所有消息的大部分。
 // 只有Raft leader使用优化的stream将msgApp发送到远程follower节点。pipeline是一系列向远程发送HTTP请求的HTTP客户端。仅在未建立stream时使用。
 type peer struct {
-	localID types.ID
+	localID types.ID //本地节点的id
 	// id of the remote raft peer node
-	remoteID types.ID
+	remoteID types.ID //远程peer节点的id
 
 	raft RaftTransport
 
 	status *peerStatus
 
-	/*
-		每个节点可能提供了多个URL供其他节点正常访问，当其中一个访问失败时，我们应该可以尝试访问另一个。
-		urlPicker提供的主要功能就是在这些URL之间进行切换
-	*/
 	picker *urlPicker
 
 	writer       *streamWriter
@@ -340,6 +336,6 @@ func (s *peerStatus) activeSince() time.Time {
 	return s.since
 }
 
-func isMsgApp(m *pb.Message) bool { return m.MsgType == pb.MessageType_MsgAppend }
+func isMsgApp(m *pb.Message) bool { return m.Type == pb.MsgApp }
 
-func isMsgSnap(m *pb.Message) bool { return m.MsgType == pb.MessageType_MsgSnapshot }
+func isMsgSnap(m *pb.Message) bool { return m.Type == pb.MsgSnap }

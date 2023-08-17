@@ -19,14 +19,14 @@ type DB interface {
 	Put(entries []logfile.WalEntry) (err error)
 	Scan(lowKey []byte, highKey []byte) (err error)
 	IsRestartNode() bool
-	SetHardState(st pb.HardState) error
+	SaveHardState(st pb.HardState) error
 }
 
 type Cold2DB struct {
 	// put key to arena skl and wal , update activeMemtable trans act to imm
 	memManager *memManager
 
-	vlog *valueLog
+	//vlog *valueLog
 
 	hardStateLog *hardStateLog
 
@@ -67,7 +67,7 @@ func InitDB(dbCfg DBConfig) error {
 		return err
 	}
 
-	Cold2.indexer, err = index.NewIndexer(dbCfg.IndexConfig)
+	/*Cold2.indexer, err = index.NewIndexer(dbCfg.IndexConfig)
 	if err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func InitDB(dbCfg DBConfig) error {
 	Cold2.vlog, err = initValueLog(dbCfg.ValueLogConfig)
 	if err != nil {
 		return err
-	}
+	}*/
 
 	return nil
 }
@@ -155,7 +155,7 @@ func (db *Cold2DB) IsRestartNode() bool {
 	return false
 }
 
-func (db *Cold2DB) SetHardState(st pb.HardState) error {
+func (db *Cold2DB) SaveHardState(st pb.HardState) error {
 	return nil
 }
 

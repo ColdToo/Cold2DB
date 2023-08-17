@@ -30,7 +30,7 @@ type snapshotSender struct {
 	tr     *Transport
 	picker *urlPicker
 	status *peerStatus
-	r      Raft
+	r      RaftTransport
 	errorc chan error
 
 	stopc chan struct{}

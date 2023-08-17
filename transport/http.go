@@ -43,11 +43,11 @@ type pipelineHandler struct {
 	lg        *zap.Logger
 	localID   types.ID
 	trans     Transporter
-	raft      Raft
+	raft      RaftTransport
 	clusterId types.ID
 }
 
-func newPipelineHandler(t *Transport, r Raft, clusterId types.ID) http.Handler {
+func newPipelineHandler(t *Transport, r RaftTransport, clusterId types.ID) http.Handler {
 	return &pipelineHandler{
 		localID:   t.LocalID,
 		trans:     t,
@@ -122,12 +122,12 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type streamHandler struct {
 	tr         *Transport
 	peerGetter peerGetter
-	r          Raft
+	r          RaftTransport
 	id         types.ID
 	clusterId  types.ID
 }
 
-func newStreamHandler(t *Transport, pg peerGetter, r Raft, id, clusterId types.ID) http.Handler {
+func newStreamHandler(t *Transport, pg peerGetter, r RaftTransport, id, clusterId types.ID) http.Handler {
 	return &streamHandler{
 		tr:         t,
 		peerGetter: pg,
@@ -180,7 +180,6 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	// todo 这个flush是啥子意思？
 	w.(http.Flusher).Flush()
 
 	c := newCloseNotifier()
@@ -202,14 +201,14 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type snapshotHandler struct {
 	lg          *zap.Logger
 	trans       Transporter
-	raft        Raft
+	raft        RaftTransport
 	snapshotter *db.SnapShotter
 
 	localID   types.ID
 	clusterId types.ID
 }
 
-func newSnapshotHandler(t *Transport, r Raft, snapshotter *db.SnapShotter, clusterId types.ID) http.Handler {
+func newSnapshotHandler(t *Transport, r RaftTransport, snapshotter *db.SnapShotter, clusterId types.ID) http.Handler {
 	return &snapshotHandler{
 		trans:       t,
 		raft:        r,
@@ -248,12 +247,12 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	msgSize := m.Size()
 
-	if m.MsgType != pb.MessageType_MsgSnapshot {
+	if m.Type != pb.MsgSnap {
 		h.lg.Warn(
 			"unexpected Raft message type",
 			zap.String("local-member-id", h.localID.Str()),
 			zap.String("remote-snapshot-sender-id", from),
-			zap.String("message-type", m.MsgType.String()),
+			zap.String("message-type", m.Type.String()),
 		)
 		http.Error(w, "wrong raft message type", http.StatusBadRequest)
 		return

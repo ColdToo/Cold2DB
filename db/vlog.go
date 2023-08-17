@@ -1,5 +1,6 @@
 package db
 
+/*
 import (
 	"errors"
 	"fmt"
@@ -33,7 +34,6 @@ type valueLog struct {
 	opt           vlogOptions
 	activeLogFile *logfile.LogFile            // current active log file for writing.
 	logFiles      map[uint32]*logfile.LogFile // all log files. Must hold the mutex before modify it.
-	discard       *discard
 }
 
 // valuePos value position.
@@ -64,7 +64,7 @@ func initValueLog(vlogCfg ValueLogConfig) (valueLog *valueLog, err error) {
 
 	fileInfos, err := os.ReadDir(vlogOpt.path)
 	if err != nil {
-		return nil
+		return
 	}
 
 	var fids []uint32
@@ -73,7 +73,7 @@ func initValueLog(vlogCfg ValueLogConfig) (valueLog *valueLog, err error) {
 			splitNames := strings.Split(file.Name(), ".")
 			fid, err := strconv.Atoi(splitNames[0])
 			if err != nil {
-				return nil
+				return
 			}
 			fids = append(fids, uint32(fid))
 		}
@@ -83,11 +83,6 @@ func initValueLog(vlogCfg ValueLogConfig) (valueLog *valueLog, err error) {
 		return fids[i] < fids[j]
 	})
 
-	// open discard file. mainly use to compaction
-	discard, err := newDiscard(vlogOpt.path, vlogDiscardName)
-	if err != nil {
-		return nil
-	}
 
 	// open active(recent) log file only.
 	logFile, err := logfile.OpenLogFile(vlogOpt.path, int64(fids[len(fids)-1]), vlogOpt.blockSize, logfile.ValueLog, vlogOpt.ioType)
@@ -101,7 +96,6 @@ func initValueLog(vlogCfg ValueLogConfig) (valueLog *valueLog, err error) {
 		opt:           vlogOpt,
 		activeLogFile: logFile,
 		logFiles:      make(map[uint32]*logfile.LogFile),
-		discard:       discard,
 	}
 
 	// load other log files when reading from it.
@@ -388,3 +382,4 @@ func (vlog *valueLog) compact() error {
 	}
 	return nil
 }
+*/
