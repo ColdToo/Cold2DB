@@ -128,20 +128,16 @@ func (m *memManager) openMemtable(memOpt memOpt) (*memtable, error) {
 	sklIter.Init(skl)
 	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
 
-	// open wal log file.
 	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WAL, memOpt.ioType)
 	if err != nil {
 		return nil, err
 	}
 	table.wal = wal
 
-	// load wal entries into memory.
 	var offset int64 = 0
 	for {
 		if entry, size, err := wal.ReadWALEntry(offset); err == nil {
 			offset += size
-			// No need to use atomic updates.
-			// This function is only be executed in one goroutine at startup.
 			wal.WriteAt += size
 
 			mv := &logfile.WalEntry{
@@ -252,7 +248,7 @@ func (mt *memtable) putBatch(entries []logfile.WalEntry) error {
 
 func (mt *memtable) putInMemtable(entry logfile.WalEntry) {
 	memEntryBuf := entry.EncodeMemEntry()
-	err := mt.sklIter.PutOrUpdate(entry.Key, memEntryBuf, entry.Index)
+	err := mt.sklIter.Put(entry.Key, memEntryBuf, entry.Index)
 	if err != nil {
 		log.Errorf("", err)
 		return
@@ -275,8 +271,8 @@ func (mt *memtable) get(key []byte) (bool, []byte) {
 		return false, nil
 	}
 
-	//选取index最大的value返回
 	values := mt.sklIter.Value()
+	//最后一条数据为最新的entry
 	mv := logfile.DecodeMemEntry(values[len(values)-1])
 
 	if mv.Type == logfile.TypeDelete {

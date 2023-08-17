@@ -102,11 +102,11 @@ func (it *Iterator) seekForBaseSplice(key []byte) (prev, next *node, found bool)
 
 // put update
 
-func (it *Iterator) PutOrUpdate(key, mv []byte, index uint64) (err error) {
+func (it *Iterator) Put(key, mv []byte, index uint64) (err error) {
 	if it.Seek(key) {
 		return it.Set(mv, index)
 	}
-	return it.Put(key, mv, index)
+	return it.put(key, mv, index)
 }
 
 func (it *Iterator) Seek(key []byte) (found bool) {
@@ -127,7 +127,7 @@ func (it *Iterator) Set(val []byte, index uint64) error {
 	return nil
 }
 
-func (it *Iterator) Put(key []byte, val []byte, index uint64) error {
+func (it *Iterator) put(key []byte, val []byte, index uint64) error {
 	var spl [maxHeight]splice
 
 	//寻找到要插入的位置

@@ -96,7 +96,6 @@ func OpenLogFile(path string, fid int64, fsize int64, ftype FileType, ioType IOT
 }
 
 func (lf *LogFile) ReadWALEntry(offset int64) (*WalEntry, int64, error) {
-	//  todo 重构
 	// read entry header.
 	headerBuf, err := lf.readBytes(offset, MaxHeaderSize)
 	if err != nil {
