@@ -25,7 +25,7 @@ type Storage interface {
 	GetHardState() (pb.HardState, pb.ConfState, error)
 
 	// Entries 返回指定范围的Entries
-	Entries(lo, hi uint64) []*pb.Entry
+	Entries(lo, hi uint64) ([]*pb.Entry, error)
 
 	Term(i uint64) (uint64, error)
 

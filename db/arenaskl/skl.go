@@ -81,7 +81,7 @@ func NewSkiplist(arena *Arena) *Skiplist {
 		head:     head,
 		tail:     tail,
 		height:   1,
-		indexMap: make(map[uint64]uint64),
+		IndexMap: make(map[uint64]uint64),
 	}
 
 	return skl
@@ -118,7 +118,7 @@ func (s *Skiplist) newNode(key, val []byte, index uint64) (nd *node, height uint
 
 	value, err := s.allocVal(val)
 	nd.value = append(nd.value, value)
-	s.indexMap[index] = value
+	s.IndexMap[index] = value
 	return
 }
 

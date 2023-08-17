@@ -1,7 +1,11 @@
 package logfile
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/gob"
+	"github.com/ColdToo/Cold2DB/log"
+	"github.com/ColdToo/Cold2DB/pb"
 	"hash/crc32"
 )
 
@@ -31,6 +35,22 @@ type KV struct {
 	Value     []byte
 	Type      EntryType
 	ExpiredAt int64
+}
+
+func (k KV) GobEncode() ([]byte, error) {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(k); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func GobDecode(data []byte) (kv KV, err error) {
+	err = gob.NewDecoder(bytes.NewBuffer(data)).Decode(&kv)
+	if err != nil {
+		log.Errorf("decode err:", err)
+	}
+	return
 }
 
 type entryHeader struct {
@@ -121,7 +141,7 @@ func (e *WalEntry) EncodeWalEntry() ([]byte, int) {
 	return buf, size
 }
 
-func (e *WalEntry) encodeMemWalEntry() []byte {
+func (e *WalEntry) EncodeMemEntry() []byte {
 	buf := make([]byte, IndexSize+TermSize+ExpiredAtSize+EntryTypeSize+len(e.Value))
 	binary.LittleEndian.PutUint64(buf[:], e.Index)
 	binary.LittleEndian.PutUint64(buf[IndexSize:], e.Term)
@@ -131,7 +151,24 @@ func (e *WalEntry) encodeMemWalEntry() []byte {
 	return buf
 }
 
-func decodeMemWalEntry(buf []byte) (e *WalEntry) {
+func (e *WalEntry) TransToPbEntry() (pbEnt *pb.Entry) {
+	kv := KV{
+		Key:       e.Key,
+		Value:     e.Value,
+		Type:      e.Type,
+		ExpiredAt: e.ExpiredAt,
+	}
+	buf, _ := kv.GobEncode()
+	pbEnt = &pb.Entry{
+		Index: e.Index,
+		Term:  e.Term,
+		Type:  pb.EntryNormal,
+		Data:  buf,
+	}
+	return
+}
+
+func DecodeMemEntry(buf []byte) (e *WalEntry) {
 	typ := make([]byte, 1)
 	e.Index = binary.LittleEndian.Uint64(buf[:4])
 	e.Index = binary.LittleEndian.Uint64(buf[4:9])

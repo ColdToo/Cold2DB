@@ -14,13 +14,6 @@ import (
 	"time"
 )
 
-const (
-	iSize  = logfile.IndexSize
-	tSize  = logfile.TermSize
-	eaSize = logfile.ExpiredAtSize
-	etSize = logfile.EntryTypeSize
-)
-
 type memManager struct {
 	firstIndex uint64
 
@@ -83,7 +76,7 @@ func (m *memManager) newMemtable(memOpt memOpt) (*memtable, error) {
 func (m *memManager) reopenImMemtable(memOpt memOpt) {
 	DirEntries, err := os.ReadDir(memOpt.walDirPath)
 	if err != nil {
-		log.Error(err)
+		log.Errorf("", err)
 		return
 	}
 
@@ -115,7 +108,7 @@ func (m *memManager) reopenImMemtable(memOpt memOpt) {
 			defer wg.Done()
 			table, err := m.openMemtable(memOpt)
 			if err != nil {
-				log.Error(err)
+				log.Errorf("", err)
 			}
 			immtableC <- table
 		}()
@@ -151,17 +144,17 @@ func (m *memManager) openMemtable(memOpt memOpt) (*memtable, error) {
 			// This function is only be executed in one goroutine at startup.
 			wal.WriteAt += size
 
-			mv := &memValue{
+			mv := &logfile.WalEntry{
 				Index:     entry.Index,
 				Term:      entry.Term,
-				expiredAt: entry.ExpiredAt,
-				value:     entry.Value,
-				typ:       entry.Type,
+				ExpiredAt: entry.ExpiredAt,
+				Value:     entry.Value,
+				Type:      entry.Type,
 			}
-			mvBuf := mv.encode()
+			mvBuf := mv.EncodeMemEntry()
 
 			var err error
-			err = table.sklIter.PutOrUpdate(entry.Key, mvBuf)
+			err = table.sklIter.PutOrUpdate(entry.Key, mvBuf, mv.Index)
 			if err != nil {
 				log.Errorf("put value into skip list err.%+v", err)
 				return nil, err
@@ -178,9 +171,32 @@ func (m *memManager) openMemtable(memOpt memOpt) (*memtable, error) {
 	return table, nil
 }
 
-func (m *memManager) getEntryByIndex(mem *memtable, index uint64) []byte {
-	value := mem.skl.IndexMap[index]
-	return decodeMemValue(mem.sklIter.GetValueByPosition(value))
+func (m *memManager) getEntryByIndex(mem *memtable, index uint64) *logfile.WalEntry {
+	value, ok := mem.skl.IndexMap[index]
+	if !ok {
+		return nil
+	}
+	return logfile.DecodeMemEntry(mem.sklIter.GetValueByPosition(value))
+}
+
+func (m *memManager) getEntriesByRange(low, high uint64) (entries []*logfile.WalEntry) {
+	sort.Slice(m.immuMems, func(i, j int) bool {
+		return m.immuMems[i].CreatAt > m.immuMems[j].CreatAt
+	})
+
+	for _, imm := range m.immuMems {
+		for i := low; i <= high; i++ {
+			if value, ok := imm.skl.IndexMap[low]; ok {
+				ent := logfile.DecodeMemEntry(imm.sklIter.GetValueByPosition(value))
+				entries = append(entries, ent)
+			} else {
+				low = i
+				continue
+			}
+		}
+	}
+
+	return
 }
 
 type memtable struct {
@@ -235,9 +251,8 @@ func (mt *memtable) putBatch(entries []logfile.WalEntry) error {
 }
 
 func (mt *memtable) putInMemtable(entry logfile.WalEntry) {
-	mv := memValue{Term: entry.Term, Index: entry.Index, key: entry.Key, value: entry.Value, typ: entry.Type, expiredAt: entry.ExpiredAt}
-	mvBuf := mv.encode()
-	err := mt.sklIter.PutOrUpdate(entry.Key, mvBuf, entry.Index)
+	memEntryBuf := entry.EncodeMemEntry()
+	err := mt.sklIter.PutOrUpdate(entry.Key, memEntryBuf, entry.Index)
 	if err != nil {
 		log.Errorf("", err)
 		return
@@ -262,16 +277,16 @@ func (mt *memtable) get(key []byte) (bool, []byte) {
 
 	//选取index最大的value返回
 	values := mt.sklIter.Value()
-	mv := decodeMemValue(values[len(values)-1])
+	mv := logfile.DecodeMemEntry(values[len(values)-1])
 
-	if mv.typ == logfile.TypeDelete {
+	if mv.Type == logfile.TypeDelete {
 		return true, nil
 	}
 
-	if mv.expiredAt > 0 && mv.expiredAt <= time.Now().Unix() {
+	if mv.ExpiredAt > 0 && mv.ExpiredAt <= time.Now().Unix() {
 		return true, nil
 	}
-	return false, mv.value
+	return false, mv.Value
 }
 
 func (mt *memtable) syncWAL() error {

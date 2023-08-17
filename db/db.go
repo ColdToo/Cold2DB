@@ -162,22 +162,51 @@ func (db *Cold2DB) SetHardState(st pb.HardState) error {
 // raft read interface
 
 func (db *Cold2DB) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
-	//先确定low和high在哪个memtable,先确定low的区间，再确定high的区间
-	//先查询是否在active memtable
-
-	//low和high都在active memtable
+	if lo < db.memManager.firstIndex {
+		return nil, errors.New("some entries is compacted")
+	}
+	//1、low和high都在active memtable
 	if _, ok := db.memManager.activeMem.skl.IndexMap[lo]; ok {
 		if _, ok := db.memManager.activeMem.skl.IndexMap[hi]; ok {
 			for i := lo; i < hi; i++ {
-				db.memManager.getEntryByIndex(db.memManager.activeMem, i)
+				walEntry := db.memManager.getEntryByIndex(db.memManager.activeMem, i)
+				entries = append(entries, walEntry.TransToPbEntry())
 			}
 		}
+		return
 	}
 
+	//2、low在active memtable,hi在immtable
+	if _, ok := db.memManager.activeMem.skl.IndexMap[lo]; ok {
+		for i := lo; i < hi; i++ {
+			walEntry := db.memManager.getEntryByIndex(db.memManager.activeMem, i)
+			if walEntry == nil {
+				db.memManager.getEntriesByRange(i, hi)
+			}
+			entries = append(entries, walEntry.TransToPbEntry())
+		}
+		return
+	}
+
+	walEntries := db.memManager.getEntriesByRange(lo, hi)
+	for _, walE := range walEntries {
+		entries = append(entries, walE.TransToPbEntry())
+	}
+
+	return
 }
 
 func (db *Cold2DB) Term(i uint64) (uint64, error) {
-	return db.memManager.activeMem
+	if i > db.memManager.firstIndex || i < db.memManager.appliedIndex {
+		return 0, errors.New("the specific index entry is compacted")
+	}
+	for _, imm := range db.memManager.immuMems {
+		if value, ok := imm.skl.IndexMap[i]; ok {
+			ent := logfile.DecodeMemEntry(imm.sklIter.GetValueByPosition(value))
+			return ent.Term, nil
+		}
+	}
+	return 0, errors.New("the specific index entry is compacted")
 }
 
 func (db *Cold2DB) AppliedIndex() uint64 {
@@ -188,7 +217,6 @@ func (db *Cold2DB) FirstIndex() uint64 {
 	return db.memManager.firstIndex
 }
 
-// 通过snapshoter获取
 func (db *Cold2DB) GetSnapshot() (pb.Snapshot, error) {
 	return pb.Snapshot{}, nil
 }

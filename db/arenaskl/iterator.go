@@ -2,7 +2,6 @@ package arenaskl
 
 import (
 	"runtime"
-	"sync/atomic"
 	"unsafe"
 )
 
@@ -101,33 +100,6 @@ func (it *Iterator) seekForBaseSplice(key []byte) (prev, next *node, found bool)
 	return
 }
 
-func (it *Iterator) setValueIfDeleted(nd *node, val []byte) error {
-	var newVal uint64
-	var err error
-
-	for {
-		old := atomic.LoadUint64(&nd.value)
-		if old != deletedVal {
-			it.value = old
-			it.nd = nd
-			return ErrRecordExists
-		}
-		if newVal == 0 {
-			newVal, err = it.list.allocVal(val)
-			if err != nil {
-				return err
-			}
-		}
-		if atomic.CompareAndSwapUint64(&nd.value, old, newVal) {
-			break
-		}
-	}
-
-	it.value = newVal
-	it.nd = nd
-	return err
-}
-
 // put update
 
 func (it *Iterator) PutOrUpdate(key, mv []byte, index uint64) (err error) {
@@ -151,7 +123,7 @@ func (it *Iterator) Set(val []byte, index uint64) error {
 		return err
 	}
 	it.value = append(it.value, newVal)
-	it.list.indexMap[index] = newVal
+	it.list.IndexMap[index] = newVal
 	return nil
 }
 
@@ -252,8 +224,6 @@ func (it *Iterator) Put(key []byte, val []byte, index uint64) error {
 				if i != 0 {
 					panic("how can another thread have inserted a node at a non-base level?")
 				}
-
-				return it.setValueIfDeleted(next, val)
 			}
 		}
 	}

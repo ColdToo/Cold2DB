@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"bytes"
 	"errors"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -94,8 +93,8 @@ func (rn *RaftNode) Step(m *pb.Message) error {
 }
 
 // Propose 用于kv请求propose
-func (rn *RaftNode) Propose(buffer bytes.Buffer) error {
-	ent := pb.Entry{Data: buffer.Bytes()}
+func (rn *RaftNode) Propose(buffer []byte) error {
+	ent := pb.Entry{Data: buffer}
 	ents := make([]*pb.Entry, 0)
 	ents = append(ents, &ent)
 	return rn.Raft.Step(&pb.Message{

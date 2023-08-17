@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/domain"
@@ -27,7 +25,7 @@ type AppNode struct {
 	raftNode  *raft.RaftNode
 	transport *transport.Transport
 
-	proposeC    <-chan bytes.Buffer  // 提议 (k,v)
+	proposeC    <-chan []byte        // 提议 (k,v)
 	confChangeC <-chan pb.ConfChange // 提议更改配置文件
 	errorC      chan<- error         // errors from raft session
 	stopc       chan struct{}        // signals proposal channel closed
@@ -37,7 +35,7 @@ type AppNode struct {
 	TickTime int //定时触发定时器的时间
 }
 
-func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan bytes.Buffer,
+func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan []byte,
 	confChangeC <-chan pb.ConfChange, errorC chan<- error, kvStore *KvStore) {
 	an := &AppNode{
 		proposeC:    proposeC,
@@ -175,10 +173,9 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 	walEntries := make([]logfile.WalEntry, len(entries))
 	walEntriesId := make([]int64, 0)
 	for _, entry := range entries {
-		err := gob.NewDecoder(bytes.NewBuffer(entry.Data)).Decode(&kv)
+		kv, err = logfile.GobDecode(entry.Data)
 		if err != nil {
-			log.Errorf("decode err:", err)
-			continue
+			return err
 		}
 		walEntry := logfile.WalEntry{
 			Index:     entry.Index,

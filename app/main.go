@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"github.com/ColdToo/Cold2DB/pb"
 	"strings"
@@ -17,7 +16,7 @@ func main() {
 	join := flag.Bool("join", false, "是否加入已经存在的集群")
 	flag.Parse()
 
-	proposeC := make(chan bytes.Buffer)
+	proposeC := make(chan []byte)
 	defer close(proposeC)
 	confChangeC := make(chan pb.ConfChange)
 	defer close(confChangeC)

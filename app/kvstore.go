@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/gob"
 	"errors"
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/db/logfile"
@@ -14,12 +12,12 @@ type KV = logfile.KV
 
 type KvStore struct {
 	db         *db.Cold2DB
-	proposeC   chan<- bytes.Buffer     // channel for proposing updates
+	proposeC   chan<- []byte           // channel for proposing updates
 	monitorKV  map[int64]chan struct{} //todo 使用这方式会不会导致内存过大
 	ReqTimeout time.Duration
 }
 
-func NewKVStore(proposeC chan<- bytes.Buffer) *KvStore {
+func NewKVStore(proposeC chan<- []byte) *KvStore {
 	cold2DB, err := db.GetDB()
 	if err != nil {
 		log.Panicf("get db failed", err)
@@ -52,10 +50,7 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	if delete {
 		kv.Type = logfile.TypeDelete
 	}
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(kv); err != nil {
-		return false, err
-	}
+	buf, _ := kv.GobEncode()
 	s.proposeC <- buf
 
 	sig := make(chan struct{})
