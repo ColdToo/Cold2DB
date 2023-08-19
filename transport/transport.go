@@ -228,8 +228,8 @@ func (t *Transport) AddRemote(id types.ID, urlList []string) {
 
 	t.Logger.Info(
 		"added new remote peer",
-		zap.String("local-member-id", t.LocalID.String()),
-		zap.String("remote-peer-id", id.String()),
+		zap.String("local-member-id", t.LocalID.Str()),
+		zap.String("remote-peer-id", id.Str()),
 		zap.Strings("remote-peer-urls", urlList),
 	)
 }

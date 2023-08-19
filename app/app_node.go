@@ -202,7 +202,6 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 }
 
 func (an *AppNode) servePeerRaft() {
-	//transport 实例，负责raft节点之间的网络通信服务
 	an.transport = &transport.Transport{
 		LocalID:   types.ID(an.localId),
 		ClusterID: 0x1000,
