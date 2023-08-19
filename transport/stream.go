@@ -175,9 +175,9 @@ func (cw *streamWriter) run() {
 			log.Warn("established TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
 				Str(code.RemoteId, cw.peerID.Str()).Record()
 
-			heartbeatc, msgc = tickc.C, cw.msgc
+			heartbeatc, msgc = tickc.C, cw.msgC
 
-		case <-cw.stopc:
+		case <-cw.stopC:
 			if cw.close() {
 				log.Warn("closed TCP streaming connection with remote peer").Str(code.RemoteId, cw.peerID.Str()).Record()
 			}
