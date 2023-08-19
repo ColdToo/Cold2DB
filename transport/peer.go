@@ -62,7 +62,6 @@ type Peer interface {
 // peer 代表了远程节点，本地节点发送消息通过该结构体发送
 // 本地Raft节点通过peer向远程节点发送消息。每个peer都有两种发送消息的机制：stream和pipeline。
 // stream是一个初始化的长轮询连接，它始终打开以传输消息。除了一般的stream之外，peer还有一个优化的stream用于发送msgApp，因为msgApp占所有消息的大部分。
-// 只有Raft leader使用优化的stream将msgApp发送到远程follower节点。pipeline是一系列向远程发送HTTP请求的HTTP客户端。仅在未建立stream时使用。
 type peer struct {
 	localID types.ID //本地节点的id
 	// id of the remote raft peer node
@@ -80,8 +79,8 @@ type peer struct {
 	pipeline   *pipeline
 	snapSender *snapshotSender // snapshot sender to send v3 snapshot messages
 
-	recvc chan *pb.Message //从Stream消息通道中读取到消息之后，会通过该通道将消息交给Raft接口，然后由它返回给底层etcd-raft模块进行处理
-	propc chan *pb.Message //从Stream消息通道中读取到MsgProp类型的消息之后，会通过该通道将MsgApp消息交给Raft接口，然后由它返回给底层的etcd-raft模块进行处理
+	recvC chan *pb.Message //从Stream消息通道中读取到消息之后，会通过该通道将消息交给Raft接口，然后由它返回给底层etcd-raft模块进行处理
+	propC chan *pb.Message //从Stream消息通道中读取到MsgProp类型的消息之后，会通过该通道将MsgApp消息交给Raft接口，然后由它返回给底层的etcd-raft模块进行处理
 
 	mu     sync.Mutex
 	paused bool
@@ -121,18 +120,36 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 		pipeline:     pipeline,
 		snapSender:   newSnapshotSender(t, picker, peerID, peerStatus),
 
-		recvc: make(chan *pb.Message, recvBufSize),
-		propc: make(chan *pb.Message, maxPendingProposals),
+		recvC: make(chan *pb.Message, recvBufSize),
+		propC: make(chan *pb.Message, maxPendingProposals),
 		stopc: make(chan struct{}),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 
+	// 用于接收其他节点发送过来的数据传递给recvc和propc通道
+	p.streamReader = &streamReader{
+		peerID:     peerID,
+		tr:         t,
+		picker:     picker,
+		peerStatus: peerStatus,
+		recvC:      p.recvC,
+		propC:      p.propC,
+	}
+
+	p.streamReader.start()
+
+	p.handleReceiveCAndPropC(r, ctx)
+
+	return p
+}
+
+func (p *peer) handleReceiveCAndPropC(r RaftTransport, ctx context.Context) {
 	go func() {
 		for {
 			select {
-			case mm := <-p.recvc:
+			case mm := <-p.recvC:
 				if err := r.Process(ctx, mm); err != nil {
 					log.Warn("failed to process Raft message").Err(code.MessageProcErr, err)
 				}
@@ -146,7 +163,7 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 	go func() {
 		for {
 			select {
-			case mm := <-p.propc:
+			case mm := <-p.propC:
 				if err := r.Process(ctx, mm); err != nil {
 					log.Warn("failed to process Raft message").Err(code.MessageProcErr, err)
 				}
@@ -155,20 +172,6 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 			}
 		}
 	}()
-
-	// 用于接收其他节点发送过来的数据传递给recvc和propc通道
-	p.streamReader = &streamReader{
-		peerID:     peerID,
-		tr:         t,
-		picker:     picker,
-		peerStatus: peerStatus,
-		recvC:      p.recvc,
-		propC:      p.propc,
-	}
-
-	p.streamReader.start()
-
-	return p
 }
 
 func (p *peer) send(m pb.Message) {
@@ -230,8 +233,6 @@ func (p *peer) attachOutgoingConn(conn *outgoingConn) {
 
 func (p *peer) activeSince() time.Time { return p.status.activeSince() }
 
-// Pause pauses the peer. The peer will simply drops all incoming
-// messages without returning an error.
 func (p *peer) Pause() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -239,7 +240,6 @@ func (p *peer) Pause() {
 	p.streamWriter.pause()
 }
 
-// Resume resumes a paused peer.
 func (p *peer) Resume() {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -215,7 +215,6 @@ func (an *AppNode) servePeerRaft() {
 		return
 	}
 
-	//raftexample --id 1 --cluster http://127.0.0.1:12379,http://127.0.0.1:22379,http://127.0.0.1:32379 --port 12380
 	for i := range an.peersUrl {
 		if i+1 != an.localId {
 			an.transport.AddPeer(types.ID(i+1), []string{an.peersUrl[i]})

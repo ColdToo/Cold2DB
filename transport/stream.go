@@ -28,9 +28,7 @@ const (
 
 var (
 	errUnsupportedStreamType = fmt.Errorf("unsupported stream type")
-)
 
-var (
 	// 理解为线路的心跳信息
 	linkHeartbeatMessage = pb.Message{Type: pb.MsgHeartbeat}
 )
@@ -60,23 +58,21 @@ type streamWriter struct {
 	closer  io.Closer
 	working bool
 
-	msgc  chan *pb.Message   //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
-	connc chan *outgoingConn //通过该通道获取当前streamWriter实例关联的底层网络连接，  outgoingConn其实是对网络连接的一层封装，其中记录了当前连接使用的协议版本，以及用于关闭连接的Flusher和Closer等信息。
-	stopc chan struct{}
+	msgC  chan *pb.Message   //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
+	connC chan *outgoingConn //通过该通道获取当前streamWriter实例关联的底层网络连接，  outgoingConn其实是对网络连接的一层封装，其中记录了当前连接使用的协议版本，以及用于关闭连接的Flusher和Closer等信息。
+	stopC chan struct{}
 	done  chan struct{}
 }
 
-// startStreamWriter creates a streamWrite and starts a long running go-routine that accepts
-// messages and writes to the attached outgoing connection.
 func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport) *streamWriter {
 	w := &streamWriter{
 		localID: local,
 		peerID:  id,
 		status:  status,
 		r:       r,
-		msgc:    make(chan *pb.Message, streamBufSize),
-		connc:   make(chan *outgoingConn),
-		stopc:   make(chan struct{}),
+		msgC:    make(chan *pb.Message, streamBufSize),
+		connC:   make(chan *outgoingConn),
+		stopC:   make(chan struct{}),
 		done:    make(chan struct{}),
 	}
 	go w.run()
@@ -201,7 +197,7 @@ func (cw *streamWriter) run() {
 func (cw *streamWriter) writeC() (chan<- *pb.Message, bool) {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
-	return cw.msgc, cw.working
+	return cw.msgC, cw.working
 }
 
 func (cw *streamWriter) close() bool {
@@ -232,7 +228,7 @@ func (cw *streamWriter) closeUnlocked() bool {
 // 提供一个可以获取连接的通道
 func (cw *streamWriter) attach(conn *outgoingConn) bool {
 	select {
-	case cw.connc <- conn:
+	case cw.connC <- conn:
 		return true
 	case <-cw.done:
 		return false
@@ -240,20 +236,14 @@ func (cw *streamWriter) attach(conn *outgoingConn) bool {
 }
 
 func (cw *streamWriter) stop() {
-	close(cw.stopc)
+	close(cw.stopC)
 	<-cw.done
 }
 
-/*---------------------------------------------------------------------------*/
-/*---------------------------------------------------------------------------*/
-
-// streamReader is a long-running go-routine that dials to the remote stream
-// endpoint and reads messages from the response body returned.
 type streamReader struct {
 	lg *zap.Logger
 
 	peerID     types.ID
-	streamType streamType
 
 	tr         *Transport
 	picker     *urlPicker
@@ -280,7 +270,6 @@ func (cr *streamReader) start() {
 }
 
 func (cr *streamReader) run() {
-	t := cr.streamType
 
 	log.Info("started stream reader with remote peer").Str(code.LocalId, cr.tr.LocalID.Str()).
 		Str(code.RemoteId, cr.peerID.Str()).Record()
@@ -337,7 +326,7 @@ func (cr *streamReader) run() {
 	}
 }
 
-func (cr *streamReader) decodeLoop(rc io.ReadCloser, t streamType) error {
+func (cr *streamReader) decodeLoop(rc io.ReadCloser) error {
 	var dec decoder
 	cr.mu.Lock()
 
@@ -423,7 +412,7 @@ func (cr *streamReader) stop() {
 	<-cr.done
 }
 
-func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
+func (cr *streamReader) dial() (io.ReadCloser, error) {
 	u := cr.picker.pick() //获取对端节点暴露的一个url
 	uu := u
 	uu.Path = path.Join(t.endpoint(), cr.tr.LocalID.Str())
