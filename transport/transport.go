@@ -256,7 +256,6 @@ func (t *Transport) removePeer(id types.ID) {
 		t.Logger.Panic("unexpected removal of unknown remote peer", zap.String("remote-peer-id", id.String()))
 	}
 	delete(t.peers, id)
-	delete(t.LeaderStats.Followers, id.String())
 
 	t.Logger.Info(
 		"removed remote peer",

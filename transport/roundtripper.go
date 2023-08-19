@@ -136,7 +136,7 @@ func SelfCert(lg *zap.Logger, dirpath string, hosts []string, selfSignedCertVali
 		)
 		return
 	}
-	err = fileutil.TouchDirAll(lg, dirpath)
+	err = fileutil.TouchDirAll(dirpath)
 	if err != nil {
 		if info.Logger != nil {
 			info.Logger.Warn(

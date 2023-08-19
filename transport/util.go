@@ -127,3 +127,12 @@ func addRemoteFromRequest(tr Transporter, r *http.Request) {
 		}
 	}
 }
+
+// IsClosedConnError returns true if the error is from closing listener, cmux.
+// copied from golang.org/x/net/http2/http2.go
+func IsClosedConnError(err error) bool {
+	// 'use of closed network connection' (Go <=1.8)
+	// 'use of closed file or network connection' (Go >1.8, internal/poll.ErrClosing)
+	// 'mux: listener closed' (cmux.ErrListenerClosed)
+	return err != nil && strings.Contains(err.Error(), "closed")
+}

@@ -10,20 +10,18 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-	"path"
 	"strings"
 	"sync"
 	"time"
 
 	"go.etcd.io/etcd/pkg/httputil"
-	"go.etcd.io/etcd/pkg/transport"
 	"go.etcd.io/etcd/version"
 
 	"go.uber.org/zap"
 )
 
 const (
-	streamBufSize                = 4096
+	streamBufSize = 4096
 )
 
 var (
@@ -46,7 +44,6 @@ type outgoingConn struct {
 	peerID  types.ID
 }
 
-// streamWriter writes messages to the attached outgoingConn.
 type streamWriter struct {
 	localID types.ID
 	peerID  types.ID
@@ -84,9 +81,9 @@ func (cw *streamWriter) run() {
 	var (
 		msgc       chan *pb.Message
 		heartbeatc <-chan time.Time // 定时器会定时向该通道发送信号，触发心跳消息的发送，该心跳消息与后台介绍的Raft的心跳消息有所不同，该心跳的主要目的是为了防止连接长时间不用断开的
-		enc        encoder      // 编码器接口，实际实现该接口的会负责将消息序列化并写入连接的缓冲区中
-		flusher    http.Flusher // 负责刷新底层连接，将缓冲区的数据发送出去
-		batched    int          // 统计未flush的批次
+		enc        encoder          // 编码器接口，实际实现该接口的会负责将消息序列化并写入连接的缓冲区中
+		flusher    http.Flusher     // 负责刷新底层连接，将缓冲区的数据发送出去
+		batched    int              // 统计未flush的批次
 	)
 
 	tickc := time.NewTicker(ConnReadTimeout / 3)
@@ -155,13 +152,11 @@ func (cw *streamWriter) run() {
 
 			*/
 
-		case conn := <-cw.connc:
+		case conn := <-cw.connC:
 			cw.mu.Lock()
 
 			closed := cw.closeUnlocked()
 
-			//根据不同的消息类型获取不同编码器
-			t = conn.t
 			enc = &messageEncoderAndWriter{w: conn.Writer}
 
 			//获取底层连接的flusher
@@ -243,7 +238,7 @@ func (cw *streamWriter) stop() {
 type streamReader struct {
 	lg *zap.Logger
 
-	peerID     types.ID
+	peerID types.ID
 
 	tr         *Transport
 	picker     *urlPicker
@@ -270,13 +265,12 @@ func (cr *streamReader) start() {
 }
 
 func (cr *streamReader) run() {
-
 	log.Info("started stream reader with remote peer").Str(code.LocalId, cr.tr.LocalID.Str()).
 		Str(code.RemoteId, cr.peerID.Str()).Record()
 
 	for {
 		//首先调用dial方法给对端发送一个GET请求，从而和对端建立长连接。对端的Header收到该连接后，会封装成outgoingConn结构，并发送给streamWriter，
-		rc, err := cr.dial(t)
+		rc, err := cr.dial()
 		if err != nil {
 			cr.peerStatus.deactivate(failureType{source: t.String(), action: "dial"}, err.Error())
 		} else { //如果未出现异常，则开始读取对端返回的消息，并将读取到的消息写入streamReader.recvc通道中
@@ -284,44 +278,21 @@ func (cr *streamReader) run() {
 			log.Info("established TCP streaming connection with remote peer").Str(code.LocalId, cr.tr.LocalID.Str()).
 				Str(code.RemoteId, cr.peerID.Str()).Record()
 
-			//连接建立成功之后会调用decodeLoop方法来轮询读取对端节点发送过来的消息，并将收到的字节流转成raftpb.Message消息类型的格式。如果消息是心跳类型则忽略，如果是raftpb.MsgProp类型的消息，则发送到propc通道中，会有专门的协程发送给本节点底层的raft模块。
-			//如果是其他消息(注意这些消息里没有快照类型的消息，因为快照类型的消息是专门的通道)，则发送到recvc通道中，会有专门的协程将数据发送给底层的raft模块。
-			err = cr.decodeLoop(rc, t) //轮询读取消息
+			//连接建立成功之后会调用decodeLoop方法来轮询读取对端节点发送过来的消息，并将收到的字节流转成raftpb.Message消息类型的格式。如果是保持连接的心跳类型则忽略。
+			//如果是raftpb.MsgProp类型的消息，则发送到propc通道中，如果是其他消息则发送到recvc通道中
+			err = cr.decodeLoop(rc) //轮询读取消息
 			cr.lg.Warn(
 				"lost TCP streaming connection with remote peer",
-				zap.String("stream-reader-type", cr.typ.String()),
-				zap.String("local-member-id", cr.tr.ID.String()),
-				zap.String("remote-peer-id", cr.peerID.String()),
+				zap.String("local-member-id", cr.tr.LocalID.Str()),
+				zap.String("remote-peer-id", cr.peerID.Str()),
 				zap.Error(err),
 			)
 			switch {
-			// all data is read out
 			case err == io.EOF:
-			// connection is closed by the remote
-			case transport.IsClosedConnError(err):
+			case IsClosedConnError(err):
 			default:
 				cr.peerStatus.deactivate(failureType{source: t.String(), action: "read"}, err.Error())
 			}
-		}
-
-		if cr.ctx.Err() != nil {
-			cr.lg.Info(
-				"stopped stream reader with remote peer",
-				zap.String("stream-reader-type", t.String()),
-				zap.String("local-member-id", cr.tr.LocalID.Str()),
-				zap.String("remote-peer-id", cr.peerID.String()),
-			)
-			close(cr.done)
-			return
-		}
-		if err != nil {
-			cr.lg.Warn(
-				"rate limit on stream reader with remote peer",
-				zap.String("stream-reader-type", t.String()),
-				zap.String("local-member-id", cr.tr.LocalID.Str()),
-				zap.String("remote-peer-id", cr.peerID.String()),
-				zap.Error(err),
-			)
 		}
 	}
 }
@@ -330,12 +301,7 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser) error {
 	var dec decoder
 	cr.mu.Lock()
 
-	switch t {
-	case streamTypeMessage:
-		dec = &messageDecoder{r: rc}
-	default:
-		cr.lg.Panic("unknown stream type", zap.String("type", t.String()))
-	}
+	dec = &messageDecoder{r: rc}
 
 	select {
 	case <-cr.ctx.Done():
@@ -385,19 +351,19 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser) error {
 				cr.lg.Warn(
 					"dropped internal Raft message since receiving buffer is full (overloaded network)",
 					zap.String("message-type", m.Type.String()),
-					zap.String("local-member-id", cr.tr.ID.String()),
-					zap.String("from", types.ID(m.From).String()),
-					zap.String("remote-peer-id", types.ID(m.To).String()),
-					zap.Bool("remote-peer-active", cr.status.isActive()),
+					zap.String("local-member-id", cr.tr.LocalID.Str()),
+					zap.String("from", types.ID(m.From).Str()),
+					zap.String("remote-peer-id", types.ID(m.To).Str()),
+					zap.Bool("remote-peer-active", cr.peerStatus.isActive()),
 				)
 			} else {
 				cr.lg.Warn(
 					"dropped Raft message since receiving buffer is full (overloaded network)",
 					zap.String("message-type", m.Type.String()),
-					zap.String("local-member-id", cr.tr.ID.String()),
-					zap.String("from", types.ID(m.From).String()),
-					zap.String("remote-peer-id", types.ID(m.To).String()),
-					zap.Bool("remote-peer-active", cr.status.isActive()),
+					zap.String("local-member-id", cr.tr.LocalID.Str()),
+					zap.String("from", types.ID(m.From).Str()),
+					zap.String("remote-peer-id", types.ID(m.To).Str()),
+					zap.Bool("remote-peer-active", cr.peerStatus.isActive()),
 				)
 			}
 		}
@@ -414,17 +380,15 @@ func (cr *streamReader) stop() {
 
 func (cr *streamReader) dial() (io.ReadCloser, error) {
 	u := cr.picker.pick() //获取对端节点暴露的一个url
-	uu := u
-	uu.Path = path.Join(t.endpoint(), cr.tr.LocalID.Str())
 
 	cr.lg.Debug(
 		"dial stream reader",
 		zap.String("from", cr.tr.LocalID.Str()),
 		zap.String("to", cr.peerID.Str()),
-		zap.String("address", uu.String()),
+		zap.String("address", u.String()),
 	)
 
-	req, err := http.NewRequest("GET", uu.String(), nil)
+	req, err := http.NewRequest("GET", u.String(), nil)
 	if err != nil {
 		cr.picker.unreachable(u)
 		return nil, fmt.Errorf("failed to make http request to %v (%v)", u, err)
@@ -519,12 +483,13 @@ func (cr *streamReader) close() {
 					zap.String("remote-peer-id", cr.peerID.Str()),
 					zap.Error(err),
 				)
+			}
 		}
+		cr.closer = nil
 	}
-	cr.closer = nil
 }
 
-func (cr *streamReader) pause(){
+func (cr *streamReader) pause() {
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
 	cr.paused = true

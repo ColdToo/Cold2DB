@@ -56,7 +56,7 @@ func (s *snapshotSender) send(merged snap.Message) {
 	start := time.Now()
 
 	m := merged.Message
-	to := types.ID(m.To).String()
+	to := types.ID(m.To).Str()
 
 	body := createSnapBody(s.tr.Logger, merged)
 	defer body.Close()
