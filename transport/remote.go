@@ -38,12 +38,11 @@ func startRemote(tr *Transport, urls types.URLs, remoteId types.ID) *remote {
 		picker: picker,
 		status: status,
 		raft:   tr.Raft,
-		errorc: tr.ErrorC,
+		errorC: tr.ErrorC,
 	}
 	pipeline.start()
 
 	return &remote{
-		lg:       tr.Logger,
 		localID:  tr.LocalID,
 		id:       remoteId,
 		status:   status,
@@ -51,7 +50,7 @@ func startRemote(tr *Transport, urls types.URLs, remoteId types.ID) *remote {
 	}
 }
 
-func (g *remote) send(m pb.Message) {
+func (g *remote) send(m *pb.Message) {
 	select {
 	case g.pipeline.msgc <- m:
 	default:

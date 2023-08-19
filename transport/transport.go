@@ -7,7 +7,6 @@ import (
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
-	"github.com/ColdToo/Cold2DB/transport/transport"
 	types "github.com/ColdToo/Cold2DB/transport/types"
 	"go.etcd.io/etcd/etcdserver/api/snap"
 
@@ -59,7 +58,7 @@ type Transport struct {
 
 	DialRetryFrequency time.Duration
 
-	TLSInfo transport.TLSInfo // TLS information used when creating connection
+	TLSInfo TLSInfo // TLS information used when creating connection
 
 	LocalID   types.ID      // 本地节点的ID
 	URLs      types.URLs    // peers URLs
@@ -82,13 +81,22 @@ type Transport struct {
 	peers   map[types.ID]Peer
 }
 
+// AddPeer peer 相当于是其他节点在本地的代言人，本地节点发送消息给其他节点实质就是传入参数给其他节点在本地的代言人peer
+func (t *Transport) AddPeer(id types.ID, urlList []string) {
+	urls, err := types.NewURLs(urlList)
+	if err != nil {
+		log.Panic("failed NewURLs").Err("urls", err)
+	}
+	t.peers[id] = startPeer(t, urls, id)
+	log.Info("added remote peer").Str(code.LocalId, t.LocalID.Str()).Str(code.RemoteId, id.Str()).Record()
+}
+
 func (t *Transport) Initialize() error {
 	var err error
 	t.streamRt, err = newStreamRoundTripper(t.TLSInfo, t.DialTimeout)
 	if err != nil {
 		return err
 	}
-
 	//创建Pipeline消息通道用的http.RoundTripper实例与streamRt不同的是，读写请求的起时时间设置成了永不过期
 	t.pipelineRt, err = NewPipeLineRoundTripper(t.TLSInfo, t.DialTimeout)
 	if err != nil {
@@ -105,15 +113,15 @@ func (t *Transport) Initialize() error {
 }
 
 func (t *Transport) Handler() http.Handler {
-	pipelineHandler := newPipelineHandler(t, t.Raft, t.ClusterID)
 	streamHandler := newStreamHandler(t, t, t.Raft, t.LocalID, t.ClusterID)
-	snapHandler := newSnapshotHandler(t, t.Raft, t.Snapshotter, t.ClusterID) //应该是v3版本使用，之前的版本使用pipelineHandler处理收到的快照)。
+	//pipelineHandler := newPipelineHandler(t, t.Raft, t.ClusterID)
+	//snapHandler := newSnapshotHandler(t, t.Raft, t.Snapshotter, t.ClusterID) //应该是v3版本使用，之前的版本使用pipelineHandler处理收到的快照)。
 
 	//路由
 	mux := http.NewServeMux()
-	mux.Handle(RaftPrefix, pipelineHandler)
-	mux.Handle(RaftStreamPrefix+"/", streamHandler)
-	mux.Handle(RaftSnapshotPrefix, snapHandler)
+	mux.Handle(RaftStream, streamHandler)
+	//mux.Handle(RaftPrefix, pipelineHandler)
+	//mux.Handle(RaftSnapshotPrefix, snapHandler)
 	return mux
 }
 
@@ -224,17 +232,6 @@ func (t *Transport) AddRemote(id types.ID, urlList []string) {
 		zap.String("remote-peer-id", id.String()),
 		zap.Strings("remote-peer-urls", urlList),
 	)
-}
-
-// AddPeer peer 相当于是其他节点在本地的代言人，本地节点发送消息给其他节点实质就是传入参数给其他节点在本地的代言人peer
-func (t *Transport) AddPeer(id types.ID, urlList []string) {
-	urls, err := types.NewURLs(urlList)
-	if err != nil {
-		log.Panic("failed NewURLs").Err("urls", err)
-	}
-
-	t.peers[id] = startPeer(t, urls, id)
-	log.Info("added remote peer").Str(code.LocalMemberId, t.LocalID.Str()).Str(code.RemotePeerId, id.Str()).Record()
 }
 
 func (t *Transport) RemovePeer(id types.ID) {

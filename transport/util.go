@@ -2,16 +2,12 @@ package transport
 
 import (
 	"fmt"
-	"github.com/ColdToo/Cold2DB/transport/transport"
 	types "github.com/ColdToo/Cold2DB/transport/types"
+	"go.etcd.io/etcd/version"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
-
-	"go.etcd.io/etcd/version"
 
 	"github.com/coreos/go-semver/semver"
 )
@@ -21,44 +17,6 @@ var (
 	errMemberNotFound = fmt.Errorf("member not found")
 )
 
-func NewListener(u url.URL, tlsinfo *transport.TLSInfo) (net.Listener, error) {
-	return transport.NewTimeoutListener(u.Host, u.Scheme, tlsinfo, ConnReadTimeout, ConnWriteTimeout)
-}
-
-func NewPipeLineRoundTripper(tlsInfo transport.TLSInfo, dialTimeout time.Duration) (http.RoundTripper, error) {
-	return NewTimeoutTransport(tlsInfo, dialTimeout, 0, 0)
-}
-
-func newStreamRoundTripper(tlsInfo transport.TLSInfo, dialTimeout time.Duration) (http.RoundTripper, error) {
-	return NewTimeoutTransport(tlsInfo, dialTimeout, ConnReadTimeout, ConnWriteTimeout)
-}
-
-func NewTimeoutTransport(info transport.TLSInfo, dialtimeoutd, rdtimeoutd, wtimeoutd time.Duration) (*http.Transport, error) {
-	tr, err := transport.NewTransport(info, dialtimeoutd)
-	if err != nil {
-		return nil, err
-	}
-
-	if rdtimeoutd != 0 || wtimeoutd != 0 {
-		// the timed out connection will timeout soon after it is idle.
-		// it should not be put back to http transport as an idle connection for future usage.
-		tr.MaxIdleConnsPerHost = -1
-	} else {
-		// allow more idle connections between peers to avoid unnecessary port allocation.
-		tr.MaxIdleConnsPerHost = 1024
-	}
-
-	tr.Dial = (&transport.rwTimeoutDialer{
-		Dialer: net.Dialer{
-			Timeout:   dialtimeoutd,
-			KeepAlive: 30 * time.Second,
-		},
-		rdtimeoutd: rdtimeoutd,
-		wtimeoutd:  wtimeoutd,
-	}).Dial
-	return tr, nil
-}
-
 func createPostRequest(u url.URL, path string, body io.Reader, contentType string, urls types.URLs, from, clusterId types.ID) *http.Request {
 	uu := u
 	uu.Path = path
@@ -67,8 +25,8 @@ func createPostRequest(u url.URL, path string, body io.Reader, contentType strin
 
 	}
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("X-Server-From", from.String())
-	req.Header.Set("X-Etcd-Cluster-ID", clusterId.String())
+	req.Header.Set("X-Server-From", from.Str())
+	req.Header.Set("X-Etcd-Cluster-ID", clusterId.Str())
 
 	setPeerURLsHeader(req, urls)
 

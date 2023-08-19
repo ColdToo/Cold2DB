@@ -23,46 +23,23 @@ import (
 )
 
 const (
-	streamTypeMessage streamType = "message"
-
-	streamBufSize = 4096
+	streamBufSize                = 4096
 )
 
 var (
 	errUnsupportedStreamType = fmt.Errorf("unsupported stream type")
 )
 
-type streamType string
-
-func (t streamType) endpoint() string {
-	switch t {
-	case streamTypeMessage:
-		return path.Join(RaftStreamPrefix, "message")
-	default:
-		return ""
-	}
-}
-
-func (t streamType) String() string {
-	switch t {
-	case streamTypeMessage:
-		return "stream Message"
-	default:
-		return "unknown stream"
-	}
-}
-
 var (
 	// 理解为线路的心跳信息
-	linkHeartbeatMessage = pb.Message{MsgType: pb.MessageType_MsgHeartbeat}
+	linkHeartbeatMessage = pb.Message{Type: pb.MsgHeartbeat}
 )
 
 func isLinkHeartbeatMessage(m *pb.Message) bool {
-	return m.MsgType == pb.MessageType_MsgHeartbeat && m.From == 0 && m.To == 0
+	return m.Type == pb.MsgHeartbeat && m.From == 0 && m.To == 0
 }
 
 type outgoingConn struct {
-	t streamType
 	io.Writer
 	http.Flusher
 	io.Closer
@@ -77,7 +54,7 @@ type streamWriter struct {
 	peerID  types.ID
 
 	status *peerStatus
-	r      Raft
+	r      RaftTransport
 
 	mu      sync.Mutex // guard field working and closer
 	closer  io.Closer
@@ -91,7 +68,7 @@ type streamWriter struct {
 
 // startStreamWriter creates a streamWrite and starts a long running go-routine that accepts
 // messages and writes to the attached outgoing connection.
-func startStreamWriter(local, id types.ID, status *peerStatus, r Raft) *streamWriter {
+func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport) *streamWriter {
 	w := &streamWriter{
 		localID: local,
 		peerID:  id,
@@ -111,7 +88,6 @@ func (cw *streamWriter) run() {
 	var (
 		msgc       chan *pb.Message
 		heartbeatc <-chan time.Time // 定时器会定时向该通道发送信号，触发心跳消息的发送，该心跳消息与后台介绍的Raft的心跳消息有所不同，该心跳的主要目的是为了防止连接长时间不用断开的
-		t          streamType
 		enc        encoder      // 编码器接口，实际实现该接口的会负责将消息序列化并写入连接的缓冲区中
 		flusher    http.Flusher // 负责刷新底层连接，将缓冲区的数据发送出去
 		batched    int          // 统计未flush的批次
@@ -120,10 +96,10 @@ func (cw *streamWriter) run() {
 	tickc := time.NewTicker(ConnReadTimeout / 3)
 	defer tickc.Stop()
 
-	var unflushed uint64 //为unflushed的字节数
+	var unflushed int //为unflushed的字节数
 
-	log.Info("started stream writer with remote peer").Str(code.LocalMemberId, cw.localID.Str()).
-		Str(code.RemotePeerId, cw.peerID.Str()).Record()
+	log.Info("started stream writer with remote peer").Str(code.LocalId, cw.localID.Str()).
+		Str(code.RemoteId, cw.peerID.Str()).Record()
 
 	for {
 		select {
@@ -143,8 +119,8 @@ func (cw *streamWriter) run() {
 
 			cw.close()
 
-			log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalMemberId, cw.localID.Str()).
-				Str(code.RemotePeerId, cw.peerID.Str()).Record()
+			log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
+				Str(code.RemoteId, cw.peerID.Str()).Record()
 
 			//将heartbeatc和msgc两个通道清空，后续就不会在发送心跳消息和其他类型的消息了
 			heartbeatc, msgc = nil, nil
@@ -154,7 +130,6 @@ func (cw *streamWriter) run() {
 			if err == nil {
 				unflushed += m.Size()
 
-				//todo 这是什么策略？
 				if len(msgc) == 0 || batched > streamBufSize/2 {
 					flusher.Flush()
 					unflushed = 0
@@ -169,8 +144,8 @@ func (cw *streamWriter) run() {
 			//异常情况处理
 			cw.status.deactivate(failureType{source: t.String(), action: "write"}, err.Error())
 			cw.close()
-			log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalMemberId, cw.localID.Str()).
-				Str(code.RemotePeerId, cw.peerID.Str()).Record()
+			log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
+				Str(code.RemoteId, cw.peerID.Str()).Record()
 			heartbeatc, msgc = nil, nil
 			cw.r.ReportUnreachable(m.To)
 
@@ -191,11 +166,7 @@ func (cw *streamWriter) run() {
 
 			//根据不同的消息类型获取不同编码器
 			t = conn.t
-			switch conn.t {
-			case streamTypeMessage:
-				enc = &messageEncoderAndWriter{w: conn.Writer}
-			default:
-			}
+			enc = &messageEncoderAndWriter{w: conn.Writer}
 
 			//获取底层连接的flusher
 			flusher = conn.Flusher
@@ -206,28 +177,28 @@ func (cw *streamWriter) run() {
 			cw.mu.Unlock()
 
 			if closed {
-				log.Warn("closed TCP streaming connection with remote peer").Str(code.LocalMemberId, cw.localID.Str()).
-					Str(code.RemotePeerId, cw.peerID.Str()).Record()
+				log.Warn("closed TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
+					Str(code.RemoteId, cw.peerID.Str()).Record()
 			}
 
-			log.Warn("established TCP streaming connection with remote peer").Str(code.LocalMemberId, cw.localID.Str()).
-				Str(code.RemotePeerId, cw.peerID.Str()).Record()
+			log.Warn("established TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
+				Str(code.RemoteId, cw.peerID.Str()).Record()
 
 			heartbeatc, msgc = tickc.C, cw.msgc
 
 		case <-cw.stopc:
 			if cw.close() {
-				log.Warn("closed TCP streaming connection with remote peer").Str(code.RemotePeerId, cw.peerID.Str()).Record()
+				log.Warn("closed TCP streaming connection with remote peer").Str(code.RemoteId, cw.peerID.Str()).Record()
 			}
 
-			log.Warn("stopped TCP streaming connection with remote peer").Str(code.RemotePeerId, cw.peerID.Str()).Record()
+			log.Warn("stopped TCP streaming connection with remote peer").Str(code.RemoteId, cw.peerID.Str()).Record()
 			close(cw.done)
 			return
 		}
 	}
 }
 
-func (cw *streamWriter) writec() (chan<- *pb.Message, bool) {
+func (cw *streamWriter) writeC() (chan<- *pb.Message, bool) {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
 	return cw.msgc, cw.working
@@ -246,7 +217,7 @@ func (cw *streamWriter) closeUnlocked() bool {
 	if err := cw.closer.Close(); err != nil {
 		cw.lg.Warn(
 			"failed to close connection with remote peer",
-			zap.String("remote-peer-id", cw.peerID.String()),
+			zap.String("remote-peer-id", cw.peerID.Str()),
 			zap.Error(err),
 		)
 	}
@@ -287,10 +258,10 @@ type streamReader struct {
 	tr         *Transport
 	picker     *urlPicker
 	peerStatus *peerStatus
-	recvc      chan<- *pb.Message //从peer中获取对端节点发送过来的消息，然后交给raft算法层进行处理，只接收非prop信息
-	propc      chan<- *pb.Message //只接收propc类消息
+	recvC      chan<- *pb.Message //从peer中获取对端节点发送过来的消息，然后交给raft算法层进行处理，只接收非prop信息
+	propC      chan<- *pb.Message //只接收prop类消息
 
-	errorc chan<- error
+	errorC chan<- error
 
 	mu     sync.Mutex
 	paused bool
@@ -303,7 +274,7 @@ type streamReader struct {
 
 func (cr *streamReader) start() {
 	cr.done = make(chan struct{})
-	cr.errorc = cr.tr.ErrorC
+	cr.errorC = cr.tr.ErrorC
 	cr.ctx, cr.cancel = context.WithCancel(context.Background())
 	go cr.run()
 }
@@ -311,8 +282,8 @@ func (cr *streamReader) start() {
 func (cr *streamReader) run() {
 	t := cr.streamType
 
-	log.Info("started stream reader with remote peer").Str(code.LocalMemberId, cr.tr.LocalID.Str()).
-		Str(code.RemotePeerId, cr.peerID.Str()).Record()
+	log.Info("started stream reader with remote peer").Str(code.LocalId, cr.tr.LocalID.Str()).
+		Str(code.RemoteId, cr.peerID.Str()).Record()
 
 	for {
 		//首先调用dial方法给对端发送一个GET请求，从而和对端建立长连接。对端的Header收到该连接后，会封装成outgoingConn结构，并发送给streamWriter，
@@ -321,8 +292,8 @@ func (cr *streamReader) run() {
 			cr.peerStatus.deactivate(failureType{source: t.String(), action: "dial"}, err.Error())
 		} else { //如果未出现异常，则开始读取对端返回的消息，并将读取到的消息写入streamReader.recvc通道中
 			cr.peerStatus.activate()
-			log.Info("established TCP streaming connection with remote peer").Str(code.LocalMemberId, cr.tr.LocalID.Str()).
-				Str(code.RemotePeerId, cr.peerID.Str()).Record()
+			log.Info("established TCP streaming connection with remote peer").Str(code.LocalId, cr.tr.LocalID.Str()).
+				Str(code.RemoteId, cr.peerID.Str()).Record()
 
 			//连接建立成功之后会调用decodeLoop方法来轮询读取对端节点发送过来的消息，并将收到的字节流转成raftpb.Message消息类型的格式。如果消息是心跳类型则忽略，如果是raftpb.MsgProp类型的消息，则发送到propc通道中，会有专门的协程发送给本节点底层的raft模块。
 			//如果是其他消息(注意这些消息里没有快照类型的消息，因为快照类型的消息是专门的通道)，则发送到recvc通道中，会有专门的协程将数据发送给底层的raft模块。
@@ -348,7 +319,7 @@ func (cr *streamReader) run() {
 			cr.lg.Info(
 				"stopped stream reader with remote peer",
 				zap.String("stream-reader-type", t.String()),
-				zap.String("local-member-id", cr.tr.LocalID.String()),
+				zap.String("local-member-id", cr.tr.LocalID.Str()),
 				zap.String("remote-peer-id", cr.peerID.String()),
 			)
 			close(cr.done)
@@ -358,7 +329,7 @@ func (cr *streamReader) run() {
 			cr.lg.Warn(
 				"rate limit on stream reader with remote peer",
 				zap.String("stream-reader-type", t.String()),
-				zap.String("local-member-id", cr.tr.LocalID.String()),
+				zap.String("local-member-id", cr.tr.LocalID.Str()),
 				zap.String("remote-peer-id", cr.peerID.String()),
 				zap.Error(err),
 			)
@@ -413,9 +384,9 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser, t streamType) error {
 			continue
 		}
 
-		recvc := cr.recvc
-		if m.MsgType == pb.MessageType_MsgPropose {
-			recvc = cr.propc
+		recvc := cr.recvC
+		if m.Type == pb.MsgProp {
+			recvc = cr.propC
 		}
 
 		select {
@@ -455,12 +426,12 @@ func (cr *streamReader) stop() {
 func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 	u := cr.picker.pick() //获取对端节点暴露的一个url
 	uu := u
-	uu.Path = path.Join(t.endpoint(), cr.tr.LocalID.String())
+	uu.Path = path.Join(t.endpoint(), cr.tr.LocalID.Str())
 
 	cr.lg.Debug(
 		"dial stream reader",
-		zap.String("from", cr.tr.LocalID.String()),
-		zap.String("to", cr.peerID.String()),
+		zap.String("from", cr.tr.LocalID.Str()),
+		zap.String("to", cr.peerID.Str()),
 		zap.String("address", uu.String()),
 	)
 
@@ -470,11 +441,11 @@ func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("failed to make http request to %v (%v)", u, err)
 	}
 
-	req.Header.Set("X-Server-From", cr.tr.LocalID.String())
+	req.Header.Set("X-Server-From", cr.tr.LocalID.Str())
 	req.Header.Set("X-Server-Version", version.Version)
 	req.Header.Set("X-Min-Cluster-Version", version.MinClusterVersion)
-	req.Header.Set("X-Etcd-Cluster-ID", cr.tr.ClusterID.String())
-	req.Header.Set("X-Raft-To", cr.peerID.String())
+	req.Header.Set("X-Etcd-Cluster-ID", cr.tr.ClusterID.Str())
+	req.Header.Set("X-Raft-To", cr.peerID.Str())
 	req = req.WithContext(cr.ctx)
 	setPeerURLsHeader(req, cr.tr.URLs)
 
@@ -497,7 +468,7 @@ func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 	case http.StatusGone:
 		httputil.GracefulClose(resp)
 		cr.picker.unreachable(u)
-		reportCriticalError(errMemberRemoved, cr.errorc)
+		reportCriticalError(errMemberRemoved, cr.errorC)
 		return nil, errMemberRemoved
 
 	case http.StatusOK:
@@ -521,8 +492,8 @@ func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 		case errIncompatibleVersion.Error():
 			cr.lg.Warn(
 				"request sent was ignored by remote peer due to server version incompatibility",
-				zap.String("local-member-id", cr.tr.LocalID.String()),
-				zap.String("remote-peer-id", cr.peerID.String()),
+				zap.String("local-member-id", cr.tr.LocalID.Str()),
+				zap.String("remote-peer-id", cr.peerID.Str()),
 				zap.Error(errIncompatibleVersion),
 			)
 			return nil, errIncompatibleVersion
@@ -530,10 +501,10 @@ func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 		case errClusterIDMismatch.Error():
 			cr.lg.Warn(
 				"request sent was ignored by remote peer due to cluster ID mismatch",
-				zap.String("remote-peer-id", cr.peerID.String()),
+				zap.String("remote-peer-id", cr.peerID.Str()),
 				zap.String("remote-peer-cluster-id", resp.Header.Get("X-Etcd-Cluster-ID")),
-				zap.String("local-member-id", cr.tr.LocalID.String()),
-				zap.String("local-member-cluster-id", cr.tr.ClusterID.String()),
+				zap.String("local-member-id", cr.tr.LocalID.Str()),
+				zap.String("local-member-cluster-id", cr.tr.ClusterID.Str()),
 				zap.Error(errClusterIDMismatch),
 			)
 			return nil, errClusterIDMismatch
@@ -555,19 +526,16 @@ func (cr *streamReader) close() {
 			if cr.lg != nil {
 				cr.lg.Warn(
 					"failed to close remote peer connection",
-					zap.String("local-member-id", cr.tr.ID.String()),
-					zap.String("remote-peer-id", cr.peerID.String()),
+					zap.String("local-member-id", cr.tr.LocalID.Str()),
+					zap.String("remote-peer-id", cr.peerID.Str()),
 					zap.Error(err),
 				)
-			} else {
-				plog.Errorf("peer %s (reader) connection close error: %v", cr.peerID, err)
-			}
 		}
 	}
 	cr.closer = nil
 }
 
-func (cr *streamReader) pause() {
+func (cr *streamReader) pause(){
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
 	cr.paused = true

@@ -7,25 +7,17 @@ import (
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
+	"github.com/ColdToo/Cold2DB/raft"
 	types "github.com/ColdToo/Cold2DB/transport/types"
+	"go.etcd.io/etcd/pkg/pbutil"
 	"io/ioutil"
 	"sync"
 	"time"
-
-	"go.etcd.io/etcd/pkg/pbutil"
-
-	"go.etcd.io/etcd/raft"
-
-	"go.uber.org/zap"
 )
 
 const (
 	connPerPipeline = 4
 
-	// pipelineBufSize is the size of pipeline buffer, which helps hold the
-	// temporary network latency.
-	// The size ensures that pipeline does not drop messages when the network
-	// is out of work for less than 1 second in good path.
 	pipelineBufSize = 64
 )
 
@@ -39,7 +31,7 @@ type pipeline struct {
 	peerStatus *peerStatus
 
 	//向raft报告发送快照失败或者成功
-	raft Raft
+	raft RaftTransport
 
 	//pipeline实例从这个管道中获取待发送到对端的message，默认缓冲通道是64个
 	msgc chan *pb.Message
@@ -57,17 +49,12 @@ func (p *pipeline) start() {
 		go p.handle()
 	}
 
-	log.Info("started HTTP pipelining with remote peer").Str(code.LocalMemberId, p.tr.LocalID.Str()).Str(code.RemotePeerId, p.peerID.Str()).Record()
+	log.Info("started HTTP pipelining with remote peer").Str(code.LocalId, p.tr.LocalID.Str()).Str(code.RemoteId, p.peerID.Str()).Record()
 }
 
 func (p *pipeline) stop() {
 	close(p.stopC)
 	p.wg.Wait()
-	p.tr.Logger.Info(
-		"stopped HTTP pipelining with remote peer",
-		zap.String("local-member-id", p.tr.LocalID.String()),
-		zap.String("remote-peer-id", p.peerID.String()),
-	)
 }
 
 func (p *pipeline) handle() {
@@ -75,25 +62,20 @@ func (p *pipeline) handle() {
 
 	for {
 		select {
+		// 若有需要发送的数据则直接发送
 		case m := <-p.msgc:
 			err := p.post(pbutil.MustMarshal(m))
 
 			if err != nil {
 				p.peerStatus.deactivate(failureType{source: pipelineMsg, action: "write"}, err.Error())
 				p.raft.ReportUnreachable(m.To)
-
-				//todo pipeline不是只处理 snapshot？加这个isMsgSnap是不是画蛇添足
-				if isMsgSnap(m) {
-					p.raft.ReportSnapshotStatus(m.To, raft.SnapshotFailure)
-				}
+				p.raft.ReportSnapshotStatus(m.To, raft.SnapshotFailure)
 				continue
 			}
 
 			p.peerStatus.activate()
 
-			if isMsgSnap(m) {
-				p.raft.ReportSnapshotStatus(m.To, raft.SnapshotFinish)
-			}
+			p.raft.ReportSnapshotStatus(m.To, raft.SnapshotFinish)
 		case <-p.stopC:
 			return
 		}
@@ -139,7 +121,7 @@ func (p *pipeline) post(data []byte) (err error) {
 		// errMemberRemoved is a critical error since a removed member should
 		// always be stopped. So we use reportCriticalError to report it to errorc.
 		if err == errMemberRemoved {
-			reportCriticalError(err, p.errorc)
+			reportCriticalError(err, p.errorC)
 		}
 		return err
 	}

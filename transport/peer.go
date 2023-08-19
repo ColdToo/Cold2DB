@@ -74,8 +74,8 @@ type peer struct {
 
 	picker *urlPicker
 
-	writer       *streamWriter
-	msgAppReader *streamReader
+	streamWriter *streamWriter
+	streamReader *streamReader
 
 	pipeline   *pipeline
 	snapSender *snapshotSender // snapshot sender to send v3 snapshot messages
@@ -105,7 +105,6 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 		raft:       r,
 		errorC:     errorC,
 	}
-
 	pipeline.start()
 
 	// 发送message到远端本体
@@ -113,14 +112,14 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 
 	// 读出recvc和propc的数据交给raft层进行处理
 	p := &peer{
-		localID:    t.LocalID,
-		remoteID:   peerID,
-		raft:       r,
-		status:     peerStatus,
-		picker:     picker,
-		writer:     streamWriter,
-		pipeline:   pipeline,
-		snapSender: newSnapshotSender(t, picker, peerID, peerStatus),
+		localID:      t.LocalID,
+		remoteID:     peerID,
+		raft:         r,
+		status:       peerStatus,
+		picker:       picker,
+		streamWriter: streamWriter,
+		pipeline:     pipeline,
+		snapSender:   newSnapshotSender(t, picker, peerID, peerStatus),
 
 		recvc: make(chan *pb.Message, recvBufSize),
 		propc: make(chan *pb.Message, maxPendingProposals),
@@ -158,17 +157,16 @@ func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
 	}()
 
 	// 用于接收其他节点发送过来的数据传递给recvc和propc通道
-	p.msgAppReader = &streamReader{
+	p.streamReader = &streamReader{
 		peerID:     peerID,
-		streamType: streamTypeMessage,
 		tr:         t,
 		picker:     picker,
 		peerStatus: peerStatus,
-		recvc:      p.recvc,
-		propc:      p.propc,
+		recvC:      p.recvc,
+		propC:      p.propc,
 	}
 
-	p.msgAppReader.start()
+	p.streamReader.start()
 
 	return p
 }
@@ -224,12 +222,7 @@ func (p *peer) update(urls types.URLs) {
 }
 
 func (p *peer) attachOutgoingConn(conn *outgoingConn) {
-	var ok bool
-	switch conn.t {
-	case streamTypeMessage:
-		ok = p.writer.attach(conn)
-	default:
-	}
+	ok := p.streamWriter.attach(conn)
 	if !ok {
 		conn.Close()
 	}
@@ -243,7 +236,7 @@ func (p *peer) Pause() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.paused = true
-	p.msgAppReader.pause()
+	p.streamWriter.pause()
 }
 
 // Resume resumes a paused peer.
@@ -251,33 +244,31 @@ func (p *peer) Resume() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.paused = false
-	p.msgAppReader.resume()
+	p.streamReader.resume()
 }
 
 func (p *peer) stop() {
 	defer func() {
-		p.lg.Info("stopped remote peer", zap.String("remote-peer-id", p.id.String()))
+		log.Info("stopped remote peer").Str("remote-peer-id", p.remoteID.Str())
 	}()
 
 	close(p.stopc)
 	p.cancel()
-	p.writer.stop()
+	p.streamWriter.stop()
 	p.pipeline.stop()
 	p.snapSender.stop()
-	p.msgAppReader.stop()
+	p.streamReader.stop()
 }
 
 // pick picks a chan for sending the given message. The picked chan and the picked chan
 // string name are returned.
 // 根据消息类型选取可以发送的消息信道
-func (p *peer) pick(m *pb.Message) (writec chan<- *pb.Message, picked string) {
+func (p *peer) pick(m *pb.Message) (writeC chan<- *pb.Message, picked string) {
 	var ok bool
-	// Considering MsgSnap may have a big size, e.g., 1G, and will block
-	// stream for a long time, only use one of the N pipelines to send MsgSnap.
 	if isMsgSnap(m) {
 		return p.pipeline.msgc, pipelineMsg
-	} else if writec, ok = p.writer.writec(); ok {
-		return writec, streamMsg
+	} else if writeC, ok = p.streamWriter.writeC(); ok {
+		return writeC, streamMsg
 	}
 	return p.pipeline.msgc, pipelineMsg
 }
@@ -289,14 +280,14 @@ type failureType struct {
 
 type peerStatus struct {
 	localId types.ID
-	id      types.ID
+	peerId  types.ID
 	mu      sync.Mutex // protect variables below
 	active  bool
 	since   time.Time
 }
 
 func newPeerStatus(local, id types.ID) *peerStatus {
-	return &peerStatus{localId: local, id: id}
+	return &peerStatus{localId: local, peerId: id}
 }
 
 // 变更为在线状态
