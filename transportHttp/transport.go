@@ -10,6 +10,7 @@ import (
 	types "github.com/ColdToo/Cold2DB/transportHttp/types"
 	"go.etcd.io/etcd/etcdserver/api/snap"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -59,7 +60,6 @@ type Transport struct {
 	ClusterID types.ID      // raft cluster ID for request validation
 	Raft      RaftTransport // raft state machine, to which the Transport forwards received messages and reports status
 
-	//todo 实现一个快照管理器 方便传输快照
 	Snapshotter *db.SnapShotter
 
 	ErrorC chan error
@@ -75,17 +75,18 @@ type Transport struct {
 }
 
 // AddPeer peer 相当于是其他节点在本地的代言人，本地节点发送消息给其他节点实质就是传入参数给其他节点在本地的代言人peer
-func (t *Transport) AddPeer(peerID types.ID, url string) {
-	peerStatus := newPeerStatus(t.LocalID, peerID)
+func (t *Transport) AddPeer(peerID types.ID, u string) {
 	recvC := make(chan *pb.Message, recvBufSize)
 	propC := make(chan *pb.Message, maxPendingProposals)
+	URL, _ := url.Parse(u)
 	ctx, cancel := context.WithCancel(context.Background())
-
+	peerStatus := newPeerStatus(t.LocalID, peerID)
 	streamWriter := startStreamWriter(t.LocalID, peerID, peerStatus, t.Raft)
 	streamReader := startStreamReader(t.LocalID, peerID, peerStatus, cancel, t, recvC, propC, t.ErrorC)
 	p := &peer{
 		localID:      t.LocalID,
 		remoteID:     peerID,
+		url:          URL,
 		raft:         t.Raft,
 		status:       peerStatus,
 		streamWriter: streamWriter,
@@ -95,6 +96,7 @@ func (t *Transport) AddPeer(peerID types.ID, url string) {
 		stopc:        make(chan struct{}),
 		cancel:       cancel,
 	}
+
 	p.handleReceiveCAndPropC(t.Raft, ctx)
 	t.peers[peerID] = p
 	log.Info("added remote peer").Str(code.LocalId, t.LocalID.Str()).Str(code.RemoteId, peerID.Str()).Record()

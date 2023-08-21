@@ -81,44 +81,34 @@ func (cw *streamWriter) run() {
 		flusher    http.Flusher     // 负责刷新底层连接，将缓冲区的数据发送出去
 		batched    int              // 统计未flush的批次
 	)
-
-	tickc := time.NewTicker(ConnReadTimeout / 3)
-	defer tickc.Stop()
-
-	var unflushed int //为unflushed的字节数
-
 	log.Info("started stream writer with remote peer").Str(code.LocalId, cw.localID.Str()).
 		Str(code.RemoteId, cw.peerID.Str()).Record()
+	var unflushed int //为unflushed的字节数
 
+	tickC := time.NewTicker(ConnReadTimeout / 3)
+	defer tickC.Stop()
 	for {
 		select {
 		case <-heartbeatC: //触发心跳信息
 			err := enc.encode(&linkHeartbeatMessage)
 			unflushed += linkHeartbeatMessage.Size()
-			//若没有异常，则使用flusher将缓存的消息全部发送出去，并重置batched和unflushed两个统计变量
 			if err == nil {
 				flusher.Flush()
 				batched = 0
 				unflushed = 0
 				continue
 			}
-
 			//如果有异常，关闭streamWriter
 			cw.status.deactivate(failureType{source: cw.peerID.Str(), action: "heartbeat"}, err.Error())
-
 			cw.close()
-
 			log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
 				Str(code.RemoteId, cw.peerID.Str()).Record()
-
 			//将heartbeatc和msgC两个通道清空，后续就不会在发送心跳消息和其他类型的消息了
 			heartbeatC, msgC = nil, nil
-
 		case m := <-msgC:
 			err := enc.encode(m)
 			if err == nil {
 				unflushed += m.Size()
-
 				if len(msgC) == 0 || batched > streamBufSize/2 {
 					flusher.Flush()
 					unflushed = 0
@@ -126,10 +116,8 @@ func (cw *streamWriter) run() {
 				} else {
 					batched++
 				}
-
 				continue
 			}
-
 			//异常情况处理
 			cw.status.deactivate(failureType{source: cw.localID.Str(), action: "write"}, err.Error())
 			cw.close()
@@ -137,13 +125,6 @@ func (cw *streamWriter) run() {
 				Str(code.RemoteId, cw.peerID.Str()).Record()
 			heartbeatC, msgC = nil, nil
 			cw.r.ReportUnreachable(m.To)
-
-			/*
-			   当其他节点(对端)主动与当前节点创建Stream消息通道时，会先通过StreamHandler的处理，
-			   StreamHandler会通过attach()方法将连接写入对应的peer.writer.connc通道，
-			   而当前的goroutine会通过该通道获取连接，然后开始发送消息
-			*/
-
 		case conn := <-cw.connC:
 			cw.mu.Lock()
 			//先关闭之前的连接如果存在
@@ -152,7 +133,6 @@ func (cw *streamWriter) run() {
 				log.Warn("closed TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
 					Str(code.RemoteId, cw.peerID.Str()).Record()
 			}
-
 			//重新建立一个新的连接
 			enc = &messageEncoderAndWriter{w: conn.Writer}
 			flusher = conn.Flusher
@@ -163,8 +143,7 @@ func (cw *streamWriter) run() {
 			cw.mu.Unlock()
 			log.Warn("established TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
 				Str(code.RemoteId, cw.peerID.Str()).Record()
-			heartbeatC, msgC = tickc.C, cw.msgC
-
+			heartbeatC, msgC = tickC.C, cw.msgC
 		case <-cw.stopC:
 			if cw.close() {
 				log.Warn("closed TCP streaming connection with remote peer").Str(code.RemoteId, cw.peerID.Str()).Record()

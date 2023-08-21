@@ -10,6 +10,7 @@ import (
 	"github.com/ColdToo/Cold2DB/raft"
 	types "github.com/ColdToo/Cold2DB/transportHttp/types"
 	"go.etcd.io/etcd/etcdserver/api/snap"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -45,6 +46,7 @@ type Peer interface {
 type peer struct {
 	localID  types.ID
 	remoteID types.ID
+	url      *url.URL
 
 	raft   RaftTransport
 	status *peerStatus
