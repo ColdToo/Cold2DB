@@ -8,8 +8,8 @@ import (
 	log "github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
-	"github.com/ColdToo/Cold2DB/transport"
-	types "github.com/ColdToo/Cold2DB/transport/types"
+	"github.com/ColdToo/Cold2DB/transportHttp"
+	types "github.com/ColdToo/Cold2DB/transportHttp/types"
 	"net/http"
 	"net/url"
 	"time"
@@ -23,7 +23,7 @@ type AppNode struct {
 
 	kvStore   *KvStore
 	raftNode  *raft.RaftNode
-	transport *transport.Transport
+	transport *transportHttp.Transport
 
 	proposeC    <-chan []byte        // 提议 (k,v)
 	confChangeC <-chan pb.ConfChange // 提议更改配置文件
@@ -202,7 +202,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 }
 
 func (an *AppNode) servePeerRaft() {
-	an.transport = &transport.Transport{
+	an.transport = &transportHttp.Transport{
 		LocalID:   types.ID(an.localId),
 		ClusterID: 0x1000,
 		Raft:      an,
@@ -211,7 +211,7 @@ func (an *AppNode) servePeerRaft() {
 
 	err := an.transport.Initialize()
 	if err != nil {
-		log.Panic("initialize transport failed").Err(code.NodeInIErr, err).Record()
+		log.Panic("initialize transportHttp failed").Err(code.NodeInIErr, err).Record()
 		return
 	}
 
@@ -230,16 +230,16 @@ func (an *AppNode) listenAndServePeerRaft() {
 	if err != nil {
 		log.Panic("raftexample: Failed parsing URL (%v)")
 	}
-	ln, err := transport.NewStoppableListener(localUrl.Host, an.httpstopc)
+	ln, err := transportHttp.NewStoppableListener(localUrl.Host, an.httpstopc)
 	if err != nil {
-		log.Panic("raftexample: Failed to listen transport (%v)")
+		log.Panic("raftexample: Failed to listen transportHttp (%v)")
 	}
 	err = (&http.Server{Handler: an.transport.Handler()}).Serve(ln)
 
 	select {
 	case <-an.httpstopc:
 	default:
-		log.Panic("raftexample: Failed to serve transport (%v)")
+		log.Panic("raftexample: Failed to serve transportHttp (%v)")
 	}
 	close(an.httpdonec)
 }
