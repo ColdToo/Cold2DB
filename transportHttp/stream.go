@@ -10,14 +10,11 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-	"strings"
+	"net/url"
 	"sync"
 	"time"
 
 	"go.etcd.io/etcd/pkg/httputil"
-	"go.etcd.io/etcd/version"
-
-	"go.uber.org/zap"
 )
 
 const (
@@ -47,16 +44,16 @@ type outgoingConn struct {
 type streamWriter struct {
 	localID types.ID
 	peerID  types.ID
+	peerUrl url.URL
 
-	status *peerStatus
-	r      RaftTransport
-
+	status  *peerStatus
+	r       RaftTransport
 	mu      sync.Mutex // guard field working and closer
 	closer  io.Closer
 	working bool
 
 	msgC  chan *pb.Message   //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
-	connC chan *outgoingConn //通过该通道获取当前streamWriter实例关联的底层网络连接，  outgoingConn其实是对网络连接的一层封装，其中记录了当前连接使用的协议版本，以及用于关闭连接的Flusher和Closer等信息。
+	connC chan *outgoingConn //通过该通道获取当前streamWriter实例关联的底层网络连接
 	stopC chan struct{}
 	done  chan struct{}
 }
@@ -221,9 +218,9 @@ func (cw *streamWriter) stop() {
 }
 
 type streamReader struct {
-	lg *zap.Logger
-
-	peerID types.ID
+	localId types.ID
+	peerID  types.ID
+	peerUrl url.URL
 
 	tr         *Transport
 	peerStatus *peerStatus
@@ -248,11 +245,21 @@ func (cr *streamReader) start() {
 	go cr.run()
 }
 
-func (cr *streamReader) startStreamReader() {
-	cr.done = make(chan struct{})
-	cr.errorC = cr.tr.ErrorC
-	cr.ctx, cr.cancel = context.WithCancel(context.Background())
-	go cr.run()
+func startStreamReader(localID, peerId types.ID, status *peerStatus, cancel context.CancelFunc,
+	t *Transport, recvC, propC chan *pb.Message, errC chan error) *streamReader {
+	r := &streamReader{
+		localId:    localID,
+		peerID:     peerId,
+		tr:         t,
+		peerStatus: status,
+		recvC:      recvC,
+		propC:      propC,
+		done:       make(chan struct{}),
+		errorC:     errC,
+		cancel:     cancel,
+	}
+	go r.run()
+	return r
 }
 
 func (cr *streamReader) run() {
@@ -272,12 +279,7 @@ func (cr *streamReader) run() {
 			//连接建立成功之后会调用decodeLoop方法来轮询读取对端节点发送过来的消息，并将收到的字节流转成raftpb.Message消息类型的格式。如果是保持连接的心跳类型则忽略。
 			//如果是raftpb.MsgProp类型的消息，则发送到propc通道中，如果是其他消息则发送到recvc通道中
 			err = cr.decodeLoop(rc) //轮询读取消息
-			cr.lg.Warn(
-				"lost TCP streaming connection with remote peer",
-				zap.String("local-member-id", cr.tr.LocalID.Str()),
-				zap.String("remote-peer-id", cr.peerID.Str()),
-				zap.Error(err),
-			)
+
 			switch {
 			case err == io.EOF:
 			case IsClosedConnError(err):
@@ -338,23 +340,12 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser) error {
 		case recvc <- &m:
 		default:
 			if cr.peerStatus.isActive() {
-				cr.lg.Warn(
-					"dropped internal Raft message since receiving buffer is full (overloaded network)",
-					zap.String("message-type", m.Type.String()),
-					zap.String("local-member-id", cr.tr.LocalID.Str()),
-					zap.String("from", types.ID(m.From).Str()),
-					zap.String("remote-peer-id", types.ID(m.To).Str()),
-					zap.Bool("remote-peer-active", cr.peerStatus.isActive()),
-				)
-			} else {
-				cr.lg.Warn(
-					"dropped Raft message since receiving buffer is full (overloaded network)",
-					zap.String("message-type", m.Type.String()),
-					zap.String("local-member-id", cr.tr.LocalID.Str()),
-					zap.String("from", types.ID(m.From).Str()),
-					zap.String("remote-peer-id", types.ID(m.To).Str()),
-					zap.Bool("remote-peer-active", cr.peerStatus.isActive()),
-				)
+				log.Warn("dropped internal Raft message since receiving buffer is full (overloaded network)").
+					Str("message-type", m.Type.String()).
+					Str("local-member-id", cr.localId.Str()).
+					Str("from", types.ID(m.From).Str()).
+					Str("remote-peer-id", types.ID(m.To).Str()).
+					Bool("remote-peer-active", cr.peerStatus.isActive()).Record()
 			}
 		}
 	}
@@ -369,22 +360,13 @@ func (cr *streamReader) stop() {
 }
 
 func (cr *streamReader) dial() (io.ReadCloser, error) {
-	cr.lg.Debug(
-		"dial stream reader",
-		zap.String("from", cr.tr.LocalID.Str()),
-		zap.String("to", cr.peerID.Str()),
-		zap.String("address", u.String()),
-	)
+	log.Debug("dial stream reader").
+		Str("from", cr.tr.LocalID.Str()).
+		Str("to", cr.peerID.Str()).
+		Str("address", cr.peerUrl.String()).Record()
 
-	req, err := http.NewRequest("GET", u.String(), nil)
-	if err != nil {
-		cr.picker.unreachable(u)
-		return nil, fmt.Errorf("failed to make http request to %v (%v)", u, err)
-	}
-
+	req, err := http.NewRequest("GET", cr.peerUrl.String(), nil)
 	req.Header.Set("X-Server-From", cr.tr.LocalID.Str())
-	req.Header.Set("X-Server-Version", version.Version)
-	req.Header.Set("X-Min-Cluster-Version", version.MinClusterVersion)
 	req.Header.Set("X-Etcd-Cluster-ID", cr.tr.ClusterID.Str())
 	req.Header.Set("X-Raft-To", cr.peerID.Str())
 	req = req.WithContext(cr.ctx)
@@ -401,14 +383,11 @@ func (cr *streamReader) dial() (io.ReadCloser, error) {
 
 	resp, err := cr.tr.streamRt.RoundTrip(req)
 	if err != nil {
-		cr.picker.unreachable(u)
-		return nil, err
 	}
 
 	switch resp.StatusCode {
 	case http.StatusGone:
 		httputil.GracefulClose(resp)
-		cr.picker.unreachable(u)
 		reportCriticalError(errMemberRemoved, cr.errorC)
 		return nil, errMemberRemoved
 
@@ -417,64 +396,32 @@ func (cr *streamReader) dial() (io.ReadCloser, error) {
 
 	case http.StatusNotFound:
 		httputil.GracefulClose(resp)
-		cr.picker.unreachable(u)
 		return nil, fmt.Errorf("peer %s failed to find local node %s", cr.peerID, cr.tr.LocalID)
 
 	case http.StatusPreconditionFailed:
-		b, err := ioutil.ReadAll(resp.Body)
+		_, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			cr.picker.unreachable(u)
 			return nil, err
 		}
 		httputil.GracefulClose(resp)
-		cr.picker.unreachable(u)
-
-		switch strings.TrimSuffix(string(b), "\n") {
-		case errIncompatibleVersion.Error():
-			cr.lg.Warn(
-				"request sent was ignored by remote peer due to server version incompatibility",
-				zap.String("local-member-id", cr.tr.LocalID.Str()),
-				zap.String("remote-peer-id", cr.peerID.Str()),
-				zap.Error(errIncompatibleVersion),
-			)
-			return nil, errIncompatibleVersion
-
-		case errClusterIDMismatch.Error():
-			cr.lg.Warn(
-				"request sent was ignored by remote peer due to cluster ID mismatch",
-				zap.String("remote-peer-id", cr.peerID.Str()),
-				zap.String("remote-peer-cluster-id", resp.Header.Get("X-Etcd-Cluster-ID")),
-				zap.String("local-member-id", cr.tr.LocalID.Str()),
-				zap.String("local-member-cluster-id", cr.tr.ClusterID.Str()),
-				zap.Error(errClusterIDMismatch),
-			)
-			return nil, errClusterIDMismatch
-
-		default:
-			return nil, fmt.Errorf("unhandled error %q when precondition failed", string(b))
-		}
 
 	default:
 		httputil.GracefulClose(resp)
-		cr.picker.unreachable(u)
 		return nil, fmt.Errorf("unhandled http status %d", resp.StatusCode)
 	}
+	return resp.Body, nil
 }
 
 func (cr *streamReader) close() {
 	if cr.closer != nil {
 		if err := cr.closer.Close(); err != nil {
-			if cr.lg != nil {
-				cr.lg.Warn(
-					"failed to close remote peer connection",
-					zap.String("local-member-id", cr.tr.LocalID.Str()),
-					zap.String("remote-peer-id", cr.peerID.Str()),
-					zap.Error(err),
-				)
-			}
+			log.Warn("failed to close remote peer connection").
+				Str("local-member-id", cr.tr.LocalID.Str()).
+				Str("remote-peer-id", cr.peerID.Str()).
+				Err("", err).Record()
 		}
-		cr.closer = nil
 	}
+	cr.closer = nil
 }
 
 func (cr *streamReader) pause() {

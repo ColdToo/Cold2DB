@@ -10,7 +10,6 @@ import (
 	"github.com/ColdToo/Cold2DB/raft"
 	types "github.com/ColdToo/Cold2DB/transportHttp/types"
 	"go.etcd.io/etcd/etcdserver/api/snap"
-	"go.uber.org/zap"
 	"sync"
 	"time"
 )
@@ -44,12 +43,10 @@ type Peer interface {
 }
 
 type peer struct {
-	localID types.ID //本地节点的id
-	// id of the remote raft peer node
-	remoteID types.ID //远程peer节点的id
+	localID  types.ID
+	remoteID types.ID
 
-	raft RaftTransport
-
+	raft   RaftTransport
 	status *peerStatus
 
 	streamWriter *streamWriter
@@ -60,46 +57,8 @@ type peer struct {
 
 	mu     sync.Mutex
 	paused bool
-
 	cancel context.CancelFunc // cancel pending works in go routine created by peer.
 	stopc  chan struct{}
-}
-
-func startPeer(t *Transport, urls types.URLs, peerID types.ID) *peer {
-	peerStatus := newPeerStatus(t.LocalID, peerID)
-	r := t.Raft
-
-	streamWriter := startStreamWriter(t.LocalID, peerID, peerStatus, r)
-
-	// 读出recvc和propc的数据交给raft层进行处理
-	p := &peer{
-		localID:      t.LocalID,
-		remoteID:     peerID,
-		raft:         r,
-		status:       peerStatus,
-		streamWriter: streamWriter,
-		recvC:        make(chan *pb.Message, recvBufSize),
-		propC:        make(chan *pb.Message, maxPendingProposals),
-		stopc:        make(chan struct{}),
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	p.cancel = cancel
-
-	// 用于接收其他节点发送过来的数据传递给recvc和propc通道
-	p.streamReader = &streamReader{
-		peerID:     peerID,
-		tr:         t,
-		peerStatus: peerStatus,
-		recvC:      p.recvC,
-		propC:      p.propC,
-	}
-
-	p.streamReader.start()
-
-	p.handleReceiveCAndPropC(r, ctx)
-
-	return p
 }
 
 func (p *peer) handleReceiveCAndPropC(r RaftTransport, ctx context.Context) {
@@ -177,13 +136,15 @@ func (p *peer) Pause() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.paused = true
-	p.streamWriter.pause()
+	//p.streamWriter.pause()
+	p.streamReader.pause()
 }
 
 func (p *peer) Resume() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.paused = false
+	//p.streamWriter.resume()
 	p.streamReader.resume()
 }
 
@@ -196,17 +157,6 @@ func (p *peer) stop() {
 	p.cancel()
 	p.streamWriter.stop()
 	p.streamReader.stop()
-}
-
-// pick picks a chan for sending the given message. The picked chan and the picked chan
-// string name are returned.
-// 根据消息类型选取可以发送的消息信道
-func (p *peer) pick(m *pb.Message) (writeC chan<- *pb.Message) {
-	if isMsgSnap(m) {
-		return
-	}
-	writeC, _ = p.streamWriter.writeC()
-	return
 }
 
 type failureType struct {
@@ -231,7 +181,7 @@ func (s *peerStatus) activate() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.active {
-		s.lg.Info("peer became active", zap.String("peer-id", s.id.String()))
+		log.Info("peer became active").Str("peer-id", s.peerId.Str())
 		s.active = true
 		s.since = time.Now()
 	}
@@ -241,9 +191,9 @@ func (s *peerStatus) activate() {
 func (s *peerStatus) deactivate(failure failureType, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	msg := fmt.Sprintf("failed to %s %s on %s (%s)", failure.action, s.id, failure.source, reason)
+	msg := fmt.Sprintf("failed to %s %s on %s (%s)", failure.action, s.peerId, failure.source, reason)
 	if s.active {
-		s.lg.Warn("peer became inactive (message send to peer failed)", zap.String("peer-id", s.id.String()), zap.Error(errors.New(msg)))
+		log.Warn("peer became inactive (message send to peer failed)").Str("peer-id", s.peerId.Str()).Err("", errors.New(msg)).Record()
 		s.active = false
 		s.since = time.Time{}
 		return

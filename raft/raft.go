@@ -61,7 +61,7 @@ type Raft struct {
 	Role Role
 
 	// 需要发送给其他节点的msgs
-	msgs []pb.Message
+	msgs []*pb.Message
 
 	LeaderID uint64
 
@@ -323,7 +323,7 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 		})
 	}
 
-	msg := pb.Message{
+	msg := &pb.Message{
 		Type:    pb.MsgApp,
 		To:      to,
 		From:    r.id,
@@ -349,7 +349,7 @@ func (r *Raft) bcastHeartbeat() {
 
 // todo 发送心跳的时候是否也可以将commited信息同步给fowller节点？
 func (r *Raft) sendHeartbeat(to uint64) {
-	msg := pb.Message{
+	msg := &pb.Message{
 		Type: pb.MsgBeat,
 		To:   to,
 		From: r.id,
@@ -391,7 +391,7 @@ func (r *Raft) sendSnapshot(to uint64) {
 	if err != nil {
 		return
 	}
-	r.msgs = append(r.msgs, pb.Message{
+	r.msgs = append(r.msgs, &pb.Message{
 		Type:     pb.MsgSnap,
 		From:     r.id,
 		To:       to,
@@ -428,7 +428,7 @@ func (r *Raft) bcastVoteRequest() {
 	appliedTerm, _ := r.RaftLog.Term(r.RaftLog.applied)
 	for peer := range r.Progress {
 		if peer != r.id {
-			msg := pb.Message{
+			msg := &pb.Message{
 				Type:    pb.MsgVote,
 				From:    r.id,
 				To:      peer,
@@ -501,7 +501,7 @@ func (r *Raft) handleVoteRequest(m *pb.Message) {
 }
 
 func (r *Raft) sendVoteResponse(candidate uint64, reject bool) {
-	msg := pb.Message{
+	msg := &pb.Message{
 		Type:   pb.MsgVoteResp,
 		From:   r.id,
 		To:     candidate,
@@ -536,7 +536,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 }
 
 func (r *Raft) sendAppendResponse(to uint64, reject bool) {
-	msg := pb.Message{
+	msg := &pb.Message{
 		Type:   pb.MsgAppResp,
 		From:   r.id,
 		To:     to,
@@ -563,7 +563,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 }
 
 func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
-	msg := pb.Message{
+	msg := &pb.Message{
 		Type:   pb.MsgHeartbeatResp,
 		From:   r.id,
 		To:     to,

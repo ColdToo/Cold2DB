@@ -21,10 +21,9 @@ const (
 )
 
 var (
-	RaftPrefix         = "/raft"
-	RaftStream         = path.Join(RaftPrefix, "stream")
-	RaftSnapshotPrefix = path.Join(RaftPrefix, "snapshot")
-
+	RaftPrefix             = "/raft"
+	RaftStream             = path.Join(RaftPrefix, "stream")
+	RaftSnapshot           = path.Join(RaftPrefix, "snapshot")
 	errIncompatibleVersion = errors.New("incompatible version")
 	errClusterIDMismatch   = errors.New("cluster ID mismatch")
 )
@@ -134,8 +133,6 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("X-Etcd-Cluster-ID", h.clusterId.Str())
-
-	addRemoteFromRequest(h.trans, r)
 
 	dec := &messageDecoder{r: r.Body}
 	// let snapshots be very large since they can exceed 512MB for large installations

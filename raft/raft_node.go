@@ -27,7 +27,7 @@ type Ready struct {
 
 	CommittedEntries []*pb.Entry // 待apply的entry
 
-	Messages []pb.Message // 待发送给其他节点的message
+	Messages []*pb.Message // 待发送给其他节点的message
 }
 
 type RaftNode struct {
@@ -127,7 +127,7 @@ func (rn *RaftNode) newReady() Ready {
 		rd.HardState = hardState
 	}
 
-	rn.Raft.msgs = make([]pb.Message, 0)
+	rn.Raft.msgs = make([]*pb.Message, 0)
 	return rd
 }
 

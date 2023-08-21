@@ -119,15 +119,6 @@ func setPeerURLsHeader(req *http.Request, urls types.URLs) {
 	req.Header.Set("X-PeerURLs", strings.Join(peerURLs, ","))
 }
 
-// addRemoteFromRequest adds a remote peer according to an http request header
-func addRemoteFromRequest(tr Transporter, r *http.Request) {
-	if from, err := types.IDFromString(r.Header.Get("X-Server-From")); err == nil {
-		if urls := r.Header.Get("X-PeerURLs"); urls != "" {
-			tr.AddRemote(from, strings.Split(urls, ","))
-		}
-	}
-}
-
 // IsClosedConnError returns true if the error is from closing listener, cmux.
 // copied from golang.org/x/net/http2/http2.go
 func IsClosedConnError(err error) bool {

@@ -28,11 +28,11 @@ type Transporter interface {
 	Handler() http.Handler
 
 	// Send 应用层通过该接口发送消息给peer,如果在transport中没有找到该peer那么忽略该消息
-	Send(m []pb.Message)
+	Send(m []*pb.Message)
 
 	SendSnapshot(m snap.Message)
 
-	AddPeer(id types.ID, urls []string)
+	AddPeer(id types.ID, url string)
 
 	RemovePeer(id types.ID)
 
@@ -49,8 +49,7 @@ type Transporter interface {
 
 type Transport struct {
 	//DialTimeout是请求超时时间，而DialRetryFrequency定义了每个对等节点的重试频率限制
-	DialTimeout time.Duration
-
+	DialTimeout        time.Duration
 	DialRetryFrequency time.Duration
 
 	TLSInfo TLSInfo // TLS information used when creating connection
@@ -76,13 +75,29 @@ type Transport struct {
 }
 
 // AddPeer peer 相当于是其他节点在本地的代言人，本地节点发送消息给其他节点实质就是传入参数给其他节点在本地的代言人peer
-func (t *Transport) AddPeer(id types.ID, urlList []string) {
-	urls, err := types.NewURLs(urlList)
-	if err != nil {
-		log.Panic("failed NewURLs").Err("urls", err)
+func (t *Transport) AddPeer(peerID types.ID, url string) {
+	peerStatus := newPeerStatus(t.LocalID, peerID)
+	recvC := make(chan *pb.Message, recvBufSize)
+	propC := make(chan *pb.Message, maxPendingProposals)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	streamWriter := startStreamWriter(t.LocalID, peerID, peerStatus, t.Raft)
+	streamReader := startStreamReader(t.LocalID, peerID, peerStatus, cancel, t, recvC, propC, t.ErrorC)
+	p := &peer{
+		localID:      t.LocalID,
+		remoteID:     peerID,
+		raft:         t.Raft,
+		status:       peerStatus,
+		streamWriter: streamWriter,
+		streamReader: streamReader,
+		recvC:        recvC,
+		propC:        propC,
+		stopc:        make(chan struct{}),
+		cancel:       cancel,
 	}
-	t.peers[id] = startPeer(t, urls, id)
-	log.Info("added remote peer").Str(code.LocalId, t.LocalID.Str()).Str(code.RemoteId, id.Str()).Record()
+	p.handleReceiveCAndPropC(t.Raft, ctx)
+	t.peers[peerID] = p
+	log.Info("added remote peer").Str(code.LocalId, t.LocalID.Str()).Str(code.RemoteId, peerID.Str()).Record()
 }
 
 func (t *Transport) Initialize() error {
@@ -105,14 +120,8 @@ func (t *Transport) Initialize() error {
 
 func (t *Transport) Handler() http.Handler {
 	streamHandler := newStreamHandler(t, t, t.Raft, t.LocalID, t.ClusterID)
-	//pipelineHandler := newPipelineHandler(t, t.Raft, t.ClusterID)
-	//snapHandler := newSnapshotHandler(t, t.Raft, t.Snapshotter, t.ClusterID) //应该是v3版本使用，之前的版本使用pipelineHandler处理收到的快照)。
-
-	//路由
 	mux := http.NewServeMux()
 	mux.Handle(RaftStream, streamHandler)
-	//mux.Handle(RaftPrefix, pipelineHandler)
-	//mux.Handle(RaftSnapshotPrefix, snapHandler)
 	return mux
 }
 
@@ -122,7 +131,7 @@ func (t *Transport) Get(id types.ID) Peer {
 	return t.peers[id]
 }
 
-func (t *Transport) Send(msgs []pb.Message) {
+func (t *Transport) Send(msgs []*pb.Message) {
 	for _, m := range msgs {
 		if m.To == 0 {
 			continue
@@ -156,7 +165,6 @@ func (t *Transport) Stop() {
 	t.peers = nil
 }
 
-// CutPeer drops messages to the specified peer.
 func (t *Transport) CutPeer(id types.ID) {
 	t.mu.RLock()
 	p, pok := t.peers[id]
@@ -167,7 +175,6 @@ func (t *Transport) CutPeer(id types.ID) {
 	}
 }
 
-// MendPeer recovers the message dropping behavior of the given peer.
 func (t *Transport) MendPeer(id types.ID) {
 	t.mu.RLock()
 	p, pok := t.peers[id]
@@ -192,7 +199,6 @@ func (t *Transport) RemoveAllPeers() {
 	}
 }
 
-// the caller of this function must have the peers mutex.
 func (t *Transport) removePeer(id types.ID) {
 	if peer, ok := t.peers[id]; ok {
 		peer.stop()
@@ -214,7 +220,6 @@ func (t *Transport) UpdatePeer(id types.ID, us []string) {
 	urls, err := types.NewURLs(us)
 	if err != nil {
 	}
-	t.peers[id].update(urls)
 
 	log.Info("updated remote peer").Str("local-member-id", t.LocalID.Str()).
 		Str("updated-remote-peer-id", id.Str()).

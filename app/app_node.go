@@ -150,16 +150,15 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 			}
 			entries = append(entries, entry)
 
-			//todo 节点变更
 		case pb.EntryConfChange:
 			var cc *pb.ConfChange
 			cc.Unmarshal(ents[i].Data)
 			an.raftNode.ApplyConfChange(cc)
 			switch cc.Type {
-			case pb.ConfChangeAddNode:
-				if len(cc.Context) > 0 {
-					an.transport.AddPeer(types.ID(cc.NodeID), []string{string(cc.Context)})
-				}
+			/*case pb.ConfChangeAddNode:
+			if len(cc.Context) > 0 {
+				an.transport.AddPeer(types.ID(cc.NodeID), []string{string(cc.Context)})
+			}*/
 			case pb.ConfChangeRemoveNode:
 				if cc.NodeID == uint64(an.localId) {
 					return
@@ -217,7 +216,7 @@ func (an *AppNode) servePeerRaft() {
 
 	for i := range an.peersUrl {
 		if i+1 != an.localId {
-			an.transport.AddPeer(types.ID(i+1), []string{an.peersUrl[i]})
+			an.transport.AddPeer(types.ID(i+1), an.peersUrl[i])
 		}
 	}
 
