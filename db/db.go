@@ -68,12 +68,12 @@ func InitDB(dbCfg *domain.DBConfig) error {
 		return err
 	}
 
-	/*Cold2.indexer, err = index.NewIndexer(dbCfg.IndexConfig)
+	Cold2.hardStateLog, err = initHardStateLog(dbCfg.HardStateLogConfig)
 	if err != nil {
 		return err
 	}
 
-	Cold2.hardStateLog, err = initHardStateLog(dbCfg.HardStateLogConfig)
+	/*Cold2.indexer, err = index.NewIndexer(dbCfg.IndexConfig)
 	if err != nil {
 		return err
 	}

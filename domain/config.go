@@ -26,6 +26,13 @@ type ZapConfig struct {
 type RaftConfig struct {
 	ElectionTick  int
 	HeartbeatTick int
+	Nodes         []Node `yaml:"nodes"`
+}
+
+type Node struct {
+	ID   int    `yaml:"id"`
+	EAdd string `yaml:"eAddr"`
+	IAdd string `yaml:"iAddr"`
 }
 
 type DBConfig struct {

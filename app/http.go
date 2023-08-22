@@ -6,7 +6,6 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"strconv"
 )
 
 const (
@@ -87,9 +86,9 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func ServeHttpKVAPI(kvStore *KvStore, port int, confChangeC chan<- pb.ConfChange, errorC <-chan error) {
+func ServeHttpKVAPI(kvStore *KvStore, Addr string, confChangeC chan<- pb.ConfChange, errorC <-chan error) {
 	srv := http.Server{
-		Addr: ":" + strconv.Itoa(port),
+		Addr: Addr,
 		Handler: &HttpKVAPI{
 			store:       kvStore,
 			confChangeC: confChangeC,

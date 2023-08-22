@@ -5,8 +5,6 @@ import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/pb"
 	"io"
-
-	"go.etcd.io/etcd/pkg/pbutil"
 )
 
 type encoder interface {
@@ -27,7 +25,8 @@ func (enc *messageEncoderAndWriter) encode(m *pb.Message) error {
 	if err := binary.Write(enc.w, binary.BigEndian, uint64(m.Size())); err != nil {
 		return err
 	}
-	_, err := enc.w.Write(pbutil.MustMarshal(m))
+	//todo 序列化m
+	_, err := enc.w.Write([]byte{})
 	return err
 }
 

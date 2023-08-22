@@ -8,7 +8,6 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
 	types "github.com/ColdToo/Cold2DB/transportHttp/types"
-	"go.etcd.io/etcd/etcdserver/api/snap"
 	"net/http"
 	"net/url"
 	"sync"
@@ -30,8 +29,6 @@ type Transporter interface {
 
 	// Send 应用层通过该接口发送消息给peer,如果在transport中没有找到该peer那么忽略该消息
 	Send(m []*pb.Message)
-
-	SendSnapshot(m snap.Message)
 
 	AddPeer(id types.ID, url string)
 
@@ -228,17 +225,9 @@ func (t *Transport) UpdatePeer(id types.ID, us []string) {
 		Str("updated-remote-peer-urls", urls.String())
 }
 
-func (t *Transport) SendSnapshot(m snap.Message) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	p := t.peers[types.ID(m.To)]
-	if p == nil {
-		m.CloseWithError(errMemberNotFound)
-		return
-	}
-
-	p.sendSnap(m)
-}
+//todo
+//func (t *Transport) SendSnapshot(m snap.Message) {
+//}
 
 // Pausable is a testing interface for pausing transportHttp traffic.
 type Pausable interface {

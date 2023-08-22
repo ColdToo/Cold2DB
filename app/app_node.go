@@ -19,7 +19,6 @@ import (
 type AppNode struct {
 	localId  int
 	peersUrl []string
-	join     bool
 
 	kvStore   *KvStore
 	raftNode  *raft.RaftNode
@@ -35,7 +34,7 @@ type AppNode struct {
 	TickTime int //定时触发定时器的时间
 }
 
-func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan []byte,
+func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte,
 	confChangeC <-chan pb.ConfChange, errorC chan<- error, kvStore *KvStore) {
 	an := &AppNode{
 		proposeC:    proposeC,
@@ -43,7 +42,6 @@ func StartAppNode(localId int, peersUrl []string, join bool, proposeC <-chan []b
 		errorC:      errorC,
 		localId:     localId,
 		peersUrl:    peersUrl,
-		join:        join,
 		stopc:       make(chan struct{}),
 		httpstopc:   make(chan struct{}),
 		httpdonec:   make(chan struct{}),

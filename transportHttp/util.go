@@ -3,13 +3,10 @@ package transportHttp
 import (
 	"fmt"
 	types "github.com/ColdToo/Cold2DB/transportHttp/types"
-	"go.etcd.io/etcd/version"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
-
-	"github.com/coreos/go-semver/semver"
 )
 
 var (
@@ -58,56 +55,6 @@ func reportCriticalError(err error, errc chan<- error) {
 	case errc <- err:
 	default:
 	}
-}
-
-func compareMajorMinorVersion(a, b *semver.Version) int {
-	na := &semver.Version{Major: a.Major, Minor: a.Minor}
-	nb := &semver.Version{Major: b.Major, Minor: b.Minor}
-	switch {
-	case na.LessThan(*nb):
-		return -1
-	case nb.LessThan(*na):
-		return 1
-	default:
-		return 0
-	}
-}
-
-// serverVersion returns the server version from the given header.
-func serverVersion(h http.Header) *semver.Version {
-	verStr := h.Get("X-Server-Version")
-	// backward compatibility with etcd 2.0
-	if verStr == "" {
-		verStr = "2.0.0"
-	}
-	return semver.Must(semver.NewVersion(verStr))
-}
-
-// serverVersion returns the min cluster version from the given header.
-func minClusterVersion(h http.Header) *semver.Version {
-	verStr := h.Get("X-Min-Cluster-Version")
-	// backward compatibility with etcd 2.0
-	if verStr == "" {
-		verStr = "2.0.0"
-	}
-	return semver.Must(semver.NewVersion(verStr))
-}
-
-// checkVersionCompatibility checks whether the given version is compatible
-// with the local version.
-func checkVersionCompatibility(name string, server, minCluster *semver.Version) (
-	localServer *semver.Version,
-	localMinCluster *semver.Version,
-	err error) {
-	localServer = semver.Must(semver.NewVersion(version.Version))
-	localMinCluster = semver.Must(semver.NewVersion(version.MinClusterVersion))
-	if compareMajorMinorVersion(server, localMinCluster) == -1 {
-		return localServer, localMinCluster, fmt.Errorf("remote version is too low: remote[%s]=%s, local=%s", name, server, localServer)
-	}
-	if compareMajorMinorVersion(minCluster, localServer) == 1 {
-		return localServer, localMinCluster, fmt.Errorf("local version is too low: remote[%s]=%s, local=%s", name, server, localServer)
-	}
-	return localServer, localMinCluster, nil
 }
 
 // setPeerURLsHeader reports local urls for peer discovery

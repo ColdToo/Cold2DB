@@ -9,7 +9,6 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
 	types "github.com/ColdToo/Cold2DB/transportHttp/types"
-	"go.etcd.io/etcd/etcdserver/api/snap"
 	"net/url"
 	"sync"
 	"time"
@@ -33,8 +32,6 @@ const (
 
 type Peer interface {
 	send(m *pb.Message)
-
-	sendSnap(m snap.Message)
 
 	attachOutgoingConn(conn *outgoingConn)
 
@@ -121,9 +118,9 @@ func (p *peer) send(m *pb.Message) {
 	}
 }
 
-func (p *peer) sendSnap(m snap.Message) {
-	//todo
-}
+//todo
+//func (p *peer) sendSnap(m snap.Message) {
+//}
 
 func (p *peer) attachOutgoingConn(conn *outgoingConn) {
 	ok := p.streamWriter.attach(conn)

@@ -5,7 +5,6 @@ import (
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
-	"go.etcd.io/etcd/raft/tracker"
 	"math/rand"
 )
 
@@ -47,8 +46,6 @@ type Raft struct {
 	rejectCount int
 
 	RaftLog *RaftLog
-
-	trk tracker.ProgressTracker
 
 	Progress map[uint64]*Progress
 
@@ -362,10 +359,10 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 	if m.Reject {
 		log.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d",
 			r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
-		r.trk.Progress[m.From].Next = m.RejectHint
+		r.Progress[m.From].Next = m.RejectHint
 		r.sendAppendEntries(m.From)
 	} else {
-		r.trk.Progress[m.From].Next = m.Index
+		r.Progress[m.From].Next = m.Index
 	}
 
 	//todo 当大多数节点认可了一个日志后将该日志置为commited

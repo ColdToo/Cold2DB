@@ -13,8 +13,6 @@ import (
 	"net/url"
 	"sync"
 	"time"
-
-	"go.etcd.io/etcd/pkg/httputil"
 )
 
 const (
@@ -366,26 +364,18 @@ func (cr *streamReader) dial() (io.ReadCloser, error) {
 
 	switch resp.StatusCode {
 	case http.StatusGone:
-		httputil.GracefulClose(resp)
 		reportCriticalError(errMemberRemoved, cr.errorC)
 		return nil, errMemberRemoved
-
 	case http.StatusOK:
 		return resp.Body, nil
-
 	case http.StatusNotFound:
-		httputil.GracefulClose(resp)
 		return nil, fmt.Errorf("peer %s failed to find local node %s", cr.peerID, cr.tr.LocalID)
-
 	case http.StatusPreconditionFailed:
 		_, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			return nil, err
 		}
-		httputil.GracefulClose(resp)
-
 	default:
-		httputil.GracefulClose(resp)
 		return nil, fmt.Errorf("unhandled http status %d", resp.StatusCode)
 	}
 	return resp.Body, nil
