@@ -13,13 +13,13 @@ import (
 
 var log *zap.Logger
 
-func InitLog() {
-	if ok := utils.PathExist(domain.Conf.ZapConf.Director); !ok { // 判断是否有Director文件夹
-		fmt.Printf("create %v directory\n", domain.Conf.ZapConf.Director)
-		_ = os.Mkdir(domain.Conf.ZapConf.Director, os.ModePerm)
+func InitLog(config *domain.ZapConfig) {
+	if ok := utils.PathExist(config.Director); !ok { // 判断是否有Director文件夹
+		fmt.Printf("create %v directory\n", config)
+		_ = os.Mkdir(config.Director, os.ModePerm)
 	}
 
-	cores := domain.Conf.ZapConf.GetZapCores()
+	cores := getZapCores(config)
 	log = zap.New(zapcore.NewTee(cores...))
 
 	if domain.Conf.ZapConf.ShowLine {
@@ -175,39 +175,17 @@ func (f *Fields) Record() {
 	}
 }
 
-type ZapConfig struct {
-	Level         string `mapstructure:"level" json:"level" yaml:"level"`                            // 级别
-	Prefix        string `mapstructure:"prefix" json:"prefix" yaml:"prefix"`                         // 日志前缀
-	Format        string `mapstructure:"format" json:"format" yaml:"format"`                         // 输出
-	Director      string `mapstructure:"director" json:"director"  yaml:"director"`                  // 日志文件夹
-	EncodeLevel   string `mapstructure:"encode-level" json:"encode-level" yaml:"encode-level"`       // 编码级
-	StacktraceKey string `mapstructure:"stacktrace-key" json:"stacktrace-key" yaml:"stacktrace-key"` // 栈名
-
-	MaxAge       int  `mapstructure:"max-age" json:"max-age" yaml:"max-age"`                      // 日志留存时间
-	ShowLine     bool `mapstructure:"show-line" json:"show-line" yaml:"show-line"`                // 显示行
-	LogInConsole bool `mapstructure:"log-in-console" json:"log-in-console" yaml:"log-in-console"` // 输出控制台
-}
-
-// ZapEncodeLevel 根据 EncodeLevel 返回 zapcore.LevelEncoder
-func (z *ZapConfig) ZapEncodeLevel() zapcore.LevelEncoder {
-	switch {
-	case z.EncodeLevel == "LowercaseLevelEncoder": // 小写编码器(默认)
-		return zapcore.LowercaseLevelEncoder
-	case z.EncodeLevel == "LowercaseColorLevelEncoder": // 小写编码器带颜色
-		return zapcore.LowercaseColorLevelEncoder
-	case z.EncodeLevel == "CapitalLevelEncoder": // 大写编码器
-		return zapcore.CapitalLevelEncoder
-	case z.EncodeLevel == "CapitalColorLevelEncoder": // 大写编码器带颜色
-		return zapcore.CapitalColorLevelEncoder
-	default:
-		return zapcore.LowercaseLevelEncoder
+func getZapCores(config *domain.ZapConfig) []zapcore.Core {
+	cores := make([]zapcore.Core, 0, 7)
+	for level := transportLevel(config.Level); level <= zapcore.FatalLevel; level++ {
+		cores = append(cores, getEncoderCore(level, getLevelPriority(level), config))
 	}
+	return cores
 }
 
-// TransportLevel 根据字符串转化为 zapcore.Level
-func (z *ZapConfig) TransportLevel() zapcore.Level {
-	z.Level = strings.ToLower(z.Level)
-	switch z.Level {
+func transportLevel(level string) zapcore.Level {
+	Level := strings.ToLower(level)
+	switch Level {
 	case "debug":
 		return zapcore.DebugLevel
 	case "info":
@@ -227,58 +205,17 @@ func (z *ZapConfig) TransportLevel() zapcore.Level {
 	}
 }
 
-// GetEncoder 获取 zapcore.Encoder
-func (z *ZapConfig) GetEncoder() zapcore.Encoder {
-	if domain.Conf.ZapConf.Format == "json" {
-		return zapcore.NewJSONEncoder(z.GetEncoderConfig())
-	}
-	return zapcore.NewConsoleEncoder(z.GetEncoderConfig())
-}
-
-// GetEncoderConfig 获取zapcore.EncoderConfig
-func (z *ZapConfig) GetEncoderConfig() zapcore.EncoderConfig {
-	return zapcore.EncoderConfig{
-		MessageKey:     "message",
-		LevelKey:       "level",
-		TimeKey:        "time",
-		NameKey:        "logger",
-		CallerKey:      "caller",
-		StacktraceKey:  domain.Conf.ZapConf.StacktraceKey,
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    domain.Conf.ZapConf.ZapEncodeLevel(),
-		EncodeTime:     z.CustomTimeEncoder,
-		EncodeDuration: zapcore.SecondsDurationEncoder,
-		EncodeCaller:   zapcore.FullCallerEncoder,
-	}
-}
-
-// GetEncoderCore 获取Encoder的 zapcore.Core
-func (z *ZapConfig) GetEncoderCore(l zapcore.Level, level zap.LevelEnablerFunc) zapcore.Core {
+func getEncoderCore(l zapcore.Level, level zap.LevelEnablerFunc, config *domain.ZapConfig) zapcore.Core {
 	writer, err := FileRotatelogs.GetWriteSyncer(l.String()) // 使用file-rotatelogs进行日志分割
 	if err != nil {
 		fmt.Printf("Get Write Syncer Failed err:%v", err.Error())
 		return nil
 	}
 
-	return zapcore.NewCore(z.GetEncoder(), writer, level)
+	return zapcore.NewCore(getEncoder(config), writer, level)
 }
 
-// CustomTimeEncoder 自定义日志输出时间格式
-func (z *ZapConfig) CustomTimeEncoder(t time.Time, encoder zapcore.PrimitiveArrayEncoder) {
-	encoder.AppendString(domain.Conf.ZapConf.Prefix + t.Format("2006/01/02 - 15:04:05.000"))
-}
-
-// GetZapCores 根据配置文件的Level获取 []zapcore.Core
-func (z *ZapConfig) GetZapCores() []zapcore.Core {
-	cores := make([]zapcore.Core, 0, 7)
-	for level := domain.Conf.ZapConf.TransportLevel(); level <= zapcore.FatalLevel; level++ {
-		cores = append(cores, z.GetEncoderCore(level, z.GetLevelPriority(level)))
-	}
-	return cores
-}
-
-// GetLevelPriority 根据 zapcore.Level 获取 zap.LevelEnablerFunc
-func (z *ZapConfig) GetLevelPriority(level zapcore.Level) zap.LevelEnablerFunc {
+func getLevelPriority(level zapcore.Level) zap.LevelEnablerFunc {
 	switch level {
 	case zapcore.DebugLevel:
 		return func(level zapcore.Level) bool { // 调试级别
@@ -313,4 +250,46 @@ func (z *ZapConfig) GetLevelPriority(level zapcore.Level) zap.LevelEnablerFunc {
 			return level == zap.DebugLevel
 		}
 	}
+}
+
+func zapEncodeLevel(encodeLevel string) zapcore.LevelEncoder {
+	switch {
+	case encodeLevel == "LowercaseLevelEncoder": // 小写编码器(默认)
+		return zapcore.LowercaseLevelEncoder
+	case encodeLevel == "LowercaseColorLevelEncoder": // 小写编码器带颜色
+		return zapcore.LowercaseColorLevelEncoder
+	case encodeLevel == "CapitalLevelEncoder": // 大写编码器
+		return zapcore.CapitalLevelEncoder
+	case encodeLevel == "CapitalColorLevelEncoder": // 大写编码器带颜色
+		return zapcore.CapitalColorLevelEncoder
+	default:
+		return zapcore.LowercaseLevelEncoder
+	}
+}
+
+func getEncoder(config *domain.ZapConfig) zapcore.Encoder {
+	if config.Format == "json" {
+		return zapcore.NewJSONEncoder(getEncoderConfig(config))
+	}
+	return zapcore.NewConsoleEncoder(getEncoderConfig(config))
+}
+
+func getEncoderConfig(config *domain.ZapConfig) zapcore.EncoderConfig {
+	return zapcore.EncoderConfig{
+		MessageKey:     "message",
+		LevelKey:       "level",
+		TimeKey:        "time",
+		NameKey:        "logger",
+		CallerKey:      "caller",
+		StacktraceKey:  config.StacktraceKey,
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    zapEncodeLevel(config.EncodeLevel),
+		EncodeTime:     customTimeEncoder,
+		EncodeDuration: zapcore.SecondsDurationEncoder,
+		EncodeCaller:   zapcore.FullCallerEncoder,
+	}
+}
+
+func customTimeEncoder(t time.Time, encoder zapcore.PrimitiveArrayEncoder) {
+	encoder.AppendString(t.Format("2006/01/02 - 15:04:05.000"))
 }

@@ -19,12 +19,6 @@ const (
 	Candidate
 )
 
-type RaftConfig struct {
-	ElectionTick int
-
-	HeartbeatTick int
-}
-
 type RaftOpts struct {
 	// local raft id
 	ID uint64
@@ -378,7 +372,7 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 	r.updateCommit()
 }
 
-//todo hearbeat response是否应该也携带一部分消息传递给follower
+// todo hearbeat response是否应该也携带一部分消息传递给follower
 func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, None)

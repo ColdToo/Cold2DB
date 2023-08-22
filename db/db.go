@@ -54,7 +54,7 @@ func GetDB() (*Cold2DB, error) {
 	}
 }
 
-func InitDB(dbCfg DBConfig) error {
+func InitDB(dbCfg *DBConfig) error {
 	var err error
 	err = dbCfgCheck(dbCfg)
 	if err != nil {
@@ -85,7 +85,7 @@ func InitDB(dbCfg DBConfig) error {
 	return nil
 }
 
-func dbCfgCheck(dbCfg DBConfig) error {
+func dbCfgCheck(dbCfg *DBConfig) error {
 	if !utils.PathExist(dbCfg.DBPath) {
 		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
 			return err
