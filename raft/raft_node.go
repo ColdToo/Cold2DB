@@ -95,8 +95,8 @@ func (rn *RaftNode) Step(m *pb.Message) error {
 // Propose 用于kv请求propose
 func (rn *RaftNode) Propose(buffer []byte) error {
 	ent := pb.Entry{Data: buffer}
-	ents := make([]*pb.Entry, 0)
-	ents = append(ents, &ent)
+	ents := make([]pb.Entry, 0)
+	ents = append(ents, ent)
 	return rn.Raft.Step(&pb.Message{
 		Type:    pb.MsgProp,
 		From:    rn.Raft.id,
@@ -212,7 +212,7 @@ func (rn *RaftNode) ProposeConfChange(cc pb.ConfChange) error {
 	ent := pb.Entry{Type: pb.EntryConfChange, Data: data}
 	return rn.Raft.Step(&pb.Message{
 		Type:    pb.MsgProp,
-		Entries: []*pb.Entry{&ent},
+		Entries: []pb.Entry{ent},
 	})
 }
 
