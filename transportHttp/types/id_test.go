@@ -22,7 +22,7 @@ func TestIDString(t *testing.T) {
 	}
 
 	for i, tt := range tests {
-		got := tt.input.String()
+		got := tt.input.Str()
 		if tt.want != got {
 			t.Errorf("#%d: ID.String failure: want=%v, got=%v", i, tt.want, got)
 		}

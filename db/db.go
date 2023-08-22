@@ -24,7 +24,6 @@ type DB interface {
 }
 
 type Cold2DB struct {
-	// put key to arena skl and wal , update activeMemtable trans act to imm
 	memManager *memManager
 
 	//vlog *valueLog
@@ -92,15 +91,23 @@ func dbCfgCheck(dbCfg *domain.DBConfig) error {
 			return err
 		}
 	}
-	if !utils.PathExist(dbCfg.DBPath) {
+	if !utils.PathExist(dbCfg.IndexConfig.IndexerDir) {
 		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
 			return err
 		}
 	}
-	if !utils.PathExist(dbCfg.DBPath) {
+	if !utils.PathExist(dbCfg.HardStateLogConfig.HardStateLogDir) {
 		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
 			return err
 		}
+	}
+	if !utils.PathExist(dbCfg.ValueLogConfig.ValueLogDir) {
+		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
+			return err
+		}
+	}
+	if dbCfg.MemConfig.MemtableNums <= 0 {
+
 	}
 	return nil
 }

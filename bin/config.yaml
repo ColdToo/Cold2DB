@@ -1,4 +1,4 @@
-zap:
+zapConf:
   level: info
   format: console
   prefix: "[Cold2DB]"
@@ -8,26 +8,26 @@ zap:
   stacktrace-key: stacktrace
   log-in-console: true
 dbConfig:
-  dbPath:
+  dbPath: "/Users/hlhf/GolandProjects/Cold2DB/c2db"
   memConfig:
-    memtableSize: 0
-    memtableNums: 0
-    memSpaceWaitTimeout: 0
-    walDirPath:
-    walSync: false
-    walMMap: false
+    memtableSize: 2048
+    memtableNums: 10
+    memSpaceWaitTimeout: 1
+    walDirPath: "/Users/hlhf/GolandProjects/Cold2DB/c2db/wal"
+    walSync: true
+    walMMap: true
     indexerDir:
     indexerType: 0
   valueLogConfig:
-    valueLogDir:
+    valueLogDir: "/Users/hlhf/GolandProjects/Cold2DB/c2db/vlog"
     valueLogFileSize: 0
     valueLogMmap: false
   indexConfig:
-    indexerDir:
+    indexerDir: "/Users/hlhf/GolandProjects/Cold2DB/c2db/index"
     indexerType: 0
   hardStateLogConfig:
-    hardStateLogDir:
+    hardStateLogDir: "/Users/hlhf/GolandProjects/c2dbDB/raft"
 raftConfig:
-  electionTick: 0
-  heartbeatTick: 0
+  electionTick: 100
+  heartbeatTick: 100
   nodes: []

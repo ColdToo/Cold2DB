@@ -12,28 +12,26 @@ var (
 )
 
 func InitConfig() {
-	defaultConfigPath := "/bin/config.yaml"
-	v := viper.New()
-	v.SetConfigFile(defaultConfigPath)
-	v.SetConfigType("yaml")
-	err := v.ReadInConfig()
+	defaultConfigPath := "/Users/hlhf/GolandProjects/Cold2DB/bin/config.yaml"
+	Viper = viper.New()
+	Viper.SetConfigFile(defaultConfigPath)
+	Viper.SetConfigType("yaml")
+	err := Viper.ReadInConfig()
 	if err != nil {
 		panic(fmt.Errorf("Fatal error config file: %s \n", err))
 	}
-
-	if err = v.Unmarshal(&Config{}); err != nil {
+	Conf = new(Config)
+	if err = Viper.Unmarshal(Conf); err != nil {
 		fmt.Println(err)
 	}
 
-	//watch config
-	v.WatchConfig()
-	v.OnConfigChange(func(e fsnotify.Event) {
+	Viper.WatchConfig()
+	Viper.OnConfigChange(func(e fsnotify.Event) {
 		fmt.Println("config file changed:", e.Name)
-		if err = v.Unmarshal(&Config{}); err != nil {
+		if err = Viper.Unmarshal(&Config{}); err != nil {
 			fmt.Println(err)
 		}
 	})
-	Viper = v
 }
 
 func GetZapConf() *ZapConfig {

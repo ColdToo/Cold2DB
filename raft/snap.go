@@ -1,8 +1,7 @@
 package raft
 
 import (
-	"go.etcd.io/etcd/pkg/ioutil"
-	"go.etcd.io/etcd/raft/raftpb"
+	"github.com/ColdToo/Cold2DB/pb"
 	"io"
 )
 
@@ -22,18 +21,17 @@ const (
 //
 // User of Message should close the Message after sending it.
 type Message struct {
-	raftpb.Message
+	pb.Message
 	ReadCloser io.ReadCloser
 	TotalSize  int64
 	closeC     chan bool
 }
 
-func NewMessage(rs raftpb.Message, rc io.ReadCloser, rcSize int64) *Message {
+func NewMessage(rs pb.Message, rc io.ReadCloser, rcSize int64) *Message {
 	return &Message{
-		Message:    rs,
-		ReadCloser: ioutil.NewExactReadCloser(rc, rcSize),
-		TotalSize:  int64(rs.Size()) + rcSize,
-		closeC:     make(chan bool, 1),
+		Message:   rs,
+		TotalSize: int64(rs.Size()) + rcSize,
+		closeC:    make(chan bool, 1),
 	}
 }
 
