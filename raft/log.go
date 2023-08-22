@@ -55,8 +55,10 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 	return 0, ErrUnavailable
 }
 
-func (l *RaftLog) AppendEntries(ents []*pb.Entry) {
-	l.entries = append(l.entries, ents...)
+func (l *RaftLog) AppendEntries(ents []pb.Entry) {
+	for _, e := range ents {
+		l.entries = append(l.entries, &e)
+	}
 }
 
 func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
