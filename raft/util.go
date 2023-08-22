@@ -24,7 +24,7 @@ func IsEmptyHardState(st pb.HardState) bool {
 }
 
 func isHardStateEqual(a, b pb.HardState) bool {
-	return a.Term == b.Term && a.Vote == b.Vote && a.Commit == b.Commit
+	return a.Term == b.Term && a.Vote == b.Vote && a.Applied == b.Applied
 }
 
 type uint64Slice []uint64

@@ -5,6 +5,7 @@ import (
 	"github.com/ColdToo/Cold2DB/db/flock"
 	"github.com/ColdToo/Cold2DB/db/index"
 	"github.com/ColdToo/Cold2DB/db/logfile"
+	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/utils"
@@ -54,7 +55,7 @@ func GetDB() (*Cold2DB, error) {
 	}
 }
 
-func InitDB(dbCfg *DBConfig) error {
+func InitDB(dbCfg *domain.DBConfig) error {
 	var err error
 	err = dbCfgCheck(dbCfg)
 	if err != nil {
@@ -85,7 +86,7 @@ func InitDB(dbCfg *DBConfig) error {
 	return nil
 }
 
-func dbCfgCheck(dbCfg *DBConfig) error {
+func dbCfgCheck(dbCfg *domain.DBConfig) error {
 	if !utils.PathExist(dbCfg.DBPath) {
 		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
 			return err

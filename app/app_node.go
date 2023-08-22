@@ -67,11 +67,11 @@ func (an *AppNode) startRaftNode() {
 		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
 	}
 
-	cfg := domain.GetConfig()
+	cfg := domain.GetRaftConf()
 	opts := &raft.RaftOpts{ID: uint64(an.localId),
 		Storage:       an.kvStore.db,
-		ElectionTick:  cfg.RaftConfig.ElectionTick,
-		HeartbeatTick: cfg.RaftConfig.ElectionTick}
+		ElectionTick:  cfg.ElectionTick,
+		HeartbeatTick: cfg.HeartbeatTick}
 	if an.IsRestartNode() {
 		an.raftNode = raft.RestartRaftNode(opts)
 	} else {
