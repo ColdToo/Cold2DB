@@ -237,10 +237,10 @@ func (r *Raft) becomeLeader() {
 	}
 	// NOTE: Leader should propose a noop entry on its term for sync un applied entries
 	r.resetTick()
-	entries := make([]*pb.Entry, 1)
+	entries := make([]pb.Entry, 1)
 
 	// todo 更换leader后是否应该强制让follower节点将raft log memory段空间情况，然后同步applied段的entry
-	entries = append(entries, &pb.Entry{
+	entries = append(entries, pb.Entry{
 		Type:  pb.EntryNormal,
 		Term:  r.Term,
 		Index: r.RaftLog.LastIndex() + 1,
@@ -254,9 +254,9 @@ func (r *Raft) becomeLeader() {
 
 func (r *Raft) handlePropMsg(m *pb.Message) {
 	lastIndex := r.RaftLog.LastIndex()
-	ents := make([]*pb.Entry, 0)
+	ents := make([]pb.Entry, 0)
 	for _, e := range m.Entries {
-		ents = append(ents, &pb.Entry{
+		ents = append(ents, pb.Entry{
 			Type:  e.Type,
 			Term:  r.Term,
 			Index: lastIndex + 1,
