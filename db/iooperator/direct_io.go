@@ -13,7 +13,14 @@ type DirectorIoOperator struct {
 }
 
 func NewDirectorIoOperator(fName string, fsize int64) (IoOperator, error) {
-	return &DirectorIoOperator{}, nil
+	if fsize <= 0 {
+		return nil, ErrInvalidFsize
+	}
+	file, err := openFile(fName, fsize)
+	if err != nil {
+		return nil, err
+	}
+	return &DirectorIoOperator{fd: file}, nil
 }
 
 func (lm *DirectorIoOperator) Write(b []byte, offset int64) (int, error) {

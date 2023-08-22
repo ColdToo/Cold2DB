@@ -31,10 +31,10 @@ type memManager struct {
 
 func NewMemManger(memCfg domain.MemConfig) (manager *memManager, err error) {
 	memManger := new(memManager)
-	Cold2.memManager = memManger
 	memManger.walDirPath = memCfg.WalDirPath
 	memManger.flushChn = make(chan *memtable, memCfg.MemtableNums-1)
 	memManger.immuMems = make([]*memtable, memCfg.MemtableNums-1)
+	Cold2.memManager = memManger
 
 	var ioType = logfile.BufferedIO
 	if memCfg.WalMMap {

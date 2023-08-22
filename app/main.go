@@ -5,6 +5,7 @@ import (
 	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
+	"strings"
 )
 
 func main() {
@@ -25,10 +26,19 @@ func main() {
 	errorC := make(chan error)
 	defer close(errorC)
 
-	kvStore := NewKVStore(proposeC)
-	var httpAddr string
+	var localHttpAddr string
 	var localId int
 	var peerurl []string
+	raftConf := domain.GetRaftConf()
+	for _, node := range raftConf.Nodes {
+		if strings.Contains(node.EAddr, "127.0.0.1") && strings.Contains(node.IAddr, "127.0.0.1") {
+			localId = node.ID
+			localHttpAddr = node.EAddr
+		}
+		peerurl = append(peerurl, node.IAddr)
+	}
+
+	kvStore := NewKVStore(proposeC)
 	StartAppNode(localId, peerurl, proposeC, confChangeC, errorC, kvStore)
-	ServeHttpKVAPI(kvStore, httpAddr, confChangeC, errorC)
+	ServeHttpKVAPI(kvStore, localHttpAddr, confChangeC, errorC)
 }

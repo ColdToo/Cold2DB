@@ -91,18 +91,23 @@ func dbCfgCheck(dbCfg *domain.DBConfig) error {
 			return err
 		}
 	}
+	if !utils.PathExist(dbCfg.MemConfig.WalDirPath) {
+		if err := os.MkdirAll(dbCfg.MemConfig.WalDirPath, os.ModePerm); err != nil {
+			return err
+		}
+	}
 	if !utils.PathExist(dbCfg.IndexConfig.IndexerDir) {
-		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
+		if err := os.MkdirAll(dbCfg.IndexConfig.IndexerDir, os.ModePerm); err != nil {
 			return err
 		}
 	}
 	if !utils.PathExist(dbCfg.HardStateLogConfig.HardStateLogDir) {
-		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
+		if err := os.MkdirAll(dbCfg.HardStateLogConfig.HardStateLogDir, os.ModePerm); err != nil {
 			return err
 		}
 	}
 	if !utils.PathExist(dbCfg.ValueLogConfig.ValueLogDir) {
-		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
+		if err := os.MkdirAll(dbCfg.ValueLogConfig.ValueLogDir, os.ModePerm); err != nil {
 			return err
 		}
 	}

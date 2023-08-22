@@ -30,9 +30,9 @@ type RaftConfig struct {
 }
 
 type Node struct {
-	ID   int    `yaml:"id"`
-	EAdd string `yaml:"eAddr"`
-	IAdd string `yaml:"iAddr"`
+	ID    int    `yaml:"id"`
+	EAddr string `yaml:"eAddr"`
+	IAddr string `yaml:"iAddr"`
 }
 
 type DBConfig struct {

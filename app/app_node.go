@@ -35,7 +35,7 @@ type AppNode struct {
 }
 
 func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte,
-	confChangeC <-chan pb.ConfChange, errorC chan<- error, kvStore *KvStore) {
+	confChangeC <-chan pb.ConfChange, errorC chan<- error, kvStore *KvStore, config *domain.RaftConfig) {
 	an := &AppNode{
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
@@ -47,7 +47,7 @@ func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte,
 		httpdonec:   make(chan struct{}),
 		kvStore:     kvStore,
 	}
-	an.startRaftNode()
+	an.startRaftNode(config)
 
 	//处理配置变更以及日志提议
 	go an.servePropCAndConfC()
@@ -59,17 +59,16 @@ func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte,
 	return
 }
 
-func (an *AppNode) startRaftNode() {
+func (an *AppNode) startRaftNode(config *domain.RaftConfig) {
 	rpeers := make([]raft.Peer, len(an.peersUrl))
 	for i := range rpeers {
 		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
 	}
 
-	cfg := domain.GetRaftConf()
 	opts := &raft.RaftOpts{ID: uint64(an.localId),
 		Storage:       an.kvStore.db,
-		ElectionTick:  cfg.ElectionTick,
-		HeartbeatTick: cfg.HeartbeatTick}
+		ElectionTick:  config.ElectionTick,
+		HeartbeatTick: config.HeartbeatTick}
 	if an.IsRestartNode() {
 		an.raftNode = raft.RestartRaftNode(opts)
 	} else {

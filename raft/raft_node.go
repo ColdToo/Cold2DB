@@ -142,7 +142,7 @@ func (rn *RaftNode) HasReady() bool {
 	if !IsEmptyHardState(hardState) && !isHardStateEqual(rn.prevHardSt, hardState) {
 		return true
 	}
-	if len(rn.Raft.msgs) > 0 || len(rn.Raft.RaftLog.nextApplyEnts()) > 0 {
+	if len(rn.Raft.msgs) > 0 || rn.Raft.RaftLog.hasNextApplyEnts() {
 		return true
 	}
 	return false

@@ -30,4 +30,13 @@ dbConfig:
 raftConfig:
   electionTick: 100
   heartbeatTick: 100
-  nodes: []
+  nodes:
+    - id: 1
+      eAddr: 127.0.0.1:2345
+      iAddr: 127.0.0.1:7878
+    - id: 2
+      eAddr: 172.16.60.97:2345
+      iAddr: 172.16.60.97:7878
+    - id: 3
+      eAddr: 172.16.60.98:2345
+      iAddr: 172.16.60.98:7878

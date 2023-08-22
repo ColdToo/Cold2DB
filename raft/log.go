@@ -22,7 +22,6 @@ type RaftLog struct {
 
 	entries []*pb.Entry
 
-	// db 持久化保存的日志
 	storage Storage
 }
 
@@ -33,8 +32,14 @@ func newRaftLog(storage Storage) (*RaftLog, error) {
 	return &RaftLog{storage: storage, first: firstIndex, applied: appliedIndex, entries: emptyEntsS}, nil
 }
 
+//todo entries 逻辑需要重新判断
+
 func (l *RaftLog) nextApplyEnts() (ents []*pb.Entry) {
 	return l.entries[l.applied+1 : l.committed+1]
+}
+
+func (l *RaftLog) hasNextApplyEnts() bool {
+	return false
 }
 
 func (l *RaftLog) LastIndex() uint64 {

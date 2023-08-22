@@ -22,7 +22,7 @@ func initHardStateLog(hardStateLogCfg domain.HardStateLogConfig) (hsLog *hardSta
 	hLogOptions := hLogOptions{
 		path: hardStateLogCfg.HardStateLogDir,
 	}
-
+	hsLog = new(hardStateLog)
 	hsLog.hsLogFile, err = logfile.OpenLogFile(hLogOptions.path, time.Now().Unix(), 102, logfile.HardStateLog, ioType)
 	if err != nil {
 		return nil, err

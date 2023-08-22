@@ -37,6 +37,7 @@ func InitConfig() {
 func GetZapConf() *ZapConfig {
 	return Conf.ZapConf
 }
+
 func GetRaftConf() *RaftConfig {
 	return Conf.RaftConfig
 }
