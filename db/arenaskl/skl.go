@@ -9,10 +9,6 @@ import (
 	"unsafe"
 )
 
-// Fastrand returns a lock free uint32 value.
-//go:linkname Fastrand runtime.fastrand
-import _ "unsafe" // required by go:linkname
-
 const (
 	maxHeight  = 20
 	pValue     = 1 / math.E

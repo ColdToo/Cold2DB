@@ -5,7 +5,7 @@ import (
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/domain"
-	log "github.com/ColdToo/Cold2DB/log"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
 	"github.com/ColdToo/Cold2DB/transportHttp"
