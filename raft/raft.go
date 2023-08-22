@@ -307,9 +307,9 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 		return err
 	}
 
-	sendEntries := make([]*pb.Entry, 0)
+	sendEntries := make([]pb.Entry, 0)
 	for _, en := range entries {
-		sendEntries = append(sendEntries, &pb.Entry{
+		sendEntries = append(sendEntries, pb.Entry{
 			Type:  en.Type,
 			Term:  en.Term,
 			Index: en.Index,

@@ -206,7 +206,7 @@ func transportLevel(level string) zapcore.Level {
 }
 
 func getEncoderCore(l zapcore.Level, level zap.LevelEnablerFunc, config *domain.ZapConfig) zapcore.Core {
-	writer, err := FileRotatelogs.GetWriteSyncer(l.String()) // 使用file-rotatelogs进行日志分割
+	writer, err := FileRotatelogs.GetWriteSyncer(l.String(), config) // 使用file-rotatelogs进行日志分割
 	if err != nil {
 		fmt.Printf("Get Write Syncer Failed err:%v", err.Error())
 		return nil

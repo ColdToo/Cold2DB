@@ -4,7 +4,6 @@ import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/db/iooperator"
 	"hash/crc32"
-	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -23,7 +22,7 @@ var (
 )
 
 const (
-	PathSeparator = string(os.PathSeparator)
+	PathSeparator = "/"
 
 	WalSuffixName = ".wal"
 

@@ -74,11 +74,11 @@ func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
 	}
 
 	if high < l.applied {
-		return l.storage.Entries(low, high), nil
+		return l.storage.Entries(low, high)
 	}
 
 	if low < l.applied && high > l.applied {
-		entries := l.storage.Entries(low, l.applied)
+		entries, _ := l.storage.Entries(low, l.applied)
 		ents = append(ents, entries...)
 		entries = l.entries[l.applied+1 : high]
 		ents = append(ents, entries...)

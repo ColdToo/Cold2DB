@@ -1,29 +1,35 @@
-syntax = "proto3";
+syntax = "proto2";
 package pb;
 
-option go_package = "Cold2DB/pb";  // 指定go package名称
+import "gogo.proto";
+
+option (marshaler_all) = true;
+option (sizer_all) = true;
+option (unmarshaler_all) = true;
+option (goproto_getters_all) = false;
+option (goproto_enum_prefix_all) = false;
 
 enum EntryType {
-	EntryNormal = 0;
+	EntryNormal     = 0;
 	EntryConfChange = 1;
 }
 
 message Entry {
-	EntryType entry_type = 1;
-	uint64 term = 2;
-	uint64 index = 3;
-	bytes data = 4;
+	optional uint64     Term  = 2 [(nullable) = false]; // must be 64-bit aligned for atomic operations
+	optional uint64     Index = 3 [(nullable) = false]; // must be 64-bit aligned for atomic operations
+	optional EntryType  Type  = 1 [(nullable) = false];
+	optional bytes      Data  = 4;
 }
 
 message SnapshotMetadata {
-	ConfState conf_state = 1;
-	uint64 index = 2;
-	uint64 term = 3;
+	optional ConfState conf_state = 1 [(nullable) = false];
+	optional uint64    index      = 2 [(nullable) = false];
+	optional uint64    term       = 3 [(nullable) = false];
 }
 
 message Snapshot {
-	bytes data = 1;
-	SnapshotMetadata metadata = 2;
+	optional bytes            data     = 1;
+	optional SnapshotMetadata metadata = 2 [(nullable) = false];
 }
 
 enum MessageType {
@@ -45,22 +51,23 @@ enum MessageType {
 }
 
 message Message {
-	MessageType msg_type = 1;
-	uint64 to = 2;
-	uint64 from = 3;
-	uint64 term = 4;
-	uint64 log_term = 5;
-	uint64 index = 6;
-	repeated Entry entries = 7;
-	uint64 commit = 8;
-	Snapshot snapshot = 9;
-	bool reject = 10;
+	optional MessageType type        = 1  [(nullable) = false];
+	optional uint64      to          = 2  [(nullable) = false];
+	optional uint64      from        = 3  [(nullable) = false];
+	optional uint64      term        = 4  [(nullable) = false];
+	optional uint64      logTerm     = 5  [(nullable) = false];
+	optional uint64      index       = 6  [(nullable) = false];
+	repeated Entry       entries     = 7  [(nullable) = false];
+	optional uint64      commit      = 8  [(nullable) = false];
+	optional Snapshot    snapshot    = 9  [(nullable) = false];
+	optional bool        reject      = 10 [(nullable) = false];
+	optional uint64      rejectHint  = 11 [(nullable) = false];
 }
 
 message HardState {
-	uint64 term = 1;
-	uint64 vote = 2;
-	uint64 commit = 3;
+	optional uint64 term   = 1 [(nullable) = false];
+	optional uint64 vote   = 2 [(nullable) = false];
+	optional uint64 applied = 3 [(nullable) = false];
 }
 
 message ConfState {
@@ -73,10 +80,9 @@ enum ConfChangeType {
 	ConfChangeUpdateNode = 2;
 }
 
-// ConfChange is the data that attach on entry with EntryConfChange type
 message ConfChange {
-	ConfChangeType change_type = 1;
-	// node will be add/remove
-	uint64 node_id = 2;
-	bytes context = 3;
+	optional uint64          ID      = 1 [(nullable) = false];
+	optional ConfChangeType  Type    = 2 [(nullable) = false];
+	optional uint64          NodeID  = 3 [(nullable) = false];
+	optional bytes           Context = 4;
 }
