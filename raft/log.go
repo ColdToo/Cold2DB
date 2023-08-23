@@ -8,7 +8,7 @@ import (
 // log structure
 //
 //	snapshot/first.................. applied............ committed.............last
-//	--------|--------mem-table----------|--------------memory entries-----------|
+//	--------|--------mem-table----------|--------------memory-entries-----------|
 //	                   wal
 
 type RaftLog struct {
@@ -35,11 +35,14 @@ func newRaftLog(storage Storage) (*RaftLog, error) {
 //todo entries 逻辑需要重新判断
 
 func (l *RaftLog) nextApplyEnts() (ents []*pb.Entry) {
-	return l.entries[l.applied+1 : l.committed+1]
+	if len(l.entries) > 0 && l.committed > l.applied {
+		return l.entries[0 : l.committed-l.applied]
+	}
+	return nil
 }
 
 func (l *RaftLog) hasNextApplyEnts() bool {
-	return false
+	return l.committed > l.applied
 }
 
 func (l *RaftLog) LastIndex() uint64 {
@@ -77,7 +80,7 @@ func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
 	}
 
 	if low > l.applied {
-		return l.entries[low : high+1], nil
+		return l.entries[low-l.applied : high-l.applied+1], nil
 	}
 
 	if high < l.applied {
@@ -87,7 +90,7 @@ func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
 	if low < l.applied && high > l.applied {
 		entries, _ := l.storage.Entries(low, l.applied)
 		ents = append(ents, entries...)
-		entries = l.entries[l.applied+1 : high]
+		entries = l.entries[0 : high-l.applied+1]
 		ents = append(ents, entries...)
 	}
 

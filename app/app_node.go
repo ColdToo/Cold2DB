@@ -49,10 +49,10 @@ func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte,
 	}
 	an.startRaftNode(config)
 
-	//处理配置变更以及日志提议
+	//启动一个goroutine,处理节点变更以及日志提议
 	go an.servePropCAndConfC()
 	// 启动一个goroutine,处理appLayer与raftLayer的交互
-	go an.serveRaftNode()
+	go an.serveRaftNode(config.HeartbeatTick)
 	// 启动一个goroutine,监听当前节点与集群中其他节点之间的网络连接
 	go an.servePeerRaft()
 
@@ -76,9 +76,8 @@ func (an *AppNode) startRaftNode(config *domain.RaftConfig) {
 	}
 }
 
-func (an *AppNode) serveRaftNode() {
-	//todo 定时器应该做成可配置选项
-	ticker := time.NewTicker(100 * time.Millisecond)
+func (an *AppNode) serveRaftNode(heartbeatTick int) {
+	ticker := time.NewTicker(time.Duration(heartbeatTick) * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -111,6 +110,7 @@ func (an *AppNode) serveRaftNode() {
 func (an *AppNode) servePropCAndConfC() {
 	confChangeCount := uint64(0)
 
+	//当proposeC和confChangeC关闭后退出该goroutine
 	for an.proposeC != nil && an.confChangeC != nil {
 		select {
 		case prop, ok := <-an.proposeC:

@@ -149,8 +149,9 @@ func (rn *RaftNode) HasReady() bool {
 }
 
 func (rn *RaftNode) Advance() {
-	//todo  appnode处理完一次后需要更新raftlog的first applied
+	//appnode处理完一次后需要更新raftlog的first applied
 	rn.Raft.RaftLog.RefreshFirstAndAppliedIndex()
+	//需要将log中的entryies进行裁剪
 	rn.AdvanceC <- struct{}{}
 }
 

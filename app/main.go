@@ -9,9 +9,6 @@ import (
 )
 
 func main() {
-	//raftexample --id 1 --cluster http://127.0.0.1:12379,http://127.0.0.1:22379,http://127.0.0.1:32379 --port 12380
-	//raftexample --id 2 --cluster http://127.0.0.1:12379,http://127.0.0.1:22379,http://127.0.0.1:32379 --port 22380
-	//raftexample --id 3 --cluster http://127.0.0.1:12379,http://127.0.0.1:22379,http://127.0.0.1:32379 --port 32380
 	domain.InitConfig()
 	log.InitLog(domain.GetZapConf())
 	err := db.InitDB(domain.GetDBConf())
@@ -39,6 +36,6 @@ func main() {
 	}
 
 	kvStore := NewKVStore(proposeC)
-	StartAppNode(localId, peerurl, proposeC, confChangeC, errorC, kvStore)
+	StartAppNode(localId, peerurl, proposeC, confChangeC, errorC, kvStore, raftConf)
 	ServeHttpKVAPI(kvStore, localHttpAddr, confChangeC, errorC)
 }
