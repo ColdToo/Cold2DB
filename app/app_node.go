@@ -15,7 +15,6 @@ import (
 	"time"
 )
 
-// A key-value stream backed by raft
 type AppNode struct {
 	localId  int
 	peersUrl []string
