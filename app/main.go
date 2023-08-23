@@ -23,19 +23,19 @@ func main() {
 	errorC := make(chan error)
 	defer close(errorC)
 
-	var localHttpAddr string
+	var localIpAddr string
 	var localId int
 	var peerurl []string
 	raftConf := domain.GetRaftConf()
 	for _, node := range raftConf.Nodes {
 		if strings.Contains(node.EAddr, "127.0.0.1") && strings.Contains(node.IAddr, "127.0.0.1") {
 			localId = node.ID
-			localHttpAddr = node.EAddr
+			localIpAddr = node.EAddr
 		}
 		peerurl = append(peerurl, node.IAddr)
 	}
 
 	kvStore := NewKVStore(proposeC)
-	StartAppNode(localId, peerurl, proposeC, confChangeC, errorC, kvStore, raftConf)
-	ServeHttpKVAPI(kvStore, localHttpAddr, confChangeC, errorC)
+	StartAppNode(localId, peerurl, proposeC, confChangeC, errorC, kvStore, raftConf, localIpAddr)
+	ServeHttpKVAPI(kvStore, localIpAddr, confChangeC, errorC)
 }

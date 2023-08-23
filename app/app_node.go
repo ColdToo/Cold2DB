@@ -10,6 +10,7 @@ import (
 	"github.com/ColdToo/Cold2DB/raft"
 	"github.com/ColdToo/Cold2DB/transportHttp"
 	types "github.com/ColdToo/Cold2DB/transportHttp/types"
+	"github.com/ColdToo/Cold2DB/transportTCP"
 	"net/http"
 	"net/url"
 	"time"
@@ -17,11 +18,13 @@ import (
 
 type AppNode struct {
 	localId  int
+	localIp  string
 	peersUrl []string
 
 	kvStore   *KvStore
 	raftNode  *raft.RaftNode
 	transport *transportHttp.Transport
+	transpor  *transportTCP.Transport
 
 	proposeC    <-chan []byte        // 提议 (k,v)
 	confChangeC <-chan pb.ConfChange // 提议更改配置文件
@@ -33,10 +36,11 @@ type AppNode struct {
 	TickTime int //定时触发定时器的时间
 }
 
-func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte,
-	confChangeC <-chan pb.ConfChange, errorC chan<- error, kvStore *KvStore, config *domain.RaftConfig) {
+func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte, confChangeC <-chan pb.ConfChange,
+	errorC chan<- error, kvStore *KvStore, config *domain.RaftConfig, localIp string) {
 	an := &AppNode{
 		proposeC:    proposeC,
+		localIp:     localIp,
 		confChangeC: confChangeC,
 		errorC:      errorC,
 		localId:     localId,
@@ -54,6 +58,8 @@ func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte,
 	go an.serveRaftNode(config.HeartbeatTick)
 	// 启动一个goroutine,监听当前节点与集群中其他节点之间的网络连接
 	go an.servePeerRaft()
+
+	go an.servePeer()
 
 	return
 }
@@ -218,6 +224,24 @@ func (an *AppNode) servePeerRaft() {
 
 	//监听来自其他节点的http请求
 	an.listenAndServePeerRaft()
+}
+
+func (an *AppNode) servePeer() {
+	an.transpor = &transportTCP.Transport{
+		LocalID:   types.ID(an.localId),
+		ClusterID: 0x1000,
+		Raft:      an,
+		ErrorC:    make(chan error),
+		Peers:     make(map[types.ID]transportTCP.Peer),
+	}
+
+	for i := range an.peersUrl {
+		if i+1 != an.localId {
+			an.transpor.AddPeer(types.ID(i+1), an.peersUrl[i])
+		}
+	}
+
+	go an.transpor.ListenPeer(an.localIp)
 }
 
 func (an *AppNode) listenAndServePeerRaft() {
