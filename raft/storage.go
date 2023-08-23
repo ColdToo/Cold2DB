@@ -1,39 +1,38 @@
 package raft
 
-import "Cold2DB/raft/raftproto"
+import (
+	"errors"
+	"github.com/ColdToo/Cold2DB/pb"
+)
+
+// ErrCompacted is returned by Storage.Entries/Compact when a requested
+// index is unavailable because it predates the last snapshot.
+var ErrCompacted = errors.New("requested index is unavailable due to compaction")
+
+// ErrSnapOutOfDate is returned by Storage.CreateSnapshot when a requested
+// index is older than the existing snapshot.
+var ErrSnapOutOfDate = errors.New("requested index is older than the existing snapshot")
+
+// ErrUnavailable is returned by Storage interface when the requested log entries
+// are unavailable.
+var ErrUnavailable = errors.New("requested entry at index is unavailable")
+
+// ErrSnapshotTemporarilyUnavailable is returned by the Storage interface when the required
+// snapshot is temporarily unavailable.
+var ErrSnapshotTemporarilyUnavailable = errors.New("snapshot is temporarily unavailable")
 
 type Storage interface {
-	// InitialState returns the saved HardState and ConfState information.
-	InitialState() (raftproto.HardState, raftproto.ConfState, error)
+	GetHardState() (pb.HardState, pb.ConfState, error)
 
-	// Entries returns a slice of log entries in the range [lo,hi).
-	// MaxSize limits the total size of the log entries returned, but
-	// Entries returns at least one entry if any.
+	// Entries 返回指定范围的Entries
+	Entries(lo, hi uint64) ([]*pb.Entry, error)
 
-	Entries(lo, hi, maxSize uint64) ([]raftproto.Entry, error)
-
-	// Term returns the term of entry i, which must be in the range
-	// [FirstIndex()-1, LastIndex()]. The term of the entry before
-	// FirstIndex is retained for matching purposes even though the
-	// rest of that entry may not be available.
-	// 传入一个索引值，返回这个索引值对应的任期号，如果不存在则error不为空，其中：
-	// ErrCompacted：表示传入的索引数据已经找不到，说明已经被压缩成快照数据了。
-	// ErrUnavailable：表示传入的索引值大于当前的最大索引
 	Term(i uint64) (uint64, error)
 
-	// LastIndex returns the index of the last entry in the log.
-	// 获得最后持久化的log中最后一条数据的索引值
-	LastIndex() (uint64, error)
+	AppliedIndex() uint64
 
-	// FirstIndex returns the index of the first log entry that is
-	// possibly available via Entries (older entries have been incorporated
-	// into the latest Snapshot; if storage only contains the dummy entry the
-	// first log entry is not available).
-	FirstIndex() (uint64, error)
+	FirstIndex() uint64
 
-	// Snapshot returns the most recent snapshot.
-	// If snapshot is temporarily unavailable, it should return ErrSnapshotTemporarilyUnavailable,
-	// so raft state machine could know that Storage needs some time to prepare
-	// snapshot and call Snapshot later.
-	Snapshot() (pb.Snapshot, error)
+	// GetSnapshot  返回最新的快照
+	GetSnapshot() (pb.Snapshot, error)
 }

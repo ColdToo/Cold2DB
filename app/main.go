@@ -1,14 +1,41 @@
 package main
 
-import "flag"
+import (
+	"github.com/ColdToo/Cold2DB/db"
+	"github.com/ColdToo/Cold2DB/domain"
+	"github.com/ColdToo/Cold2DB/log"
+	"github.com/ColdToo/Cold2DB/pb"
+	"strings"
+)
 
 func main() {
-	cluster := flag.String("cluster", "http://127.0.0.1:9021", "存储集群")
-	id := flag.Int("ID", 1, "节点ID")
-	kvport := flag.Int("port", 9081, "节点提供存储服务的kv端口")
-	join := flag.Bool("join", false, "是否加入已经存在的集群")
-	flag.Parse()
-	print(cluster)
+	domain.InitConfig()
+	log.InitLog(domain.GetZapConf())
+	err := db.InitDB(domain.GetDBConf())
+	if err != nil {
+		log.Panic("init db failed")
+	}
 
-	//创建一个raft节点
+	proposeC := make(chan []byte)
+	defer close(proposeC)
+	confChangeC := make(chan pb.ConfChange)
+	defer close(confChangeC)
+	errorC := make(chan error)
+	defer close(errorC)
+
+	var localHttpAddr string
+	var localId int
+	var peerurl []string
+	raftConf := domain.GetRaftConf()
+	for _, node := range raftConf.Nodes {
+		if strings.Contains(node.EAddr, "127.0.0.1") && strings.Contains(node.IAddr, "127.0.0.1") {
+			localId = node.ID
+			localHttpAddr = node.EAddr
+		}
+		peerurl = append(peerurl, node.IAddr)
+	}
+
+	kvStore := NewKVStore(proposeC)
+	StartAppNode(localId, peerurl, proposeC, confChangeC, errorC, kvStore, raftConf)
+	ServeHttpKVAPI(kvStore, localHttpAddr, confChangeC, errorC)
 }
