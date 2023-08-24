@@ -7,8 +7,8 @@ import (
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
-	types "github.com/ColdToo/Cold2DB/transportHttp/types"
 	"github.com/ColdToo/Cold2DB/transportTCP"
+	types "github.com/ColdToo/Cold2DB/transportTCP/types"
 	"time"
 )
 
