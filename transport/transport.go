@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -23,9 +22,7 @@ type RaftTransport interface {
 }
 
 type Transporter interface {
-	Initialize() error
-
-	Handler() http.Handler
+	ListenPeerConn(localIp string)
 
 	// Send 应用层通过该接口发送消息给peer,如果在transport中没有找到该peer那么忽略该消息
 	Send(m []*pb.Message)
@@ -36,7 +33,7 @@ type Transporter interface {
 
 	RemoveAllPeers()
 
-	UpdatePeer(id types.ID, urls []string)
+	UpdatePeer(id types.ID, url string)
 
 	ActiveSince(id types.ID) time.Time
 
@@ -93,13 +90,14 @@ func (t *Transport) AddPeer(peerID types.ID, u string) {
 	log.Info("added remote peer success").Str(code.LocalId, t.LocalID.Str()).Str(code.RemoteId, peerID.Str()).Record()
 }
 
-func (t *Transport) ListenPeer(localIp string) {
+func (t *Transport) ListenPeerConn(localIp string) {
 	log.Debugf("start app server node id: &s", t.LocalID, "listening...")
 	listener, err := NewStoppableListener(localIp, t.StopC)
 	if err != nil {
 		return
 	}
 	for {
+	flag:
 		conn, err := listener.AcceptTCP()
 		if err != nil {
 			log.Panic("Accept tcp err").Record()
@@ -112,9 +110,10 @@ func (t *Transport) ListenPeer(localIp string) {
 			p := v.(*peer)
 			if strings.Contains(p.url, remoteAddr) {
 				v.attachConn(conn)
+				goto flag
 			}
 		}
-		log.Errorf("get wrong conn the remote ip addr:%s close it", remoteAddr)
+		log.Errorf("get wrong conn the remote ip addr:%s drop it", remoteAddr)
 		conn.Close()
 	}
 }
@@ -154,26 +153,6 @@ func (t *Transport) Stop() {
 	close(t.StopC)
 }
 
-func (t *Transport) CutPeer(id types.ID) {
-	t.mu.RLock()
-	p, pok := t.Peers[id]
-	t.mu.RUnlock()
-
-	if pok {
-		p.(Pausable).Pause()
-	}
-}
-
-func (t *Transport) MendPeer(id types.ID) {
-	t.mu.RLock()
-	p, pok := t.Peers[id]
-	t.mu.RUnlock()
-
-	if pok {
-		p.(Pausable).Resume()
-	}
-}
-
 func (t *Transport) RemovePeer(id types.ID) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -199,20 +178,13 @@ func (t *Transport) removePeer(id types.ID) {
 	log.Info("removed remote peer").Str("local-member-id", t.LocalID.Str()).Str("removed-remote-peer-id", id.Str())
 }
 
-func (t *Transport) UpdatePeer(id types.ID, us []string) {
+func (t *Transport) UpdatePeer(id types.ID, us string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	// TODO: return error or just panic?
-	if _, ok := t.Peers[id]; !ok {
-		return
-	}
-	urls, err := types.NewURLs(us)
-	if err != nil {
-	}
-
+	// todo 修改url并重新dial
 	log.Info("updated remote peer").Str("local-member-id", t.LocalID.Str()).
 		Str("updated-remote-peer-id", id.Str()).
-		Str("updated-remote-peer-urls", urls.String())
+		Str("updated-remote-peer-url", us)
 }
 
 type Pausable interface {
