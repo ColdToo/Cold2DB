@@ -18,21 +18,17 @@ type AppNode struct {
 	localIp  string
 	peersUrl []string
 
-	kvStore  *KvStore
-	raftNode *raft.RaftNode
-	//transport *transportHttp.Transport
+	kvStore   *KvStore
+	raftNode  *raft.RaftNode
 	transport *transport.Transport
 
-	proposeC    <-chan []byte        // 提议 (k,v)
-	confChangeC <-chan pb.ConfChange // 提议更改配置文件
-	errorC      chan<- error         // errors from raft session
-	stopc       chan struct{}        // signals proposal channel closed
-	httpstopc   chan struct{}        // signals http server to shutdown
-	httpdonec   chan struct{}        // signals http server shutdown complete
+	proposeC    chan []byte        // 提议 (k,v)
+	confChangeC chan pb.ConfChange // 提议更改配置文件
+	kvApiStopC  chan struct{}      // 关闭http服务器的信号
 }
 
-func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte, confChangeC <-chan pb.ConfChange,
-	doneC chan<- struct{}, kvStore *KvStore, config *config.RaftConfig, localIp string) {
+func StartAppNode(localId int, peersUrl []string, proposeC chan []byte, confChangeC chan pb.ConfChange,
+	kvApiStopC chan struct{}, kvStore *KvStore, config *config.RaftConfig, localIp string) {
 	an := &AppNode{
 		localId:     localId,
 		localIp:     localIp,
@@ -40,10 +36,7 @@ func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte, confCh
 		kvStore:     kvStore,
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
-		errorC:      make(chan error),
-		stopc:       make(chan struct{}),
-		httpstopc:   make(chan struct{}),
-		httpdonec:   make(chan struct{}),
+		kvApiStopC:  kvApiStopC,
 	}
 
 	an.startRaftNode(config)
@@ -75,6 +68,33 @@ func (an *AppNode) startRaftNode(config *config.RaftConfig) {
 	}
 }
 
+func (an *AppNode) IsRestartNode() (flag bool) {
+	return an.kvStore.db.IsRestartNode()
+}
+
+func (an *AppNode) servePropCAndConfC() {
+	//todo 用于 prometheus 指标
+	confChangeCount := uint64(0)
+
+	//当proposeC和confChangeC关闭后退出该goroutine,并停止raft服务
+	for an.proposeC != nil && an.confChangeC != nil {
+		select {
+		case prop := <-an.proposeC:
+			err := an.raftNode.Propose(prop)
+			if err != nil {
+				return
+			}
+		case cc := <-an.confChangeC:
+			confChangeCount++
+			cc.ID = confChangeCount
+			err := an.raftNode.ProposeConfChange(cc)
+			if err != nil {
+				return
+			}
+		}
+	}
+}
+
 func (an *AppNode) serveRaftNode(heartbeatTick int) {
 	ticker := time.NewTicker(time.Duration(heartbeatTick) * time.Millisecond)
 	defer ticker.Stop()
@@ -95,49 +115,18 @@ func (an *AppNode) serveRaftNode(heartbeatTick int) {
 			//通知raftNode本轮ready已经处理完可以进行下一轮处理
 			an.raftNode.Advance()
 
+			//如果发现致命错误需要停止服务
 		case err := <-an.transport.ErrorC:
-			an.writeError(err)
+			log.Panicf("transport get critical err", err)
+			an.stop()
 			return
 
-		case <-an.stopc:
+		case err := <-an.raftNode.ErrorC:
+			log.Panicf("raftNode get critical err", err)
 			an.stop()
 			return
 		}
 	}
-}
-
-func (an *AppNode) servePropCAndConfC() {
-	//todo 用于 prometheus 指标
-	confChangeCount := uint64(0)
-
-	//当proposeC和confChangeC关闭后退出该goroutine
-	for an.proposeC != nil && an.confChangeC != nil {
-		select {
-		case prop, ok := <-an.proposeC:
-			if !ok {
-				an.proposeC = nil
-			} else {
-				err := an.raftNode.Propose(prop)
-				if err != nil {
-					return
-				}
-			}
-
-		case cc, ok := <-an.confChangeC:
-			if !ok {
-				an.confChangeC = nil
-			} else {
-				confChangeCount++
-				cc.ID = confChangeCount
-				err := an.raftNode.ProposeConfChange(cc)
-				if err != nil {
-					return
-				}
-			}
-		}
-	}
-
-	close(an.stopc)
 }
 
 func (an *AppNode) handleReady(rd raft.Ready) (err error) {
@@ -235,26 +224,11 @@ func (an *AppNode) ReportSnapshotStatus(id uint64, status raft.SnapshotStatus) {
 	an.raftNode.ReportSnapshot(id, status)
 }
 
-// close app node
-func (an *AppNode) stopHTTP() {
-	an.transport.Stop()
-	close(an.httpstopc)
-	<-an.httpdonec
-}
-
 func (an *AppNode) stop() {
-	an.stopHTTP()
-	close(an.errorC)
+	an.transport.Stop()
 	an.raftNode.Stop()
-}
-
-func (an *AppNode) writeError(err error) {
-	an.stopHTTP()
-	an.errorC <- err
-	close(an.errorC)
-	an.raftNode.Stop()
-}
-
-func (an *AppNode) IsRestartNode() (flag bool) {
-	return an.kvStore.db.IsRestartNode()
+	an.kvStore.db.Close()
+	close(an.proposeC)
+	close(an.confChangeC)
+	close(an.kvApiStopC)
 }

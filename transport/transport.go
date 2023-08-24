@@ -12,7 +12,7 @@ import (
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
-	types "github.com/ColdToo/Cold2DB/transportHttp/types"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 )
 
 type RaftTransport interface {
@@ -54,6 +54,10 @@ type Transport struct {
 	Raft        RaftTransport // raft state machine, to which the Transport forwards received messages and reports status
 	Snapshotter *db.SnapShotter
 
+	// ErrorC is used to report detected critical errors, e.g.,
+	// the member has been permanently removed from the cluster
+	// When an error is received from ErrorC, user should stop raft state
+	// machine and thus stop the Transport.
 	ErrorC chan error
 
 	mu sync.RWMutex // protect the remote and peer map

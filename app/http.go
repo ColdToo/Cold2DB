@@ -40,6 +40,7 @@ func ServeHttpKVAPI(kvStore *KvStore, Addr string, confChangeC chan<- pb.ConfCha
 			log.Fatal(err.Error())
 		}
 		<-doneC
+		close(srv.Handler.(*HttpKVAPI).confChangeC)
 		if err := srv.Shutdown(nil); err != nil {
 			log.Fatal(err.Error())
 		}
@@ -121,5 +122,6 @@ func (h *HttpKVAPI) NodeUpdate(updateInfo *UpdateNodeInfo, w http.ResponseWriter
 		}
 	}
 	h.confChangeC <- cc
+	//todo 配置变更成功后才返回
 	w.WriteHeader(http.StatusNoContent)
 }

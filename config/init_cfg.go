@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
+	"strings"
 )
 
 var (
@@ -50,4 +51,16 @@ func GetRaftConf() *RaftConfig {
 
 func GetDBConf() *DBConfig {
 	return Conf.DBConfig
+}
+
+func GetLocalInfo() (localIpAddr string, localId int, peerUrl []string) {
+	raftConf := Conf.RaftConfig
+	for _, node := range raftConf.Nodes {
+		if strings.Contains(node.EAddr, "127.0.0.1") && strings.Contains(node.IAddr, "127.0.0.1") {
+			localId = node.ID
+			localIpAddr = node.EAddr
+		}
+		peerUrl = append(peerUrl, node.IAddr)
+	}
+	return
 }

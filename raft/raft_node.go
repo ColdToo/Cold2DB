@@ -39,8 +39,9 @@ type RaftNode struct {
 	ReadyC   chan Ready
 	AdvanceC chan struct{}
 
-	done chan struct{}
-	stop chan struct{}
+	ErrorC chan error
+	done   chan struct{}
+	stop   chan struct{}
 
 	prevSoftSt *SoftState
 	prevHardSt pb.HardState
@@ -79,7 +80,7 @@ func RestartRaftNode(c *RaftOpts) *RaftNode {
 }
 
 func (rn *RaftNode) Tick() {
-	rn.Raft.Tick()
+	rn.Raft.tick()
 }
 
 func (rn *RaftNode) Step(m *pb.Message) error {

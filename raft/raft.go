@@ -51,7 +51,7 @@ type Raft struct {
 
 	Role Role
 
-	// 需要发送给其他节点的msgs
+	// 需要发送给其他节点的的消息
 	msgs []*pb.Message
 
 	LeaderID uint64
@@ -66,14 +66,13 @@ type Raft struct {
 
 	electionElapsed int
 
-	// leader要维护或者从集群中删除。
-	// 有更适合当server的节点，比如说有更高的负载，更好的网络条件。
+	// 有更适合当master的节点，比如说有更高的负载，更好的网络条件。
 	leadTransferee uint64
 
-	//不同的角色指向不同的stepFunc
+	//不同角色指向不同的stepFunc
 	stepFunc stepFunc
 
-	//不同的角色指向不同的tick驱动函数
+	//不同角色指向不同的tick驱动函数
 	tick func()
 
 	//Check Quorum 是针对这种情况：当 Leader 被网络分区的时，其他实例已经选举出了新的 Leader，旧 Leader 不能收到新 Leader 的消息，
@@ -164,10 +163,6 @@ func stepCandidate(r *Raft, m *pb.Message) error {
 		r.handleAppendEntries(*m)
 	}
 	return nil
-}
-
-func (r *Raft) Tick() {
-	r.tick()
 }
 
 func (r *Raft) tickElection() {
