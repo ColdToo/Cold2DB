@@ -6,16 +6,16 @@ import (
 	"github.com/spf13/viper"
 )
 
+var (
+	Viper *viper.Viper
+	Conf  *Config
+)
+
 type Config struct {
 	ZapConf    *ZapConfig
 	DBConfig   *DBConfig
 	RaftConfig *RaftConfig
 }
-
-var (
-	Viper *viper.Viper
-	Conf  *Config
-)
 
 func InitConfig() {
 	defaultConfigPath := "/Users/hlhf/GolandProjects/Cold2DB/bin/config.yaml"

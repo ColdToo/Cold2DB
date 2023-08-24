@@ -21,6 +21,7 @@ type DB interface {
 	Scan(lowKey []byte, highKey []byte) (err error)
 	IsRestartNode() bool
 	SaveHardState(st pb.HardState) error
+	Close()
 }
 
 type Cold2DB struct {
@@ -46,7 +47,7 @@ type Cold2DB struct {
 	snapShotter SnapShotter
 }
 
-func GetDB() (*Cold2DB, error) {
+func GetDB() (DB, error) {
 	if Cold2 != nil {
 		return Cold2, nil
 	} else {
@@ -168,6 +169,10 @@ func (db *Cold2DB) IsRestartNode() bool {
 
 func (db *Cold2DB) SaveHardState(st pb.HardState) error {
 	return nil
+}
+
+func (db *Cold2DB) Close() {
+
 }
 
 // raft read interface

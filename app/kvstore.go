@@ -11,7 +11,7 @@ import (
 type KV = logfile.KV
 
 type KvStore struct {
-	db         *db.Cold2DB
+	db         db.DB
 	proposeC   chan<- []byte           // channel for proposing updates
 	monitorKV  map[int64]chan struct{} //todo 使用这方式会不会导致内存过大
 	ReqTimeout time.Duration
@@ -67,4 +67,9 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 
 func (s *KvStore) BatchPropose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
 	return false, nil
+}
+
+func (s *KvStore) Close() {
+	close(s.proposeC)
+	s.db.Close()
 }

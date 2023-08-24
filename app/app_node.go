@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"github.com/ColdToo/Cold2DB/config"
+	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -31,19 +32,20 @@ type AppNode struct {
 }
 
 func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte, confChangeC <-chan pb.ConfChange,
-	errorC chan<- error, kvStore *KvStore, config *config.RaftConfig, localIp string) {
+	doneC chan<- struct{}, kvStore *KvStore, config *config.RaftConfig, localIp string) {
 	an := &AppNode{
 		localId:     localId,
 		localIp:     localIp,
 		peersUrl:    peersUrl,
+		kvStore:     kvStore,
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
-		errorC:      errorC,
+		errorC:      make(chan error),
 		stopc:       make(chan struct{}),
 		httpstopc:   make(chan struct{}),
 		httpdonec:   make(chan struct{}),
-		kvStore:     kvStore,
 	}
+
 	an.startRaftNode(config)
 
 	// 启动一个goroutine,处理节点变更以及日志提议
@@ -63,7 +65,7 @@ func (an *AppNode) startRaftNode(config *config.RaftConfig) {
 	}
 	opts := &raft.RaftOpts{
 		ID:            uint64(an.localId),
-		Storage:       an.kvStore.db,
+		Storage:       an.kvStore.db.(*db.Cold2DB),
 		ElectionTick:  config.ElectionTick,
 		HeartbeatTick: config.HeartbeatTick}
 	if an.IsRestartNode() {

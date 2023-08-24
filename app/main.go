@@ -19,12 +19,11 @@ func main() {
 	defer close(proposeC)
 	confChangeC := make(chan pb.ConfChange)
 	defer close(confChangeC)
-	errorC := make(chan error)
-	defer close(errorC)
+	doneC := make(chan struct{})
 
 	kvStore := NewKVStore(proposeC)
-	StartAppNode(localId, peerUrl, proposeC, confChangeC, errorC, kvStore, raftConf, localIpAddr)
-	ServeHttpKVAPI(kvStore, localIpAddr, confChangeC, errorC)
+	StartAppNode(localId, peerUrl, proposeC, confChangeC, doneC, kvStore, raftConf, localIpAddr)
+	ServeHttpKVAPI(kvStore, localIpAddr, confChangeC, doneC)
 }
 
 func getLocalInfo(raftConf *config.RaftConfig) (localIpAddr string, localId int, peerUrl []string) {

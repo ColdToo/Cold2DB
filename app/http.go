@@ -2,9 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"io/ioutil"
-	"log"
 	"net/http"
 )
 
@@ -26,6 +26,26 @@ type HttpKVAPI struct {
 	confChangeC chan<- pb.ConfChange
 }
 
+func ServeHttpKVAPI(kvStore *KvStore, Addr string, confChangeC chan<- pb.ConfChange, doneC <-chan struct{}) {
+	srv := http.Server{
+		Addr: Addr,
+		Handler: &HttpKVAPI{
+			store:       kvStore,
+			confChangeC: confChangeC,
+		},
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil {
+			log.Fatal(err.Error())
+		}
+		<-doneC
+		if err := srv.Shutdown(nil); err != nil {
+			log.Fatal(err.Error())
+		}
+	}()
+}
+
 func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := r.RequestURI
 	defer r.Body.Close()
@@ -41,7 +61,6 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == PUT:
 		v, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			log.Printf("Failed to read on PUT (%v)\n", err)
 			http.Error(w, "Failed on PUT", http.StatusBadRequest)
 			return
 		}
@@ -65,10 +84,10 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		//更改节点配置相关
+
 	case r.Method == POST:
 		v, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			log.Printf("Failed to read on PUT (%v)\n", err)
 			http.Error(w, "Failed on PUT", http.StatusBadRequest)
 			return
 		}
@@ -83,26 +102,6 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Allow", "POST")
 		w.Header().Add("Allow", "DELETE")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func ServeHttpKVAPI(kvStore *KvStore, Addr string, confChangeC chan<- pb.ConfChange, errorC <-chan error) {
-	srv := http.Server{
-		Addr: Addr,
-		Handler: &HttpKVAPI{
-			store:       kvStore,
-			confChangeC: confChangeC,
-		},
-	}
-
-	go func() {
-		if err := srv.ListenAndServe(); err != nil {
-			log.Fatal(err)
-		}
-	}()
-
-	if err, ok := <-errorC; ok {
-		log.Fatal(err)
 	}
 }
 
