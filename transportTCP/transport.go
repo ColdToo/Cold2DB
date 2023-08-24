@@ -15,7 +15,6 @@ import (
 	types "github.com/ColdToo/Cold2DB/transportHttp/types"
 )
 
-// Raft app_node实现该接口
 type RaftTransport interface {
 	Process(ctx context.Context, m *pb.Message) error
 	IsIDRemoved(id uint64) bool
@@ -47,27 +46,17 @@ type Transporter interface {
 }
 
 type Transport struct {
-	//DialTimeout是请求超时时间，而DialRetryFrequency定义了每个对等节点的重试频率限制
-	DialTimeout        time.Duration
-	DialRetryFrequency time.Duration
+	LocalID   types.ID   // 本地节点的ID
+	ClusterID types.ID   // raft cluster ID for request validation
+	URLs      types.URLs // Peers URLs
 
-	TLSInfo TLSInfo // TLS information used when creating connection
-
-	LocalID   types.ID      // 本地节点的ID
-	URLs      types.URLs    // Peers URLs
-	ClusterID types.ID      // raft cluster ID for request validation
-	Raft      RaftTransport // raft state machine, to which the Transport forwards received messages and reports status
-
+	TLSInfo     TLSInfo       // TLS information used when creating connection
+	Raft        RaftTransport // raft state machine, to which the Transport forwards received messages and reports status
 	Snapshotter *db.SnapShotter
 
 	ErrorC chan error
 
-	streamRt   http.RoundTripper // roundTripper used by streams
-	pipelineRt http.RoundTripper // roundTripper used by pipelines
-
 	mu sync.RWMutex // protect the remote and peer map
-
-	//帮助其追赶集群的进度，但在追赶完成后就不再使用。而t.Peers是一个map[types.ID]Peer类型的变量，用于维护集群中的所有节点。
 	//其中，Peer是一个接口类型，定义了send、stop等方法，用于发送消息和停止节点
 	Peers map[types.ID]Peer
 }
@@ -155,13 +144,6 @@ func (t *Transport) Stop() {
 	for _, p := range t.Peers {
 		p.stop()
 	}
-
-	if tr, ok := t.streamRt.(*http.Transport); ok {
-		tr.CloseIdleConnections()
-	}
-	if tr, ok := t.pipelineRt.(*http.Transport); ok {
-		tr.CloseIdleConnections()
-	}
 	t.Peers = nil
 }
 
@@ -226,11 +208,6 @@ func (t *Transport) UpdatePeer(id types.ID, us []string) {
 		Str("updated-remote-peer-urls", urls.String())
 }
 
-//todo
-//func (t *Transport) SendSnapshot(m snap.Message) {
-//}
-
-// Pausable is a testing interface for pausing transportHttp traffic.
 type Pausable interface {
 	Pause()
 	Resume()

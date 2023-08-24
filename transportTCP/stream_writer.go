@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/url"
 	"sync"
-	"time"
 )
 
 const (
@@ -61,74 +60,38 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport) 
 
 func (cw *streamWriter) run() {
 	var (
-		msgC       chan *pb.Message
-		heartbeatC <-chan time.Time // 定时器会定时向该通道发送信号，触发心跳消息的发送，该心跳消息与后台介绍的Raft的心跳消息有所不同，该心跳的主要目的是为了防止连接长时间不用断开的
-		enc        encoder          // 编码器接口，实际实现该接口的会负责将消息序列化并写入连接的缓冲区中
-		batched    int              // 统计未flush的批次
+		msgC    chan *pb.Message
+		enc     encoder // 编码器接口，实际实现该接口的会负责将消息序列化并写入连接的缓冲区中
+		connTcp *net.TCPConn
 	)
 	log.Info("started stream writer with remote peer").Str(code.LocalId, cw.localID.Str()).
 		Str(code.RemoteId, cw.peerID.Str()).Record()
-	var unflushed int //为unflushed的字节数
-
-	tickC := time.NewTicker(ConnReadTimeout / 3)
-	defer tickC.Stop()
 	for {
 		select {
-		case <-heartbeatC: //触发心跳信息
-			err := enc.encode(&linkHeartbeatMessage)
-			unflushed += linkHeartbeatMessage.Size()
-			if err == nil {
-				flusher.Flush()
-				batched = 0
-				unflushed = 0
-				continue
-			}
-			//如果有异常，关闭streamWriter
-			cw.status.deactivate(failureType{source: cw.peerID.Str(), action: "heartbeat"}, err.Error())
-			cw.close()
-			log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
-				Str(code.RemoteId, cw.peerID.Str()).Record()
-			//将heartbeatc和msgC两个通道清空，后续就不会在发送心跳消息和其他类型的消息了
-			heartbeatC, msgC = nil, nil
 		case m := <-msgC:
 			err := enc.encode(m)
-			if err == nil {
-				unflushed += m.Size()
-				if len(msgC) == 0 || batched > streamBufSize/2 {
-					flusher.Flush()
-					unflushed = 0
-					batched = 0
-				} else {
-					batched++
-				}
-				continue
-			}
 			//异常情况处理
+			connTcp.Write()
 			cw.status.deactivate(failureType{source: cw.localID.Str(), action: "write"}, err.Error())
 			cw.close()
 			log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
 				Str(code.RemoteId, cw.peerID.Str()).Record()
-			heartbeatC, msgC = nil, nil
+			msgC = nil
 			cw.r.ReportUnreachable(m.To)
 		case conn := <-cw.connC:
 			cw.mu.Lock()
-			//先关闭之前的连接如果存在
 			closed := cw.closeUnlocked()
 			if closed {
 				log.Warn("closed TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
 					Str(code.RemoteId, cw.peerID.Str()).Record()
 			}
-			//重新建立一个新的连接
-			enc = &messageEncoderAndWriter{w: conn.Writer}
-			flusher = conn.Flusher
-			unflushed = 0
+			connTcp = conn
 			cw.status.activate()
-			cw.closer = conn.Closer
 			cw.working = true
 			cw.mu.Unlock()
 			log.Warn("established TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
 				Str(code.RemoteId, cw.peerID.Str()).Record()
-			heartbeatC, msgC = tickC.C, cw.msgC
+			msgC = cw.msgC
 		case <-cw.stopC:
 			if cw.close() {
 				log.Warn("closed TCP streaming connection with remote peer").Str(code.RemoteId, cw.peerID.Str()).Record()
