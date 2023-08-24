@@ -1,10 +1,16 @@
-package domain
+package config
 
 import (
 	"fmt"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 )
+
+type Config struct {
+	ZapConf    *ZapConfig
+	DBConfig   *DBConfig
+	RaftConfig *RaftConfig
+}
 
 var (
 	Viper *viper.Viper

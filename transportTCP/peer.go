@@ -9,7 +9,7 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
 	types "github.com/ColdToo/Cold2DB/transportHttp/types"
-	"net"
+	"io"
 	"sync"
 	"time"
 )
@@ -24,16 +24,12 @@ const (
 	//这段注释是关于在一次 leader 选举过程中，最多可以容纳多少个 proposal 的说明。一般来说，一次 leader 选举最多需要 1 秒钟，可能会有 0-2 次选举冲突，每次冲突需要 0.5 秒钟。
 	//我们假设并发 proposer 的数量小于 4096，因为一个 client 的 proposal 至少需要阻塞 1 秒钟，所以 4096 足以容纳所有的 proposals。
 	maxPendingProposals = 4096
-
-	streamMsg   = "streamMsg"
-	pipelineMsg = "pipeline"
-	sendSnap    = "sendMsgSnap"
 )
 
 type Peer interface {
 	send(m *pb.Message)
 
-	attachConn(conn *net.TCPConn)
+	attachConn(conn io.Writer)
 
 	activeSince() time.Time
 
@@ -60,12 +56,12 @@ type peer struct {
 	stopc  chan struct{}
 }
 
-func (p *peer) handleReceiveCAndPropC(r RaftTransport, ctx context.Context) {
+func (p *peer) handleReceiveCAndPropC(ctx context.Context) {
 	go func() {
 		for {
 			select {
 			case mm := <-p.recvC:
-				if err := r.Process(ctx, mm); err != nil {
+				if err := p.raft.Process(ctx, mm); err != nil {
 					log.Warn("failed to process Raft message").Err(code.MessageProcErr, err)
 				}
 			case <-p.stopc:
@@ -79,7 +75,7 @@ func (p *peer) handleReceiveCAndPropC(r RaftTransport, ctx context.Context) {
 		for {
 			select {
 			case mm := <-p.propC:
-				if err := r.Process(ctx, mm); err != nil {
+				if err := p.raft.Process(ctx, mm); err != nil {
 					log.Warn("failed to process Raft message").Err(code.MessageProcErr, err)
 				}
 			case <-p.stopc:
@@ -118,7 +114,7 @@ func (p *peer) send(m *pb.Message) {
 	}
 }
 
-func (p *peer) attachConn(conn *net.TCPConn) {
+func (p *peer) attachConn(conn io.Writer) {
 	p.streamWriter.connC <- conn
 }
 
@@ -157,15 +153,14 @@ type failureType struct {
 }
 
 type peerStatus struct {
-	localId types.ID
-	peerId  types.ID
-	mu      sync.Mutex // protect variables below
-	active  bool
-	since   time.Time
+	peerId types.ID
+	mu     sync.Mutex // protect variables below
+	active bool
+	since  time.Time
 }
 
-func newPeerStatus(local, id types.ID) *peerStatus {
-	return &peerStatus{localId: local, peerId: id}
+func newPeerStatus(id types.ID) *peerStatus {
+	return &peerStatus{peerId: id}
 }
 
 func (s *peerStatus) activate() {
@@ -181,7 +176,7 @@ func (s *peerStatus) activate() {
 func (s *peerStatus) deactivate(failure failureType, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	msg := fmt.Sprintf("failed to %s %s on %s (%s)", failure.action, s.peerId, failure.source, reason)
+	msg := fmt.Sprintf("failed to %s %d on %s (%s)", failure.action, s.peerId, failure.source, reason)
 	if s.active {
 		log.Warn("peer became inactive (message send to peer failed)").Str("peer-id", s.peerId.Str()).Err("", errors.New(msg)).Record()
 		s.active = false

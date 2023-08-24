@@ -66,7 +66,7 @@ func (t *Transport) AddPeer(peerID types.ID, u string) {
 	recvC := make(chan *pb.Message, recvBufSize)
 	propC := make(chan *pb.Message, maxPendingProposals)
 	ctx, cancel := context.WithCancel(context.Background())
-	Peerstatus := newPeerStatus(t.LocalID, peerID)
+	Peerstatus := newPeerStatus(peerID)
 	streamReader := startStreamReader(t.LocalID, peerID, Peerstatus, cancel, t, recvC, propC, t.ErrorC, u)
 	streamWriter := startStreamWriter(t.LocalID, peerID, Peerstatus, t.Raft)
 	p := &peer{
@@ -83,9 +83,9 @@ func (t *Transport) AddPeer(peerID types.ID, u string) {
 		cancel:       cancel,
 	}
 
-	p.handleReceiveCAndPropC(t.Raft, ctx)
+	p.handleReceiveCAndPropC(ctx)
 	t.Peers[peerID] = p
-	log.Info("added remote peer").Str(code.LocalId, t.LocalID.Str()).Str(code.RemoteId, peerID.Str()).Record()
+	log.Info("added remote peer success").Str(code.LocalId, t.LocalID.Str()).Str(code.RemoteId, peerID.Str()).Record()
 }
 
 func (t *Transport) ListenPeer(localIp string) {

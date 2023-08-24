@@ -26,8 +26,8 @@ type streamWriter struct {
 	closer  io.Closer
 	working bool
 
-	msgC  chan *pb.Message  //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
-	connC chan *net.TCPConn //通过该通道获取当前streamWriter实例关联的底层网络连接
+	msgC  chan *pb.Message //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
+	connC chan io.Writer   //通过该通道获取当前streamWriter实例关联的底层网络连接
 	stopC chan struct{}
 	done  chan struct{}
 }
@@ -39,7 +39,7 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport) 
 		status:  status,
 		r:       r,
 		msgC:    make(chan *pb.Message, streamBufSize),
-		connC:   make(chan *net.TCPConn),
+		connC:   make(chan io.Writer),
 		stopC:   make(chan struct{}),
 		done:    make(chan struct{}),
 	}
@@ -50,7 +50,7 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport) 
 func (cw *streamWriter) run() {
 	var (
 		msgC    chan *pb.Message
-		connTcp *net.TCPConn
+		connTcp io.Writer
 	)
 	log.Info("started stream writer with remote peer").Str(code.LocalId, cw.localID.Str()).
 		Str(code.RemoteId, cw.peerID.Str()).Record()
@@ -58,7 +58,7 @@ func (cw *streamWriter) run() {
 		select {
 		case m := <-msgC:
 			e := &messageEncoderAndWriter{connTcp}
-			err := e.encode(m)
+			err := e.encodeAndWrite(m)
 			if err != nil {
 				cw.status.deactivate(failureType{source: cw.localID.Str(), action: "write"}, err.Error())
 				cw.close()

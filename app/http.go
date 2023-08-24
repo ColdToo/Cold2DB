@@ -122,6 +122,5 @@ func (h *HttpKVAPI) NodeUpdate(updateInfo *UpdateNodeInfo, w http.ResponseWriter
 		}
 	}
 	h.confChangeC <- cc
-	// As above, optimistic that raft will apply the conf change
 	w.WriteHeader(http.StatusNoContent)
 }

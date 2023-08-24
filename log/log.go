@@ -2,7 +2,7 @@ package log
 
 import (
 	"fmt"
-	"github.com/ColdToo/Cold2DB/domain"
+	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/utils"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -13,7 +13,7 @@ import (
 
 var log *zap.Logger
 
-func InitLog(config *domain.ZapConfig) {
+func InitLog(config *config.ZapConfig) {
 	if ok := utils.PathExist(config.Director); !ok {
 		fmt.Printf("create %v directory\n", config)
 		_ = os.Mkdir(config.Director, os.ModePerm)
@@ -22,7 +22,7 @@ func InitLog(config *domain.ZapConfig) {
 	cores := getZapCores(config)
 	log = zap.New(zapcore.NewTee(cores...))
 
-	if domain.Conf.ZapConf.ShowLine {
+	if config.Conf.ZapConf.ShowLine {
 		log = log.WithOptions(zap.AddCaller())
 	}
 }
@@ -175,7 +175,7 @@ func (f *Fields) Record() {
 	}
 }
 
-func getZapCores(config *domain.ZapConfig) []zapcore.Core {
+func getZapCores(config *config.ZapConfig) []zapcore.Core {
 	cores := make([]zapcore.Core, 0, 7)
 	for level := transportLevel(config.Level); level <= zapcore.FatalLevel; level++ {
 		cores = append(cores, getEncoderCore(level, getLevelPriority(level), config))
@@ -205,7 +205,7 @@ func transportLevel(level string) zapcore.Level {
 	}
 }
 
-func getEncoderCore(l zapcore.Level, level zap.LevelEnablerFunc, config *domain.ZapConfig) zapcore.Core {
+func getEncoderCore(l zapcore.Level, level zap.LevelEnablerFunc, config *config.ZapConfig) zapcore.Core {
 	writer, err := FileRotatelogs.GetWriteSyncer(l.String(), config) // 使用file-rotatelogs进行日志分割
 	if err != nil {
 		fmt.Printf("Get Write Syncer Failed err:%v", err.Error())
@@ -267,14 +267,14 @@ func zapEncodeLevel(encodeLevel string) zapcore.LevelEncoder {
 	}
 }
 
-func getEncoder(config *domain.ZapConfig) zapcore.Encoder {
+func getEncoder(config *config.ZapConfig) zapcore.Encoder {
 	if config.Format == "json" {
 		return zapcore.NewJSONEncoder(getEncoderConfig(config))
 	}
 	return zapcore.NewConsoleEncoder(getEncoderConfig(config))
 }
 
-func getEncoderConfig(config *domain.ZapConfig) zapcore.EncoderConfig {
+func getEncoderConfig(config *config.ZapConfig) zapcore.EncoderConfig {
 	return zapcore.EncoderConfig{
 		MessageKey:     "message",
 		LevelKey:       "level",

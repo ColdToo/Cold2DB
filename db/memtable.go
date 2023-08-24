@@ -1,9 +1,9 @@
 package db
 
 import (
+	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
 	"github.com/ColdToo/Cold2DB/db/logfile"
-	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/log"
 	"io"
 	"os"
@@ -29,7 +29,7 @@ type memManager struct {
 	walDirPath string
 }
 
-func NewMemManger(memCfg domain.MemConfig) (manager *memManager, err error) {
+func NewMemManger(memCfg config.MemConfig) (manager *memManager, err error) {
 	memManger := new(memManager)
 	memManger.walDirPath = memCfg.WalDirPath
 	memManger.flushChn = make(chan *memtable, memCfg.MemtableNums-1)

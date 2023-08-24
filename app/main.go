@@ -1,20 +1,17 @@
 package main
 
 import (
+	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db"
-	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"strings"
 )
 
 func main() {
-	domain.InitConfig()
-	log.InitLog(domain.GetZapConf())
-	err := db.InitDB(domain.GetDBConf())
-	if err != nil {
-		log.Panic("init db failed")
-	}
+	config.InitConfig()
+	log.InitLog(config.GetZapConf())
+	db.InitDB(config.GetDBConf())
 
 	proposeC := make(chan []byte)
 	defer close(proposeC)
@@ -26,7 +23,7 @@ func main() {
 	var localIpAddr string
 	var localId int
 	var peerurl []string
-	raftConf := domain.GetRaftConf()
+	raftConf := config.GetRaftConf()
 	for _, node := range raftConf.Nodes {
 		if strings.Contains(node.EAddr, "127.0.0.1") && strings.Contains(node.IAddr, "127.0.0.1") {
 			localId = node.ID

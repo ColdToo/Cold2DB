@@ -2,10 +2,10 @@ package db
 
 import (
 	"errors"
+	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/flock"
 	"github.com/ColdToo/Cold2DB/db/index"
 	"github.com/ColdToo/Cold2DB/db/logfile"
-	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/utils"
@@ -54,22 +54,22 @@ func GetDB() (*Cold2DB, error) {
 	}
 }
 
-func InitDB(dbCfg *domain.DBConfig) error {
+func InitDB(dbCfg *config.DBConfig) {
 	var err error
 	err = dbCfgCheck(dbCfg)
 	if err != nil {
-		return err
+		log.Panic("check db cfg failed")
 	}
 
 	Cold2 = new(Cold2DB)
 	Cold2.memManager, err = NewMemManger(dbCfg.MemConfig)
 	if err != nil {
-		return err
+		log.Panic("init db memManger failed")
 	}
 
 	Cold2.hardStateLog, err = initHardStateLog(dbCfg.HardStateLogConfig)
 	if err != nil {
-		return err
+		log.Panic("init db hardStateLog failed")
 	}
 
 	/*Cold2.indexer, err = index.NewIndexer(dbCfg.IndexConfig)
@@ -81,11 +81,9 @@ func InitDB(dbCfg *domain.DBConfig) error {
 	if err != nil {
 		return err
 	}*/
-
-	return nil
 }
 
-func dbCfgCheck(dbCfg *domain.DBConfig) error {
+func dbCfgCheck(dbCfg *config.DBConfig) error {
 	if !utils.PathExist(dbCfg.DBPath) {
 		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
 			return err

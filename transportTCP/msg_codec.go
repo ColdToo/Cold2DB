@@ -11,7 +11,7 @@ type messageEncoderAndWriter struct {
 	w io.Writer
 }
 
-func (enc *messageEncoderAndWriter) encode(m *pb.Message) error {
+func (enc *messageEncoderAndWriter) encodeAndWrite(m *pb.Message) error {
 	message, err := enc.setMessage(m)
 	if err != nil {
 		return err
@@ -34,7 +34,7 @@ type messageDecoder struct {
 	r io.Reader
 }
 
-func (dec *messageDecoder) decode() (pb.Message, error) {
+func (dec *messageDecoder) decodeAndRead() (pb.Message, error) {
 	var m pb.Message
 	msg := dec.getMessage(dec.r)
 	dec.getMessage(dec.r)

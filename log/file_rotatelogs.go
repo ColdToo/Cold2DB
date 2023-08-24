@@ -1,7 +1,7 @@
 package log
 
 import (
-	"github.com/ColdToo/Cold2DB/domain"
+	"github.com/ColdToo/Cold2DB/config"
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"go.uber.org/zap/zapcore"
 	"os"
@@ -15,7 +15,7 @@ type fileRotatelogs struct{}
 
 // GetWriteSyncer 获取 zapcore.WriteSyncer
 // Author [SliverHorn](https://github.com/SliverHorn)
-func (r *fileRotatelogs) GetWriteSyncer(level string, config *domain.ZapConfig) (zapcore.WriteSyncer, error) {
+func (r *fileRotatelogs) GetWriteSyncer(level string, config *config.ZapConfig) (zapcore.WriteSyncer, error) {
 	fileWriter, err := rotatelogs.New(
 		path.Join(config.Director, "%Y-%m-%d", level+".log"),
 		rotatelogs.WithClock(rotatelogs.Local),

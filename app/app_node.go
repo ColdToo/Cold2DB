@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/logfile"
-	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
@@ -28,19 +28,17 @@ type AppNode struct {
 	stopc       chan struct{}        // signals proposal channel closed
 	httpstopc   chan struct{}        // signals http server to shutdown
 	httpdonec   chan struct{}        // signals http server shutdown complete
-
-	TickTime int //定时触发定时器的时间
 }
 
 func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte, confChangeC <-chan pb.ConfChange,
-	errorC chan<- error, kvStore *KvStore, config *domain.RaftConfig, localIp string) {
+	errorC chan<- error, kvStore *KvStore, config *config.RaftConfig, localIp string) {
 	an := &AppNode{
-		proposeC:    proposeC,
+		localId:     localId,
 		localIp:     localIp,
+		peersUrl:    peersUrl,
+		proposeC:    proposeC,
 		confChangeC: confChangeC,
 		errorC:      errorC,
-		localId:     localId,
-		peersUrl:    peersUrl,
 		stopc:       make(chan struct{}),
 		httpstopc:   make(chan struct{}),
 		httpdonec:   make(chan struct{}),
@@ -58,13 +56,13 @@ func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte, confCh
 	return
 }
 
-func (an *AppNode) startRaftNode(config *domain.RaftConfig) {
+func (an *AppNode) startRaftNode(config *config.RaftConfig) {
 	rpeers := make([]raft.Peer, len(an.peersUrl))
 	for i := range rpeers {
 		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
 	}
-
-	opts := &raft.RaftOpts{ID: uint64(an.localId),
+	opts := &raft.RaftOpts{
+		ID:            uint64(an.localId),
 		Storage:       an.kvStore.db,
 		ElectionTick:  config.ElectionTick,
 		HeartbeatTick: config.HeartbeatTick}
@@ -107,6 +105,7 @@ func (an *AppNode) serveRaftNode(heartbeatTick int) {
 }
 
 func (an *AppNode) servePropCAndConfC() {
+	//todo 用于 prometheus 指标
 	confChangeCount := uint64(0)
 
 	//当proposeC和confChangeC关闭后退出该goroutine
@@ -116,7 +115,10 @@ func (an *AppNode) servePropCAndConfC() {
 			if !ok {
 				an.proposeC = nil
 			} else {
-				an.raftNode.Propose(prop)
+				err := an.raftNode.Propose(prop)
+				if err != nil {
+					return
+				}
 			}
 
 		case cc, ok := <-an.confChangeC:
@@ -125,7 +127,10 @@ func (an *AppNode) servePropCAndConfC() {
 			} else {
 				confChangeCount++
 				cc.ID = confChangeCount
-				an.raftNode.ProposeConfChange(cc)
+				err := an.raftNode.ProposeConfChange(cc)
+				if err != nil {
+					return
+				}
 			}
 		}
 	}
@@ -195,49 +200,6 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 	}
 	return nil
 }
-
-/*func (an *AppNode) servePeerRaft() {
-	an.transport = &transportHttp.Transport{
-		LocalID:   types.ID(an.localId),
-		ClusterID: 0x1000,
-		Raft:      an,
-		ErrorC:    make(chan error),
-	}
-
-	err := an.transport.Initialize()
-	if err != nil {
-		log.Panic("initialize transportHttp failed").Err(code.NodeInIErr, err).Record()
-		return
-	}
-
-	for i := range an.peersUrl {
-		if i+1 != an.localId {
-			an.transport.AddPeer(types.ID(i+1), an.peersUrl[i])
-		}
-	}
-
-	//监听来自其他节点的http请求
-	an.listenAndServePeerRaft()
-}
-func (an *AppNode) listenAndServePeerRaft() {
-	localUrl, err := url.Parse(an.peersUrl[an.localId-1])
-	if err != nil {
-		log.Panic("raftexample: Failed parsing URL (%v)")
-	}
-	ln, err := transportHttp.NewStoppableListener(localUrl.Host, an.httpstopc)
-	if err != nil {
-		log.Panic("raftexample: Failed to listen transportHttp (%v)")
-	}
-	err = (&http.Server{Handler: an.transport.Handler()}).Serve(ln)
-
-	select {
-	case <-an.httpstopc:
-	default:
-		log.Panic("raftexample: Failed to serve transportHttp (%v)")
-	}
-	close(an.httpdonec)
-}
-*/
 
 func (an *AppNode) servePeerRaft() {
 	an.transport = &transportTCP.Transport{

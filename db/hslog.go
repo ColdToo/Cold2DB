@@ -1,8 +1,8 @@
 package db
 
 import (
+	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/logfile"
-	"github.com/ColdToo/Cold2DB/domain"
 	"sync"
 	"time"
 )
@@ -17,7 +17,7 @@ type hLogOptions struct {
 	path string
 }
 
-func initHardStateLog(hardStateLogCfg domain.HardStateLogConfig) (hsLog *hardStateLog, err error) {
+func initHardStateLog(hardStateLogCfg config.HardStateLogConfig) (hsLog *hardStateLog, err error) {
 	var ioType = logfile.DirectIO
 	hLogOptions := hLogOptions{
 		path: hardStateLogCfg.HardStateLogDir,
