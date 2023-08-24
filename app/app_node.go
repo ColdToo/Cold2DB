@@ -2,17 +2,13 @@ package main
 
 import (
 	"context"
-	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/domain"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
-	"github.com/ColdToo/Cold2DB/transportHttp"
 	types "github.com/ColdToo/Cold2DB/transportHttp/types"
 	"github.com/ColdToo/Cold2DB/transportTCP"
-	"net/http"
-	"net/url"
 	"time"
 )
 
@@ -21,10 +17,10 @@ type AppNode struct {
 	localIp  string
 	peersUrl []string
 
-	kvStore   *KvStore
-	raftNode  *raft.RaftNode
-	transport *transportHttp.Transport
-	transpor  *transportTCP.Transport
+	kvStore  *KvStore
+	raftNode *raft.RaftNode
+	//transport *transportHttp.Transport
+	transport *transportTCP.Transport
 
 	proposeC    <-chan []byte        // 提议 (k,v)
 	confChangeC <-chan pb.ConfChange // 提议更改配置文件
@@ -52,14 +48,12 @@ func StartAppNode(localId int, peersUrl []string, proposeC <-chan []byte, confCh
 	}
 	an.startRaftNode(config)
 
-	//启动一个goroutine,处理节点变更以及日志提议
+	// 启动一个goroutine,处理节点变更以及日志提议
 	go an.servePropCAndConfC()
 	// 启动一个goroutine,处理appLayer与raftLayer的交互
 	go an.serveRaftNode(config.HeartbeatTick)
 	// 启动一个goroutine,监听当前节点与集群中其他节点之间的网络连接
 	go an.servePeerRaft()
-
-	go an.servePeer()
 
 	return
 }
@@ -202,7 +196,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 	return nil
 }
 
-func (an *AppNode) servePeerRaft() {
+/*func (an *AppNode) servePeerRaft() {
 	an.transport = &transportHttp.Transport{
 		LocalID:   types.ID(an.localId),
 		ClusterID: 0x1000,
@@ -225,25 +219,6 @@ func (an *AppNode) servePeerRaft() {
 	//监听来自其他节点的http请求
 	an.listenAndServePeerRaft()
 }
-
-func (an *AppNode) servePeer() {
-	an.transpor = &transportTCP.Transport{
-		LocalID:   types.ID(an.localId),
-		ClusterID: 0x1000,
-		Raft:      an,
-		ErrorC:    make(chan error),
-		Peers:     make(map[types.ID]transportTCP.Peer),
-	}
-
-	for i := range an.peersUrl {
-		if i+1 != an.localId {
-			an.transpor.AddPeer(types.ID(i+1), an.peersUrl[i])
-		}
-	}
-
-	go an.transpor.ListenPeer(an.localIp)
-}
-
 func (an *AppNode) listenAndServePeerRaft() {
 	localUrl, err := url.Parse(an.peersUrl[an.localId-1])
 	if err != nil {
@@ -261,6 +236,25 @@ func (an *AppNode) listenAndServePeerRaft() {
 		log.Panic("raftexample: Failed to serve transportHttp (%v)")
 	}
 	close(an.httpdonec)
+}
+*/
+
+func (an *AppNode) servePeerRaft() {
+	an.transport = &transportTCP.Transport{
+		LocalID:   types.ID(an.localId),
+		ClusterID: 0x1000,
+		Raft:      an,
+		ErrorC:    make(chan error),
+		Peers:     make(map[types.ID]transportTCP.Peer),
+	}
+
+	for i := range an.peersUrl {
+		if i+1 != an.localId {
+			an.transport.AddPeer(types.ID(i+1), an.peersUrl[i])
+		}
+	}
+
+	go an.transport.ListenPeer(an.localIp)
 }
 
 //  Rat网络层接口,网络层通过该接口与RaftNode交互
