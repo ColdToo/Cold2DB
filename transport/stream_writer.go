@@ -1,4 +1,4 @@
-package transportTCP
+package transport
 
 import (
 	"github.com/ColdToo/Cold2DB/code"

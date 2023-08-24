@@ -1,4 +1,4 @@
-package transportTCP
+package transport
 
 import (
 	"crypto/tls"

@@ -22,7 +22,7 @@ func InitLog(config *config.ZapConfig) {
 	cores := getZapCores(config)
 	log = zap.New(zapcore.NewTee(cores...))
 
-	if config.Conf.ZapConf.ShowLine {
+	if config.ShowLine {
 		log = log.WithOptions(zap.AddCaller())
 	}
 }

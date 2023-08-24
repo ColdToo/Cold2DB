@@ -8,8 +8,8 @@ import (
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
-	"github.com/ColdToo/Cold2DB/transportTCP"
-	types "github.com/ColdToo/Cold2DB/transportTCP/types"
+	"github.com/ColdToo/Cold2DB/transport"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	"time"
 )
 
@@ -21,7 +21,7 @@ type AppNode struct {
 	kvStore  *KvStore
 	raftNode *raft.RaftNode
 	//transport *transportHttp.Transport
-	transport *transportTCP.Transport
+	transport *transport.Transport
 
 	proposeC    <-chan []byte        // 提议 (k,v)
 	confChangeC <-chan pb.ConfChange // 提议更改配置文件
@@ -204,12 +204,12 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 }
 
 func (an *AppNode) servePeerRaft() {
-	an.transport = &transportTCP.Transport{
+	an.transport = &transport.Transport{
 		LocalID:   types.ID(an.localId),
 		ClusterID: 0x1000,
 		Raft:      an,
 		ErrorC:    make(chan error),
-		Peers:     make(map[types.ID]transportTCP.Peer),
+		Peers:     make(map[types.ID]transport.Peer),
 	}
 
 	for i := range an.peersUrl {

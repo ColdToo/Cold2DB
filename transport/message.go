@@ -1,4 +1,4 @@
-package transportTCP
+package transport
 
 type IMessage interface {
 	GetDataLen() uint32
