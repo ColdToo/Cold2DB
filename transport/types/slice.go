@@ -1,4 +1,4 @@
-package raftTransport
+package transport
 
 // Uint64Slice implements sort interface
 type Uint64Slice []uint64

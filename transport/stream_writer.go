@@ -4,7 +4,7 @@ import (
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
-	types "github.com/ColdToo/Cold2DB/transportHttp/types"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	"io"
 	"net"
 	"net/url"

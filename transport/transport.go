@@ -59,6 +59,7 @@ type Transport struct {
 	// When an error is received from ErrorC, user should stop raft state
 	// machine and thus stop the Transport.
 	ErrorC chan error
+	StopC  chan struct{}
 
 	mu sync.RWMutex // protect the remote and peer map
 	//其中，Peer是一个接口类型，定义了send、stop等方法，用于发送消息和停止节点
@@ -94,7 +95,7 @@ func (t *Transport) AddPeer(peerID types.ID, u string) {
 
 func (t *Transport) ListenPeer(localIp string) {
 	log.Debugf("start app server node id: &s", t.LocalID, "listening...")
-	listener, err := NewStoppableListener(localIp, make(chan struct{}))
+	listener, err := NewStoppableListener(localIp, t.StopC)
 	if err != nil {
 		return
 	}
@@ -149,6 +150,8 @@ func (t *Transport) Stop() {
 		p.stop()
 	}
 	t.Peers = nil
+	// 停止listen
+	close(t.StopC)
 }
 
 func (t *Transport) CutPeer(id types.ID) {

@@ -199,6 +199,7 @@ func (an *AppNode) servePeerRaft() {
 		Raft:      an,
 		ErrorC:    make(chan error),
 		Peers:     make(map[types.ID]transport.Peer),
+		StopC:     make(chan struct{}),
 	}
 
 	for i := range an.peersUrl {

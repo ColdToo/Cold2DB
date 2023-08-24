@@ -1,4 +1,4 @@
-package raftTransport
+package transport
 
 import (
 	"errors"

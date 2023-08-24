@@ -5,7 +5,7 @@ import (
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
-	types "github.com/ColdToo/Cold2DB/transportHttp/types"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	"io"
 	"net"
 	"sync"
@@ -77,7 +77,7 @@ func (cr *streamReader) run() {
 func (cr *streamReader) decodeLoop(rc io.ReadCloser) error {
 	dec := &messageDecoder{r: rc}
 	for {
-		m, _ := dec.decode()
+		m, _ := dec.decodeAndRead()
 
 		recvc := cr.recvC
 		if m.Type == pb.MsgProp {

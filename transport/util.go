@@ -2,7 +2,7 @@ package transport
 
 import (
 	"fmt"
-	types "github.com/ColdToo/Cold2DB/transportHttp/types"
+	types "github.com/ColdToo/Cold2DB/transport/types"
 	"net/http"
 	"strings"
 )
