@@ -1,7 +1,6 @@
 package transportTCP
 
 import (
-	"fmt"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -15,16 +14,6 @@ import (
 const (
 	streamBufSize = 4096
 )
-
-var (
-	errUnsupportedStreamType = fmt.Errorf("unsupported stream type")
-	// 理解为线路的心跳信息
-	linkHeartbeatMessage = pb.Message{Type: pb.MsgHeartbeat}
-)
-
-func isLinkHeartbeatMessage(m *pb.Message) bool {
-	return m.Type == pb.MsgHeartbeat && m.From == 0 && m.To == 0
-}
 
 type streamWriter struct {
 	localID types.ID
@@ -61,7 +50,6 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport) 
 func (cw *streamWriter) run() {
 	var (
 		msgC    chan *pb.Message
-		enc     encoder // 编码器接口，实际实现该接口的会负责将消息序列化并写入连接的缓冲区中
 		connTcp *net.TCPConn
 	)
 	log.Info("started stream writer with remote peer").Str(code.LocalId, cw.localID.Str()).
@@ -69,15 +57,16 @@ func (cw *streamWriter) run() {
 	for {
 		select {
 		case m := <-msgC:
-			err := enc.encode(m)
-			//异常情况处理
-			connTcp.Write()
-			cw.status.deactivate(failureType{source: cw.localID.Str(), action: "write"}, err.Error())
-			cw.close()
-			log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
-				Str(code.RemoteId, cw.peerID.Str()).Record()
-			msgC = nil
-			cw.r.ReportUnreachable(m.To)
+			e := &messageEncoderAndWriter{connTcp}
+			err := e.encode(m)
+			if err != nil {
+				cw.status.deactivate(failureType{source: cw.localID.Str(), action: "write"}, err.Error())
+				cw.close()
+				log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
+					Str(code.RemoteId, cw.peerID.Str()).Record()
+				msgC = nil
+				cw.r.ReportUnreachable(m.To)
+			}
 		case conn := <-cw.connC:
 			cw.mu.Lock()
 			closed := cw.closeUnlocked()

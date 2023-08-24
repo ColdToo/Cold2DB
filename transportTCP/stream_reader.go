@@ -75,55 +75,13 @@ func (cr *streamReader) run() {
 }
 
 func (cr *streamReader) decodeLoop(rc io.ReadCloser) error {
-	var dec decoder
-	cr.mu.Lock()
-
-	dec = &messageDecoder{r: rc}
-
-	select {
-	case <-cr.ctx.Done():
-		cr.mu.Unlock()
-		if err := rc.Close(); err != nil {
-			return err
-		}
-		return io.EOF
-	default:
-		cr.closer = rc
-	}
-
-	cr.mu.Unlock()
-
+	dec := &messageDecoder{r: rc}
 	for {
-		m, err := dec.decode()
-		if err != nil {
-			cr.mu.Lock()
-			cr.close()
-			cr.mu.Unlock()
-			return err
-		}
-
-		cr.mu.Lock()
-		paused := cr.paused
-		cr.mu.Unlock()
-
-		if paused {
-			continue
-		}
-
-		if isLinkHeartbeatMessage(&m) {
-			// 忽略掉用于维护长连接的心跳信息
-			continue
-		}
+		m, _ := dec.decode()
 
 		recvc := cr.recvC
 		if m.Type == pb.MsgProp {
 			recvc = cr.propC
-		}
-		switch {
-		case err == io.EOF:
-		case IsClosedConnError(err):
-		default:
-			cr.peerStatus.deactivate(failureType{source: cr.peerID.Str(), action: "read"}, err.Error())
 		}
 
 		select {
@@ -133,8 +91,7 @@ func (cr *streamReader) decodeLoop(rc io.ReadCloser) error {
 				log.Warn("dropped internal Raft message since receiving buffer is full (overloaded network)").
 					Str("message-type", m.Type.String()).
 					Str("local-member-id", cr.localId.Str()).
-					Str("from", types.ID(m.From).Str()).
-					Str("remote-peer-id", types.ID(m.To).Str()).
+					Str("remote-peer-id", types.ID(m.From).Str()).
 					Bool("remote-peer-active", cr.peerStatus.isActive()).Record()
 			}
 		}

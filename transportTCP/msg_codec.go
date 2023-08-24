@@ -1,60 +1,67 @@
 package transportTCP
 
 import (
-	"encoding/binary"
-	"errors"
+	"fmt"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"io"
 )
-
-type encoder interface {
-	// encode encodes the given message to an output stream.
-	encode(m *pb.Message) error
-}
-
-type decoder interface {
-	// decode decodes the message from an input stream.
-	decode() (pb.Message, error)
-}
 
 type messageEncoderAndWriter struct {
 	w io.Writer
 }
 
 func (enc *messageEncoderAndWriter) encode(m *pb.Message) error {
-	if err := binary.Write(enc.w, binary.BigEndian, uint64(m.Size())); err != nil {
+	message, err := enc.setMessage(m)
+	if err != nil {
 		return err
 	}
-	//todo 序列化m
-	_, err := enc.w.Write([]byte{})
-	return err
+	_, err = enc.w.Write(message)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (enc *messageEncoderAndWriter) setMessage(m *pb.Message) (b []byte, err error) {
+	b, _ = m.Marshal()
+	dp := NewDataPack()
+	b, _ = dp.Pack(NewMsgPackage(0, b))
+	return
 }
 
 type messageDecoder struct {
 	r io.Reader
 }
 
-var (
-	readBytesLimit     uint64 = 512 * 1024 * 1024 // 512 MB
-	ErrExceedSizeLimit        = errors.New("transportHttp: error limit exceeded")
-)
-
 func (dec *messageDecoder) decode() (pb.Message, error) {
-	return dec.decodeLimit(readBytesLimit)
+	var m pb.Message
+	msg := dec.getMessage(dec.r)
+	dec.getMessage(dec.r)
+	return m, m.Unmarshal(msg.GetData())
 }
 
-func (dec *messageDecoder) decodeLimit(numBytes uint64) (pb.Message, error) {
-	var m pb.Message
-	var l uint64
-	if err := binary.Read(dec.r, binary.BigEndian, &l); err != nil {
-		return m, err
+func (dec *messageDecoder) getMessage(rc io.Reader) (msg IMessage) {
+	var err error
+	dp := NewDataPack()
+	headData := make([]byte, dp.GetHeadLen())
+	if _, err := io.ReadFull(rc, headData); err != nil {
+		log.Debugf("read msg head error ", err)
 	}
-	if l > numBytes {
-		return m, ErrExceedSizeLimit
+
+	msg, err = dp.Unpack(headData)
+	if err != nil {
+		log.Debugf("unpack error ", err)
 	}
-	buf := make([]byte, int(l))
-	if _, err := io.ReadFull(dec.r, buf); err != nil {
-		return m, err
+
+	//根据 dataLen 读取 data，放在msg.Data中
+	var data []byte
+	if msg.GetDataLen() > 0 {
+		data = make([]byte, msg.GetDataLen())
+		if _, err := io.ReadFull(rc, data); err != nil {
+			fmt.Println("read msg data error ", err)
+		}
 	}
-	return m, m.Unmarshal(buf)
+	msg.SetData(data)
+	return
 }
