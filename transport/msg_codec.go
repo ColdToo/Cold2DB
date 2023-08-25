@@ -8,14 +8,6 @@ import (
 	"io"
 )
 
-type msgEncodeWrite interface {
-	encodeAndWrite(m pb.Message) error
-}
-
-type msgDecodeRead interface {
-	decodeAndRead() (pb.Message, error)
-}
-
 type messageEncoderAndWriter struct {
 	w io.WriteCloser
 }

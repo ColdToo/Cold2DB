@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/code"
@@ -28,13 +27,13 @@ const (
 
 //go:generate mockgen -source=./peer.go -destination=./mocks/peer.go -package=mock
 type Peer interface {
-	send(m *pb.Message)
+	Send(m *pb.Message)
 
-	attachConn(conn io.WriteCloser)
+	AttachConn(conn io.WriteCloser)
 
-	activeSince() time.Time
+	ActiveSince() time.Time
 
-	stop()
+	Stop()
 }
 
 type peer struct {
@@ -42,9 +41,8 @@ type peer struct {
 	remoteID types.ID
 	peerIp   string
 
-	raft   RaftTransport
-	status *peerStatus
-
+	raft         RaftTransport
+	status       *peerStatus
 	streamWriter *streamWriter
 	streamReader *streamReader
 
@@ -53,7 +51,6 @@ type peer struct {
 
 	mu     sync.Mutex
 	paused bool
-	cancel context.CancelFunc // cancel pending works in go routine created by peer.
 	stopc  chan struct{}
 }
 
@@ -86,7 +83,7 @@ func (p *peer) handleReceiveCAndPropC() {
 	}()
 }
 
-func (p *peer) send(m *pb.Message) {
+func (p *peer) Send(m *pb.Message) {
 	p.mu.Lock()
 	paused := p.paused
 	p.mu.Unlock()
@@ -115,28 +112,24 @@ func (p *peer) send(m *pb.Message) {
 	}
 }
 
-func (p *peer) attachConn(conn io.WriteCloser) {
+func (p *peer) AttachConn(conn io.WriteCloser) {
 	p.streamWriter.connC <- conn
 }
 
-func (p *peer) activeSince() time.Time { return p.status.activeSince() }
+func (p *peer) ActiveSince() time.Time { return p.status.activeSince() }
 
-func (p *peer) stop() {
-	defer func() {
-		log.Info("stopped remote peer").Str("remote-peer-id", p.remoteID.Str())
-	}()
-
+func (p *peer) Stop() {
 	close(p.stopc)
-	p.cancel()
 	p.streamWriter.stop()
 	p.streamReader.stop()
+	log.Info("stopped remote peer").Str("remote-peer-id", p.remoteID.Str())
 }
 
 func (p *peer) Pause() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.paused = true
-	//p.streamWriter.pause()
+	p.streamWriter.pause()
 	p.streamReader.pause()
 }
 
@@ -197,7 +190,3 @@ func (s *peerStatus) activeSince() time.Time {
 	defer s.mu.Unlock()
 	return s.since
 }
-
-func isMsgApp(m *pb.Message) bool { return m.Type == pb.MsgApp }
-
-func isMsgSnap(m *pb.Message) bool { return m.Type == pb.MsgSnap }

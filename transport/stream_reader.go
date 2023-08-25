@@ -1,12 +1,10 @@
 package transport
 
 import (
-	"context"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	types "github.com/ColdToo/Cold2DB/transport/types"
-	"io"
 	"net"
 	"sync"
 )
@@ -16,19 +14,14 @@ type streamReader struct {
 	peerID  types.ID
 	peerIp  string
 
-	enc        msgDecodeRead
+	enc        *messageDecoderAndReader
 	peerStatus *peerStatus
-	recvC      chan<- *pb.Message //从peer中获取对端节点发送过来的消息，然后交给raft算法层进行处理，只接收非prop信息
-	propC      chan<- *pb.Message //只接收prop类消息
 
+	recvC  chan<- *pb.Message //从peer中获取对端节点发送过来的消息，然后交给raft算法层进行处理，只接收非prop信息
+	propC  chan<- *pb.Message //只接收prop类消息
 	errorC chan<- error
-
 	mu     sync.Mutex
 	paused bool
-	closer io.Closer
-
-	ctx    context.Context
-	cancel context.CancelFunc
 	done   chan struct{}
 }
 
@@ -95,13 +88,12 @@ func (cr *streamReader) decodeLoop() {
 
 func (cr *streamReader) stop() {
 	cr.mu.Lock()
-	cr.cancel()
 	cr.close()
 	cr.mu.Unlock()
 	<-cr.done
 }
 
-func (cr *streamReader) dial() (msgDecodeRead, error) {
+func (cr *streamReader) dial() (*messageDecoderAndReader, error) {
 	log.Debug("start dial remote peer").Str("from", cr.localId.Str()).Str("to", cr.peerID.Str()).
 		Str("address", cr.peerIp).Record()
 
@@ -118,13 +110,13 @@ func (cr *streamReader) dial() (msgDecodeRead, error) {
 }
 
 func (cr *streamReader) close() {
-	if cr.closer != nil {
-		if err := cr.closer.Close(); err != nil {
+	if cr.enc != nil {
+		if err := cr.enc.r.Close(); err != nil {
 			log.Warn("failed to close remote peer connection").Str("local-member-id", cr.localId.Str()).
 				Str("remote-peer-id", cr.peerID.Str()).Err("", err).Record()
 		}
 	}
-	cr.closer = nil
+	cr.enc = nil
 }
 
 func (cr *streamReader) pause() {

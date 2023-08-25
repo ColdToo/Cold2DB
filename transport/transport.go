@@ -34,18 +34,19 @@ type Transporter interface {
 
 	UpdatePeer(id types.ID, url string)
 
-	ActiveSince(id types.ID) time.Time
+	PeerActiveSince(id types.ID) time.Time
 
 	ActivePeers() int
 
 	Stop()
+
+	GetErrorC() chan error
 }
 
 type Transport struct {
 	LocalID   types.ID // 本地节点的ID
 	ClusterID types.ID
 
-	TLSInfo     TLSInfo
 	Raft        RaftTransport
 	Snapshotter *db.SnapShotter
 
@@ -101,7 +102,7 @@ func (t *Transport) ListenPeerConn(localIp string) {
 		for _, v := range t.Peers {
 			p := v.(*peer)
 			if len(remoteAddr) == 2 && strings.Contains(p.peerIp, remoteAddr[0]) {
-				v.attachConn(conn)
+				v.AttachConn(conn)
 				goto flag
 			}
 		}
@@ -128,7 +129,7 @@ func (t *Transport) Send(msgs []*pb.Message) {
 		t.mu.RUnlock()
 
 		if pok {
-			p.send(m)
+			p.Send(m)
 			continue
 		}
 	}
@@ -138,7 +139,7 @@ func (t *Transport) Stop() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, p := range t.Peers {
-		p.stop()
+		p.Stop()
 	}
 	t.Peers = nil
 	// 停止listen
@@ -161,7 +162,7 @@ func (t *Transport) RemoveAllPeers() {
 
 func (t *Transport) removePeer(id types.ID) {
 	if peer, ok := t.Peers[id]; ok {
-		peer.stop()
+		peer.Stop()
 	} else {
 		log.Panic("unexpected removal of unknown remote peer").Str("remote-peer-id", id.Str()).Record()
 	}
@@ -200,11 +201,15 @@ func (t *Transport) Resume() {
 	}
 }
 
-func (t *Transport) ActiveSince(id types.ID) time.Time {
+func (t *Transport) GetErrorC() chan error {
+	return t.ErrorC
+}
+
+func (t *Transport) PeerActiveSince(id types.ID) time.Time {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if p, ok := t.Peers[id]; ok {
-		return p.activeSince()
+		return p.ActiveSince()
 	}
 	return time.Time{}
 }
@@ -213,7 +218,7 @@ func (t *Transport) ActivePeers() (cnt int) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for _, p := range t.Peers {
-		if !p.activeSince().IsZero() {
+		if !p.ActiveSince().IsZero() {
 			cnt++
 		}
 	}

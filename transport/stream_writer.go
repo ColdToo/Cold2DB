@@ -6,8 +6,6 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 	types "github.com/ColdToo/Cold2DB/transport/types"
 	"io"
-	"net"
-	"net/url"
 	"sync"
 )
 
@@ -18,14 +16,14 @@ const (
 type streamWriter struct {
 	localID types.ID
 	peerID  types.ID
-	peerUrl url.URL
+	peerIp  string
 
-	enc     msgEncodeWrite
-	conn    io.Closer
+	enc     *messageEncoderAndWriter
 	status  *peerStatus
 	r       RaftTransport
-	mu      sync.Mutex // guard field working and closer
-	working bool
+	mu      sync.Mutex // guard field working and enc
+	working bool       //working字段指示了enc是否存在
+	paused  bool
 
 	msgC  chan *pb.Message    //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
 	connC chan io.WriteCloser //通过该通道获取当前streamWriter实例关联的底层网络连接
@@ -66,15 +64,11 @@ func (cw *streamWriter) run() {
 			}
 		case conn := <-cw.connC:
 			cw.mu.Lock()
-			//若已存在一个连接先关闭该连接
-			if cw.conn != nil {
-				closed := cw.closeUnlocked()
-				if closed {
-					log.Warn("tempt to close existed TCP streaming connection when get a new conn").Str(code.LocalId, cw.localID.Str()).
-						Str(code.RemoteId, cw.peerID.Str()).Record()
-				}
+			closed := cw.closeUnlocked()
+			if closed {
+				log.Warn("tempt to close existed TCP streaming connection when get a new conn").Str(code.LocalId, cw.localID.Str()).
+					Str(code.RemoteId, cw.peerID.Str()).Record()
 			}
-			cw.conn = conn
 			cw.enc = &messageEncoderAndWriter{conn}
 			cw.status.activate()
 			cw.working = true
@@ -108,7 +102,7 @@ func (cw *streamWriter) closeUnlocked() bool {
 	if !cw.working {
 		return false
 	}
-	if err := cw.conn.Close(); err != nil {
+	if err := cw.enc.w.Close(); err != nil {
 		log.Errorf("", err)
 		return false
 	}
@@ -117,16 +111,19 @@ func (cw *streamWriter) closeUnlocked() bool {
 	return true
 }
 
-func (cw *streamWriter) attach(conn *net.TCPConn) bool {
-	select {
-	case cw.connC <- conn:
-		return true
-	case <-cw.done:
-		return false
-	}
-}
-
 func (cw *streamWriter) stop() {
 	close(cw.stopC)
 	<-cw.done
+}
+
+func (cr *streamWriter) pause() {
+	cr.mu.Lock()
+	defer cr.mu.Unlock()
+	cr.paused = true
+}
+
+func (cr *streamWriter) resume() {
+	cr.mu.Lock()
+	defer cr.mu.Unlock()
+	cr.paused = false
 }

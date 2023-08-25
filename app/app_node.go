@@ -19,7 +19,7 @@ type AppNode struct {
 
 	kvStore   *KvStore
 	raftNode  *raft.RaftNode
-	transport *transport.Transport
+	transport transport.Transporter
 
 	proposeC    chan []byte        // 提议 (k,v)
 	confChangeC chan pb.ConfChange // 提议更改配置文件
@@ -115,7 +115,7 @@ func (an *AppNode) serveRaftNode(heartbeatTick int) {
 			an.raftNode.Advance()
 
 			//如果发现致命错误需要停止服务
-		case err := <-an.transport.ErrorC:
+		case err := <-an.transport.GetErrorC():
 			log.Panicf("transport get critical err", err)
 			an.stop()
 			return

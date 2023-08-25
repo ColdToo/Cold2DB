@@ -18,16 +18,16 @@ func TestListenPeerConn(t *testing.T) {
 	}
 
 	mockPeer1 := &peer{
-		url:          "127.0.0.1:8080",
-		streamWriter: &streamWriter{connC: make(chan io.Writer)},
+		peerIp:       "127.0.0.1:8080",
+		streamWriter: &streamWriter{connC: make(chan io.WriteCloser)},
 	}
 	mockPeer2 := &peer{
-		url:          "172.16.60.33:8080",
-		streamWriter: &streamWriter{connC: make(chan io.Writer)},
+		peerIp:       "172.16.60.33:8080",
+		streamWriter: &streamWriter{connC: make(chan io.WriteCloser)},
 	}
 	mockPeer3 := &peer{
-		url:          "172.16.60.34:8080",
-		streamWriter: &streamWriter{connC: make(chan io.Writer)},
+		peerIp:       "172.16.60.34:8080",
+		streamWriter: &streamWriter{connC: make(chan io.WriteCloser)},
 	}
 	trans.Peers[types.ID(1)] = mockPeer1
 	trans.Peers[types.ID(2)] = mockPeer2
@@ -70,7 +70,7 @@ func TestListenPeerConn(t *testing.T) {
 			c := <-tt.peer.streamWriter.connC
 			ipaddr := c.(*net.TCPConn).RemoteAddr()
 			testip := strings.Split(ipaddr.String(), ":")[0]
-			assert.Equal(t, testip, strings.Split(mockPeer1.url, ":")[0])
+			assert.Equal(t, testip, strings.Split(mockPeer1.peerIp, ":")[0])
 		})
 	}
 }
