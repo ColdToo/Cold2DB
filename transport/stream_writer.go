@@ -58,7 +58,7 @@ func (cw *streamWriter) run() {
 		select {
 		case m := <-msgC:
 			e := &messageEncoderAndWriter{connTcp}
-			err := e.encodeAndWrite(m)
+			err := e.encodeAndWrite(*m)
 			if err != nil {
 				cw.status.deactivate(failureType{source: cw.localID.Str(), action: "write"}, err.Error())
 				cw.close()

@@ -26,6 +26,7 @@ const (
 	maxPendingProposals = 4096
 )
 
+//go:generate mockgen -source=./peer.go -destination=./mocks/peer.go -package=mock
 type Peer interface {
 	send(m *pb.Message)
 

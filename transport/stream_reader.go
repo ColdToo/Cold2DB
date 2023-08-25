@@ -75,7 +75,7 @@ func (cr *streamReader) run() {
 }
 
 func (cr *streamReader) decodeLoop(rc io.ReadCloser) error {
-	dec := &messageDecoder{r: rc}
+	dec := &messageDecoderAndReader{r: rc}
 	for {
 		m, _ := dec.decodeAndRead()
 

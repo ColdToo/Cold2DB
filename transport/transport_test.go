@@ -1,0 +1,76 @@
+package transport
+
+import (
+	types "github.com/ColdToo/Cold2DB/transport/types"
+	"github.com/magiconair/properties/assert"
+	"io"
+	"net"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestListenPeerConn(t *testing.T) {
+	trans := &Transport{
+		LocalID: types.ID(1),
+		Peers:   make(map[types.ID]Peer),
+		StopC:   make(chan struct{}),
+	}
+
+	mockPeer1 := &peer{
+		url:          "127.0.0.1:8080",
+		streamWriter: &streamWriter{connC: make(chan io.Writer)},
+	}
+	mockPeer2 := &peer{
+		url:          "172.16.60.33:8080",
+		streamWriter: &streamWriter{connC: make(chan io.Writer)},
+	}
+	mockPeer3 := &peer{
+		url:          "172.16.60.34:8080",
+		streamWriter: &streamWriter{connC: make(chan io.Writer)},
+	}
+	trans.Peers[types.ID(1)] = mockPeer1
+	trans.Peers[types.ID(2)] = mockPeer2
+	trans.Peers[types.ID(3)] = mockPeer3
+
+	go trans.ListenPeerConn("127.0.0.1:8080")
+
+	time.Sleep(time.Second)
+
+	conn, err := net.Dial("tcp", "127.0.0.1:8080")
+	if err != nil {
+		t.Fatalf("failed to dial: %v", err)
+	}
+	defer conn.Close()
+	// 等待一段时间以便ListenPeerConn可以处理连接
+	time.Sleep(time.Second)
+
+	tests := []struct {
+		name string
+		peer *peer
+	}{
+		{
+			name: "success",
+			peer: mockPeer1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			go trans.ListenPeerConn("127.0.0.1:8080")
+			time.Sleep(time.Second)
+			conn, err := net.Dial("tcp", "127.0.0.1:8080")
+			if err != nil {
+				t.Fatalf("failed to dial: %v", err)
+			}
+			defer conn.Close()
+			// 等待一段时间以便ListenPeerConn可以处理连接
+			time.Sleep(time.Second)
+			// 检查模拟的peer是否已经接收到了连接
+			c := <-tt.peer.streamWriter.connC
+			ipaddr := c.(*net.TCPConn).RemoteAddr()
+			testip := strings.Split(ipaddr.String(), ":")[0]
+			assert.Equal(t, testip, strings.Split(mockPeer1.url, ":")[0])
+		})
+	}
+}

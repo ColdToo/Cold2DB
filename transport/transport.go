@@ -103,12 +103,12 @@ func (t *Transport) ListenPeerConn(localIp string) {
 			log.Panic("Accept tcp err").Record()
 		}
 
-		remoteAddr := conn.RemoteAddr().String()
+		remoteAddr := strings.Split(conn.RemoteAddr().String(), ":")
 		log.Debugf("Get conn remote addr = ", remoteAddr)
 
 		for _, v := range t.Peers {
 			p := v.(*peer)
-			if strings.Contains(p.url, remoteAddr) {
+			if len(remoteAddr) == 2 && strings.Contains(p.url, remoteAddr[0]) {
 				v.attachConn(conn)
 				goto flag
 			}
