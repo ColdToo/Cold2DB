@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"context"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +14,7 @@ import (
 )
 
 type RaftTransport interface {
-	Process(ctx context.Context, m *pb.Message) error
+	Process(m *pb.Message) error
 	IsIDRemoved(id uint64) bool
 	ReportUnreachable(id uint64)
 	ReportSnapshotStatus(id uint64, status raft.SnapshotStatus)
@@ -43,18 +42,14 @@ type Transporter interface {
 }
 
 type Transport struct {
-	LocalID   types.ID   // 本地节点的ID
-	ClusterID types.ID   // raft cluster ID for request validation
-	URLs      types.URLs // Peers URLs
+	LocalID   types.ID // 本地节点的ID
+	ClusterID types.ID
 
-	TLSInfo     TLSInfo       // TLS information used when creating connection
-	Raft        RaftTransport // raft state machine, to which the Transport forwards received messages and reports status
+	TLSInfo     TLSInfo
+	Raft        RaftTransport
 	Snapshotter *db.SnapShotter
 
-	// ErrorC is used to report detected critical errors, e.g.,
-	// the member has been permanently removed from the cluster
-	// When an error is received from ErrorC, user should stop raft state
-	// machine and thus stop the Transport.
+	// ErrorC is used to report detected critical errors,
 	ErrorC chan error
 	StopC  chan struct{}
 
@@ -64,17 +59,16 @@ type Transport struct {
 }
 
 // AddPeer peer 相当于是其他节点在本地的代言人，本地节点发送消息给其他节点实质是将消息递给peer由peer发送给对端节点
-func (t *Transport) AddPeer(peerID types.ID, u string) {
+func (t *Transport) AddPeer(peerID types.ID, peerIp string) {
 	recvC := make(chan *pb.Message, recvBufSize)
 	propC := make(chan *pb.Message, maxPendingProposals)
-	ctx, cancel := context.WithCancel(context.Background())
 	Peerstatus := newPeerStatus(peerID)
-	streamReader := startStreamReader(t.LocalID, peerID, Peerstatus, cancel, t, recvC, propC, t.ErrorC, u)
+	streamReader := startStreamReader(t.LocalID, peerID, Peerstatus, recvC, propC, t.ErrorC, peerIp)
 	streamWriter := startStreamWriter(t.LocalID, peerID, Peerstatus, t.Raft)
 	p := &peer{
 		localID:      t.LocalID,
 		remoteID:     peerID,
-		url:          u,
+		peerIp:       peerIp,
 		raft:         t.Raft,
 		status:       Peerstatus,
 		streamWriter: streamWriter,
@@ -82,10 +76,8 @@ func (t *Transport) AddPeer(peerID types.ID, u string) {
 		recvC:        recvC,
 		propC:        propC,
 		stopc:        make(chan struct{}),
-		cancel:       cancel,
 	}
-
-	p.handleReceiveCAndPropC(ctx)
+	p.handleReceiveCAndPropC()
 	t.Peers[peerID] = p
 	log.Info("added remote peer success").Str(code.LocalId, t.LocalID.Str()).Str(code.RemoteId, peerID.Str()).Record()
 }
@@ -108,7 +100,7 @@ func (t *Transport) ListenPeerConn(localIp string) {
 
 		for _, v := range t.Peers {
 			p := v.(*peer)
-			if len(remoteAddr) == 2 && strings.Contains(p.url, remoteAddr[0]) {
+			if len(remoteAddr) == 2 && strings.Contains(p.peerIp, remoteAddr[0]) {
 				v.attachConn(conn)
 				goto flag
 			}

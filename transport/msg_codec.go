@@ -3,14 +3,13 @@ package transport
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"io"
 )
 
 type msgEncodeWrite interface {
-	encodeAndWrite(m *pb.Message) error
+	encodeAndWrite(m pb.Message) error
 }
 
 type msgDecodeRead interface {
@@ -18,15 +17,12 @@ type msgDecodeRead interface {
 }
 
 type messageEncoderAndWriter struct {
-	w io.Writer
+	w io.WriteCloser
 }
 
 func (enc *messageEncoderAndWriter) encodeAndWrite(m pb.Message) error {
-	pkg, err := enc.getPackageBin(m)
-	if err != nil {
-		return err
-	}
-	_, err = enc.w.Write(pkg)
+	pkg, _ := enc.getPackageBin(m)
+	_, err := enc.w.Write(pkg)
 	if err != nil {
 		return err
 	}
@@ -40,7 +36,7 @@ func (enc *messageEncoderAndWriter) getPackageBin(m pb.Message) (b []byte, err e
 }
 
 type messageDecoderAndReader struct {
-	r io.Reader
+	r io.ReadCloser
 }
 
 func (dec *messageDecoderAndReader) decodeAndRead() (pb.Message, error) {
@@ -99,13 +95,15 @@ func GetPack(rc io.Reader) (pkg Package, err error) {
 	err = binary.Read(dataBuff, binary.LittleEndian, &pkg.Id)
 	if err != nil {
 		log.Errorf("unpack error ", err)
+		return
 	}
 
 	var data []byte
 	if pkg.DataLen > 0 {
 		data = make([]byte, pkg.DataLen)
 		if _, err := io.ReadFull(rc, data); err != nil {
-			fmt.Println("read pkg data error ", err)
+			log.Errorf("read pkg data error ", err)
+			return
 		}
 	}
 	pkg.Data = data

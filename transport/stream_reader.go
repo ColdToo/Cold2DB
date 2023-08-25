@@ -16,7 +16,7 @@ type streamReader struct {
 	peerID  types.ID
 	peerIp  string
 
-	tr         *Transport
+	enc        msgDecodeRead
 	peerStatus *peerStatus
 	recvC      chan<- *pb.Message //从peer中获取对端节点发送过来的消息，然后交给raft算法层进行处理，只接收非prop信息
 	propC      chan<- *pb.Message //只接收prop类消息
@@ -32,60 +32,55 @@ type streamReader struct {
 	done   chan struct{}
 }
 
-func (cr *streamReader) start() {
-	cr.done = make(chan struct{})
-	cr.errorC = cr.tr.ErrorC
-	cr.ctx, cr.cancel = context.WithCancel(context.Background())
-	go cr.run()
-}
-
-func startStreamReader(localID, peerId types.ID, status *peerStatus, cancel context.CancelFunc,
-	t *Transport, recvC, propC chan *pb.Message, errC chan error, peerIp string) *streamReader {
+func startStreamReader(localID, peerId types.ID, status *peerStatus,
+	recvC, propC chan *pb.Message, errC chan error, peerIp string) *streamReader {
 	r := &streamReader{
 		localId:    localID,
 		peerID:     peerId,
-		tr:         t,
 		peerIp:     peerIp,
 		peerStatus: status,
 		recvC:      recvC,
 		propC:      propC,
 		done:       make(chan struct{}),
 		errorC:     errC,
-		cancel:     cancel,
 	}
 	go r.run()
 	return r
 }
 
 func (cr *streamReader) run() {
-	log.Info("started stream reader with remote peer").Str(code.LocalId, cr.tr.LocalID.Str()).
+	var err error
+	log.Info("started stream reader with remote peer").Str(code.LocalId, cr.localId.Str()).
 		Str(code.RemoteId, cr.peerID.Str()).Record()
-
 	for {
-		rc, err := cr.dial()
+		cr.enc, err = cr.dial()
 		if err != nil {
 			cr.peerStatus.deactivate(failureType{source: cr.peerID.Str(), action: "dial"}, err.Error())
-		} else {
-			cr.peerStatus.activate()
-			log.Info("established TCP streaming connection with remote peer").Str(code.LocalId, cr.tr.LocalID.Str()).
-				Str(code.RemoteId, cr.peerID.Str()).Record()
-			err = cr.decodeLoop(rc) //轮询读取消息
+			continue
 		}
+		cr.peerStatus.activate()
+		log.Info("established TCP streaming connection with remote peer start read loop").Str(code.LocalId, cr.localId.Str()).
+			Str(code.RemoteId, cr.peerID.Str()).Record()
+		cr.decodeLoop() //轮询读取消息
 	}
 }
 
-func (cr *streamReader) decodeLoop(rc io.ReadCloser) error {
-	dec := &messageDecoderAndReader{r: rc}
+func (cr *streamReader) decodeLoop() {
 	for {
-		m, _ := dec.decodeAndRead()
+		m, err := cr.enc.decodeAndRead()
+		if err != nil {
+			log.Errorf("", err)
+		}
 
-		recvc := cr.recvC
+		recvC := cr.recvC
 		if m.Type == pb.MsgProp {
-			recvc = cr.propC
+			recvC = cr.propC
 		}
 
 		select {
-		case recvc <- &m:
+		case recvC <- &m:
+		case <-cr.done:
+			return
 		default:
 			if cr.peerStatus.isActive() {
 				log.Warn("dropped internal Raft message since receiving buffer is full (overloaded network)").
@@ -106,8 +101,8 @@ func (cr *streamReader) stop() {
 	<-cr.done
 }
 
-func (cr *streamReader) dial() (io.ReadCloser, error) {
-	log.Debug("start dial remote peer").Str("from", cr.tr.LocalID.Str()).Str("to", cr.peerID.Str()).
+func (cr *streamReader) dial() (msgDecodeRead, error) {
+	log.Debug("start dial remote peer").Str("from", cr.localId.Str()).Str("to", cr.peerID.Str()).
 		Str("address", cr.peerIp).Record()
 
 	dail := net.Dialer{Timeout: 10, KeepAlive: 0}
@@ -116,16 +111,16 @@ func (cr *streamReader) dial() (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	log.Debug("dial remote peer success").Str("from", cr.tr.LocalID.Str()).Str("to", cr.peerID.Str()).
+	log.Debug("dial remote peer success").Str("from", cr.localId.Str()).Str("to", cr.peerID.Str()).
 		Str("address", cr.peerIp).Record()
 
-	return Conn, nil
+	return &messageDecoderAndReader{Conn}, nil
 }
 
 func (cr *streamReader) close() {
 	if cr.closer != nil {
 		if err := cr.closer.Close(); err != nil {
-			log.Warn("failed to close remote peer connection").Str("local-member-id", cr.tr.LocalID.Str()).
+			log.Warn("failed to close remote peer connection").Str("local-member-id", cr.localId.Str()).
 				Str("remote-peer-id", cr.peerID.Str()).Err("", err).Record()
 		}
 	}

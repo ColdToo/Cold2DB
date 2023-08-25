@@ -30,7 +30,7 @@ const (
 type Peer interface {
 	send(m *pb.Message)
 
-	attachConn(conn io.Writer)
+	attachConn(conn io.WriteCloser)
 
 	activeSince() time.Time
 
@@ -40,7 +40,7 @@ type Peer interface {
 type peer struct {
 	localID  types.ID
 	remoteID types.ID
-	url      string
+	peerIp   string
 
 	raft   RaftTransport
 	status *peerStatus
@@ -57,12 +57,12 @@ type peer struct {
 	stopc  chan struct{}
 }
 
-func (p *peer) handleReceiveCAndPropC(ctx context.Context) {
+func (p *peer) handleReceiveCAndPropC() {
 	go func() {
 		for {
 			select {
 			case mm := <-p.recvC:
-				if err := p.raft.Process(ctx, mm); err != nil {
+				if err := p.raft.Process(mm); err != nil {
 					log.Warn("failed to process Raft message").Err(code.MessageProcErr, err)
 				}
 			case <-p.stopc:
@@ -76,7 +76,7 @@ func (p *peer) handleReceiveCAndPropC(ctx context.Context) {
 		for {
 			select {
 			case mm := <-p.propC:
-				if err := p.raft.Process(ctx, mm); err != nil {
+				if err := p.raft.Process(mm); err != nil {
 					log.Warn("failed to process Raft message").Err(code.MessageProcErr, err)
 				}
 			case <-p.stopc:
@@ -115,7 +115,7 @@ func (p *peer) send(m *pb.Message) {
 	}
 }
 
-func (p *peer) attachConn(conn io.Writer) {
+func (p *peer) attachConn(conn io.WriteCloser) {
 	p.streamWriter.connC <- conn
 }
 

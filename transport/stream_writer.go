@@ -20,14 +20,15 @@ type streamWriter struct {
 	peerID  types.ID
 	peerUrl url.URL
 
+	enc     msgEncodeWrite
+	conn    io.Closer
 	status  *peerStatus
 	r       RaftTransport
 	mu      sync.Mutex // guard field working and closer
-	closer  io.Closer
 	working bool
 
-	msgC  chan *pb.Message //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
-	connC chan io.Writer   //通过该通道获取当前streamWriter实例关联的底层网络连接
+	msgC  chan *pb.Message    //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
+	connC chan io.WriteCloser //通过该通道获取当前streamWriter实例关联的底层网络连接
 	stopC chan struct{}
 	done  chan struct{}
 }
@@ -39,7 +40,7 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport) 
 		status:  status,
 		r:       r,
 		msgC:    make(chan *pb.Message, streamBufSize),
-		connC:   make(chan io.Writer),
+		connC:   make(chan io.WriteCloser),
 		stopC:   make(chan struct{}),
 		done:    make(chan struct{}),
 	}
@@ -48,44 +49,43 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport) 
 }
 
 func (cw *streamWriter) run() {
-	var (
-		msgC    chan *pb.Message
-		connTcp io.Writer
-	)
+	var msgC chan *pb.Message
 	log.Info("started stream writer with remote peer").Str(code.LocalId, cw.localID.Str()).
 		Str(code.RemoteId, cw.peerID.Str()).Record()
 	for {
 		select {
 		case m := <-msgC:
-			e := &messageEncoderAndWriter{connTcp}
-			err := e.encodeAndWrite(*m)
+			err := cw.enc.encodeAndWrite(*m)
 			if err != nil {
 				cw.status.deactivate(failureType{source: cw.localID.Str(), action: "write"}, err.Error())
 				cw.close()
-				log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
-					Str(code.RemoteId, cw.peerID.Str()).Record()
 				msgC = nil
 				cw.r.ReportUnreachable(m.To)
+				log.Warn("lost TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
+					Str(code.RemoteId, cw.peerID.Str()).Record()
 			}
 		case conn := <-cw.connC:
 			cw.mu.Lock()
-			closed := cw.closeUnlocked()
-			if closed {
-				log.Warn("closed TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
-					Str(code.RemoteId, cw.peerID.Str()).Record()
+			//若已存在一个连接先关闭该连接
+			if cw.conn != nil {
+				closed := cw.closeUnlocked()
+				if closed {
+					log.Warn("tempt to close existed TCP streaming connection when get a new conn").Str(code.LocalId, cw.localID.Str()).
+						Str(code.RemoteId, cw.peerID.Str()).Record()
+				}
 			}
-			connTcp = conn
+			cw.conn = conn
+			cw.enc = &messageEncoderAndWriter{conn}
 			cw.status.activate()
 			cw.working = true
 			cw.mu.Unlock()
-			log.Warn("established TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
-				Str(code.RemoteId, cw.peerID.Str()).Record()
 			msgC = cw.msgC
+			log.Info("established TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
+				Str(code.RemoteId, cw.peerID.Str()).Record()
 		case <-cw.stopC:
 			if cw.close() {
-				log.Warn("closed TCP streaming connection with remote peer").Str(code.RemoteId, cw.peerID.Str()).Record()
+				log.Info("closed TCP streaming connection with remote peer").Str(code.RemoteId, cw.peerID.Str()).Record()
 			}
-			log.Warn("stopped TCP streaming connection with remote peer").Str(code.RemoteId, cw.peerID.Str()).Record()
 			close(cw.done)
 			return
 		}
@@ -108,10 +108,9 @@ func (cw *streamWriter) closeUnlocked() bool {
 	if !cw.working {
 		return false
 	}
-	if err := cw.closer.Close(); err != nil {
-	}
-	if len(cw.msgC) > 0 {
-		cw.r.ReportUnreachable(uint64(cw.peerID))
+	if err := cw.conn.Close(); err != nil {
+		log.Errorf("", err)
+		return false
 	}
 	cw.msgC = make(chan *pb.Message, streamBufSize)
 	cw.working = false

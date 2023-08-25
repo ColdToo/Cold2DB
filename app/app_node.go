@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/db/logfile"
@@ -213,7 +212,7 @@ func (an *AppNode) servePeerRaft() {
 
 //  Rat网络层接口,网络层通过该接口与RaftNode交互
 
-func (an *AppNode) Process(ctx context.Context, m *pb.Message) error {
+func (an *AppNode) Process(m *pb.Message) error {
 	return an.raftNode.Step(m)
 }
 
