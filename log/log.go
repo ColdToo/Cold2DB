@@ -12,6 +12,11 @@ import (
 )
 
 var log *zap.Logger
+var sugaredLog *zap.SugaredLogger
+
+const (
+	None = ""
+)
 
 func InitLog(config *config.ZapConfig) {
 	if ok := utils.PathExist(config.Director); !ok {
@@ -25,71 +30,73 @@ func InitLog(config *config.ZapConfig) {
 	if config.ShowLine {
 		log = log.WithOptions(zap.AddCaller())
 	}
+	sugaredLog = log.Sugar()
+}
+
+func Debugf(msg string, param ...any) {
+	sugaredLog.Debugf(msg, param)
+}
+
+func Infof(msg string, param ...any) {
+	sugaredLog.Infof(msg, param...)
+}
+
+func Warnf(msg string, param ...any) {
+	sugaredLog.Warnf(msg, param)
+}
+
+func Errorf(msg string, param ...any) {
+	sugaredLog.Errorf(msg, param)
+}
+
+func Panicf(msg string, param ...any) {
+	sugaredLog.Panicf(msg, param)
+}
+
+func Fatalf(msg string, param ...any) {
+	sugaredLog.Fatalf(msg, param)
 }
 
 func Debug(msg string) *Fields {
 	if !log.Core().Enabled(zapcore.DebugLevel) {
-		return newFields("", nil, true)
+		return newFields("", nil, true, zapcore.DebugLevel)
 	}
-	return newFields(msg, log, false)
+	return newFields(msg, log, false, zapcore.DebugLevel)
 }
 
 func Info(msg string) *Fields {
-	if !log.Core().Enabled(zapcore.DebugLevel) {
-		return newFields("", nil, true)
+	if !log.Core().Enabled(zapcore.InfoLevel) {
+		return newFields("", nil, true, zapcore.InfoLevel)
 	}
-	return newFields(msg, log, false)
+	return newFields(msg, log, false, zapcore.InfoLevel)
 }
 
 func Warn(msg string) *Fields {
-	if !log.Core().Enabled(zapcore.DebugLevel) {
-		return newFields("", nil, true)
+	if !log.Core().Enabled(zapcore.WarnLevel) {
+		return newFields("", nil, true, zapcore.WarnLevel)
 	}
-	return newFields(msg, log, false)
+	return newFields(msg, log, false, zapcore.WarnLevel)
 }
 
 func Error(msg string) *Fields {
 	if !log.Core().Enabled(zapcore.ErrorLevel) {
-		return newFields("", nil, true)
+		return newFields("", nil, true, zapcore.ErrorLevel)
 	}
-	return newFields(msg, log, false)
+	return newFields(msg, log, false, zapcore.ErrorLevel)
 }
 
 func Panic(msg string) *Fields {
-	if !log.Core().Enabled(zapcore.DebugLevel) {
-		return newFields("", nil, true)
+	if !log.Core().Enabled(zapcore.PanicLevel) {
+		return newFields("", nil, true, zapcore.PanicLevel)
 	}
-	return newFields(msg, log, false)
+	return newFields(msg, log, false, zapcore.PanicLevel)
 }
 
 func Fatal(msg string) *Fields {
-	if !log.Core().Enabled(zapcore.DebugLevel) {
-		return newFields("", nil, true)
+	if !log.Core().Enabled(zapcore.FatalLevel) {
+		return newFields("", nil, true, zapcore.FatalLevel)
 	}
-	return newFields(msg, log, false)
-}
-
-func Infof(msg string, param ...any) {
-
-}
-
-func Warnf(msg string, param ...any) {
-
-}
-
-func Errorf(msg string, param ...any) {
-
-}
-
-func Debugf(msg string, param ...any) {
-
-}
-
-func Panicf(msg string, param ...any) *Fields {
-	if !log.Core().Enabled(zapcore.DebugLevel) {
-		return newFields("", nil, true)
-	}
-	return newFields(msg, log, false)
+	return newFields(msg, log, false, zapcore.FatalLevel)
 }
 
 type Fields struct {
@@ -100,7 +107,9 @@ type Fields struct {
 	skip   bool
 }
 
-func newFields(msg string, l *zap.Logger, skip bool) (fields *Fields) {
+func newFields(msg string, l *zap.Logger, skip bool, level zapcore.Level) (fields *Fields) {
+	fields = new(Fields)
+	fields.level = level
 	fields.msg = msg
 	fields.zap = l
 	fields.skip = skip
@@ -111,17 +120,7 @@ func (f *Fields) Str(key string, val string) *Fields {
 	if f.skip {
 		return f
 	}
-
 	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.StringType, String: val})
-	return f
-}
-
-func (f *Fields) Strs(key string, val []string) *Fields {
-	if f.skip {
-		return f
-	}
-
-	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.StringType, Interface: val})
 	return f
 }
 
@@ -129,7 +128,6 @@ func (f *Fields) Int(key string, val int) *Fields {
 	if f.skip {
 		return f
 	}
-
 	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.Int32Type, Integer: int64(val)})
 	return f
 }
@@ -138,7 +136,6 @@ func (f *Fields) Err(key string, err error) *Fields {
 	if err == nil || f.skip {
 		return f
 	}
-
 	f.fields = append(f.fields, zapcore.Field{Key: key, Type: zapcore.ErrorType, Interface: err})
 	return f
 }

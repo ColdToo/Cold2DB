@@ -13,8 +13,6 @@ var FileRotatelogs = new(fileRotatelogs)
 
 type fileRotatelogs struct{}
 
-// GetWriteSyncer 获取 zapcore.WriteSyncer
-// Author [SliverHorn](https://github.com/SliverHorn)
 func (r *fileRotatelogs) GetWriteSyncer(level string, config *config.ZapConfig) (zapcore.WriteSyncer, error) {
 	fileWriter, err := rotatelogs.New(
 		path.Join(config.Director, "%Y-%m-%d", level+".log"),
