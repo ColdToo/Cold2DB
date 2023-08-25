@@ -93,7 +93,7 @@ func GetPack(rc io.Reader) (pkg Package, err error) {
 	var data []byte
 	if pkg.DataLen > 0 {
 		data = make([]byte, pkg.DataLen)
-		if _, err := io.ReadFull(rc, data); err != nil {
+		if _, err = io.ReadFull(rc, data); err != nil {
 			log.Errorf("read pkg data error ", err)
 			return
 		}

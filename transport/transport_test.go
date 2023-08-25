@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"github.com/ColdToo/Cold2DB/config"
+	"github.com/ColdToo/Cold2DB/log"
 	types "github.com/ColdToo/Cold2DB/transport/types"
 	"github.com/magiconair/properties/assert"
 	"io"
@@ -11,6 +13,17 @@ import (
 )
 
 func TestListenPeerConn(t *testing.T) {
+	cfg := &config.ZapConfig{
+		Level:         "debug",
+		Format:        "console",
+		Prefix:        "[Cold2DB]",
+		Director:      "./log",
+		ShowLine:      true,
+		EncodeLevel:   "LowercaseColorLevelEncoder",
+		StacktraceKey: "stacktrace",
+		LogInConsole:  true,
+	}
+	log.InitLog(cfg)
 	trans := &Transport{
 		LocalID: types.ID(1),
 		Peers:   make(map[types.ID]Peer),

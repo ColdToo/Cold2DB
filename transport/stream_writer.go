@@ -116,14 +116,14 @@ func (cw *streamWriter) stop() {
 	<-cw.done
 }
 
-func (cr *streamWriter) pause() {
-	cr.mu.Lock()
-	defer cr.mu.Unlock()
-	cr.paused = true
+func (cw *streamWriter) pause() {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	cw.paused = true
 }
 
-func (cr *streamWriter) resume() {
-	cr.mu.Lock()
-	defer cr.mu.Unlock()
-	cr.paused = false
+func (cw *streamWriter) resume() {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	cw.paused = false
 }

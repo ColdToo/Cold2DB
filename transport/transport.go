@@ -84,14 +84,14 @@ func (t *Transport) AddPeer(peerID types.ID, peerIp string) {
 }
 
 func (t *Transport) ListenPeerConn(localIp string) {
-	log.Debugf("start app server node id: &s", t.LocalID, "listening...")
+	log.Debugf("start app server node id: &s listening", t.LocalID)
 	listener, err := NewStoppableListener(localIp, t.StopC)
 	if err != nil {
 		return
 	}
 	for {
 	flag:
-		conn, err := listener.AcceptTCP()
+		conn, err := listener.Accept()
 		if err != nil {
 			log.Panic("Accept tcp err").Record()
 		}

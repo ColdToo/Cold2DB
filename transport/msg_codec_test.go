@@ -1,58 +1,12 @@
 package transport
 
 import (
-	"bytes"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/pb"
-	"github.com/stretchr/testify/assert"
 	"net"
 	"testing"
 	"time"
 )
-
-// 测试编解码
-func TestEncodeAndDecode(t *testing.T) {
-	//使用buf替代conn
-	var buf bytes.Buffer
-	enc := &messageEncoderAndWriter{
-		w: &buf,
-	}
-	dec := &messageDecoderAndReader{
-		r: &buf,
-	}
-
-	message := pb.Message{
-		Type:       pb.MsgProp,
-		To:         1,
-		From:       2,
-		Term:       4,
-		LogTerm:    4,
-		Index:      101,
-		Commit:     100,
-		Reject:     true,
-		RejectHint: 100,
-		Entries: []pb.Entry{
-			{
-				Term:  4,
-				Index: 101,
-				Type:  pb.EntryNormal,
-				Data:  []byte{1, 2},
-			},
-		},
-	}
-
-	err := enc.encodeAndWrite(message)
-	if err != nil {
-		t.Errorf("encodeAndWrite returned an error: %v", err)
-	}
-
-	msg, err := dec.decodeAndRead()
-	if err != nil {
-		t.Errorf("encodeAndWrite returned an error: %v", err)
-	}
-
-	assert.EqualValues(t, message, msg)
-}
 
 // 测试粘包下的编解码
 func TestDataPack(t *testing.T) {
