@@ -73,16 +73,14 @@ func (p *peer) Send(m *pb.Message) {
 	p.mu.Lock()
 	paused := p.paused
 	p.mu.Unlock()
-
 	if paused {
 		return
 	}
 
-	writeC, _ := p.streamWriter.writeC()
+	writeC := p.streamWriter.writeC()
 	select {
 	case writeC <- m:
 	default:
-		p.raft.ReportUnreachable(m.To)
 		if isMsgSnap(m) {
 			p.raft.ReportSnapshotStatus(m.To, raft.SnapshotFailure)
 		}

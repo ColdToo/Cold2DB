@@ -18,12 +18,11 @@ type streamWriter struct {
 	peerID  types.ID
 	peerIp  string
 
-	enc     *messageEncoderAndWriter
-	status  *peerStatus
-	r       RaftTransport
-	mu      sync.Mutex // guard field working and enc
-	working bool       //working字段指示了enc是否存在
-	paused  bool
+	enc    *messageEncoderAndWriter
+	status *peerStatus
+	r      RaftTransport
+	mu     sync.Mutex // guard field working and enc
+	paused bool
 
 	msgC   chan *pb.Message    //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
 	connC  chan io.WriteCloser //通过该通道获取当前streamWriter实例关联的底层网络连接
@@ -68,12 +67,11 @@ func (cw *streamWriter) run() {
 			cw.mu.Lock()
 			closed := cw.closeUnlocked()
 			if closed {
-				log.Warn("tempt to close existed TCP streaming connection when get a new conn").Str(code.LocalId, cw.localID.Str()).
+				log.Info("success close existed TCP streaming connection when get a new conn").Str(code.LocalId, cw.localID.Str()).
 					Str(code.RemoteId, cw.peerID.Str()).Record()
 			}
 			cw.enc = &messageEncoderAndWriter{conn}
 			cw.status.activate()
-			cw.working = true
 			cw.mu.Unlock()
 			msgC = cw.msgC
 			log.Info("established TCP streaming connection with remote peer").Str(code.LocalId, cw.localID.Str()).
@@ -88,10 +86,10 @@ func (cw *streamWriter) run() {
 	}
 }
 
-func (cw *streamWriter) writeC() (chan<- *pb.Message, bool) {
+func (cw *streamWriter) writeC() chan<- *pb.Message {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
-	return cw.msgC, cw.working
+	return cw.msgC
 }
 
 func (cw *streamWriter) close() bool {
@@ -101,15 +99,13 @@ func (cw *streamWriter) close() bool {
 }
 
 func (cw *streamWriter) closeUnlocked() bool {
-	if !cw.working {
+	if cw.enc == nil {
 		return false
 	}
 	if err := cw.enc.w.Close(); err != nil {
-		log.Errorf("", err)
+		log.Errorf("failed to close exited conn", err)
 		return false
 	}
-	cw.msgC = make(chan *pb.Message, streamBufSize)
-	cw.working = false
 	return true
 }
 
