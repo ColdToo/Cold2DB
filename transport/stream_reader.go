@@ -10,12 +10,13 @@ import (
 )
 
 type streamReader struct {
-	localId    types.ID
-	peerID     types.ID
-	peerIp     string
-	peerStatus *peerStatus
-	mu         sync.Mutex
-	paused     bool
+	localId       types.ID
+	peerID        types.ID
+	peerIp        string
+	peerStatus    *peerStatus
+	mu            sync.Mutex
+	paused        bool
+	raftTransport RaftTransport
 
 	enc      *messageDecoderAndReader
 	receiveC chan<- *pb.Message //从peer中获取对端节点发送过来的消息，然后交给raft算法层进行处理，只接收非prop信息
@@ -23,16 +24,17 @@ type streamReader struct {
 	stopC    chan struct{}
 }
 
-func startStreamReader(localID, peerId types.ID, peerStatus *peerStatus,
-	receiveC chan *pb.Message, errC chan error, peerIp string) *streamReader {
+func startStreamReader(localID, peerId types.ID, peerStatus *peerStatus, tr RaftTransport,
+	errC chan error, receiveC chan *pb.Message, peerIp string) *streamReader {
 	r := &streamReader{
-		localId:    localID,
-		peerID:     peerId,
-		peerIp:     peerIp,
-		peerStatus: peerStatus,
-		receiveC:   receiveC,
-		stopC:      make(chan struct{}),
-		errorC:     errC,
+		localId:       localID,
+		peerID:        peerId,
+		peerIp:        peerIp,
+		peerStatus:    peerStatus,
+		receiveC:      receiveC,
+		stopC:         make(chan struct{}),
+		errorC:        errC,
+		raftTransport: tr,
 	}
 	go r.run()
 	return r
@@ -52,6 +54,8 @@ func (cr *streamReader) run() {
 		select {
 		case <-cr.stopC:
 			return
+		default:
+			continue
 		}
 	}
 }

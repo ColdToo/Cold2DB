@@ -21,7 +21,7 @@ type RaftTransport interface {
 }
 
 type Transporter interface {
-	ListenPeerConn(localIp string)
+	ListenPeerAttachConn(localIp string)
 
 	// Send 应用层通过该接口发送消息给peer,如果在transport中没有找到该peer那么忽略该消息
 	Send(m []*pb.Message)
@@ -61,27 +61,27 @@ type Transport struct {
 
 // AddPeer peer 相当于是其他节点在本地的代言人，本地节点发送消息给其他节点实质是将消息递给peer由peer发送给对端节点
 func (t *Transport) AddPeer(peerID types.ID, peerIp string) {
-	recvC := make(chan *pb.Message, recvBufSize)
-	Peerstatus := newPeerStatus(peerID)
-	streamReader := startStreamReader(t.LocalID, peerID, Peerstatus, recvC, t.ErrorC, peerIp)
-	streamWriter := startStreamWriter(t.LocalID, peerID, Peerstatus, t.Raft)
+	receiveC := make(chan *pb.Message, recvBufSize)
+	peerStatus := newPeerStatus(peerID)
+	streamReader := startStreamReader(t.LocalID, peerID, peerStatus, t.Raft, t.ErrorC, receiveC, peerIp)
+	streamWriter := startStreamWriter(t.LocalID, peerID, peerStatus, t.Raft, t.ErrorC)
 	p := &peer{
 		localID:      t.LocalID,
 		remoteID:     peerID,
 		peerIp:       peerIp,
 		raft:         t.Raft,
-		status:       Peerstatus,
+		status:       peerStatus,
 		streamWriter: streamWriter,
 		streamReader: streamReader,
-		recvC:        recvC,
-		stopc:        make(chan struct{}),
+		recvC:        receiveC,
+		stopc:        t.StopC,
 	}
 	p.handleReceiveC()
 	t.Peers[peerID] = p
 	log.Info("added remote peer success").Str(code.LocalId, t.LocalID.Str()).Str(code.RemoteId, peerID.Str()).Record()
 }
 
-func (t *Transport) ListenPeerConn(localIp string) {
+func (t *Transport) ListenPeerAttachConn(localIp string) {
 	log.Debugf("start app server node id: &s listening", t.LocalID)
 	listener, err := NewStoppableListener(localIp, t.StopC)
 	if err != nil {

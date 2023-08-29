@@ -207,7 +207,7 @@ func (an *AppNode) servePeerRaft() {
 		}
 	}
 
-	go an.transport.ListenPeerConn(an.localIp)
+	go an.transport.ListenPeerAttachConn(an.localIp)
 }
 
 //  Rat网络层接口,网络层通过该接口与RaftNode交互

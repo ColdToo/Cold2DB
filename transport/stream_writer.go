@@ -25,13 +25,14 @@ type streamWriter struct {
 	working bool       //working字段指示了enc是否存在
 	paused  bool
 
-	msgC  chan *pb.Message    //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
-	connC chan io.WriteCloser //通过该通道获取当前streamWriter实例关联的底层网络连接
-	stopC chan struct{}
-	done  chan struct{}
+	msgC   chan *pb.Message    //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
+	connC  chan io.WriteCloser //通过该通道获取当前streamWriter实例关联的底层网络连接
+	stopC  chan struct{}
+	done   chan struct{}
+	errorC chan error
 }
 
-func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport) *streamWriter {
+func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport, errorC chan error) *streamWriter {
 	w := &streamWriter{
 		localID: local,
 		peerID:  id,

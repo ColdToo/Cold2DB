@@ -14,8 +14,7 @@ func TestStreamWriterAndReader_Run(t *testing.T) {
 	localID := types.ID(1)
 	peerID := types.ID(2)
 	status := &peerStatus{}
-	recvC := make(chan *pb.Message)
-	propC := make(chan *pb.Message)
+	reciveC := make(chan *pb.Message)
 	errC := make(chan error)
 	peerIP := "127.0.0.1:7878"
 	stopC := make(chan struct{})
@@ -41,7 +40,7 @@ func TestStreamWriterAndReader_Run(t *testing.T) {
 		}
 	}()
 
-	reader := startStreamReader(localID, peerID, status, recvC, propC, errC, peerIP)
+	reader := startStreamReader(localID, peerID, status, nil, errC, reciveC, peerIP)
 	go reader.run()
 
 	writer.run()
