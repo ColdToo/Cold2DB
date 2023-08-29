@@ -62,9 +62,8 @@ type Transport struct {
 // AddPeer peer 相当于是其他节点在本地的代言人，本地节点发送消息给其他节点实质是将消息递给peer由peer发送给对端节点
 func (t *Transport) AddPeer(peerID types.ID, peerIp string) {
 	recvC := make(chan *pb.Message, recvBufSize)
-	propC := make(chan *pb.Message, maxPendingProposals)
 	Peerstatus := newPeerStatus(peerID)
-	streamReader := startStreamReader(t.LocalID, peerID, Peerstatus, recvC, propC, t.ErrorC, peerIp)
+	streamReader := startStreamReader(t.LocalID, peerID, Peerstatus, recvC, t.ErrorC, peerIp)
 	streamWriter := startStreamWriter(t.LocalID, peerID, Peerstatus, t.Raft)
 	p := &peer{
 		localID:      t.LocalID,
@@ -75,10 +74,9 @@ func (t *Transport) AddPeer(peerID types.ID, peerIp string) {
 		streamWriter: streamWriter,
 		streamReader: streamReader,
 		recvC:        recvC,
-		propC:        propC,
 		stopc:        make(chan struct{}),
 	}
-	p.handleReceiveCAndPropC()
+	p.handleReceiveC()
 	t.Peers[peerID] = p
 	log.Info("added remote peer success").Str(code.LocalId, t.LocalID.Str()).Str(code.RemoteId, peerID.Str()).Record()
 }

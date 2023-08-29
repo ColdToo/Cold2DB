@@ -54,25 +54,11 @@ type peer struct {
 	stopc  chan struct{}
 }
 
-func (p *peer) handleReceiveCAndPropC() {
+func (p *peer) handleReceiveC() {
 	go func() {
 		for {
 			select {
 			case mm := <-p.recvC:
-				if err := p.raft.Process(mm); err != nil {
-					log.Warn("failed to process Raft message").Err(code.MessageProcErr, err)
-				}
-			case <-p.stopc:
-				return
-			}
-		}
-	}()
-
-	// 当没有主节点的时候proposal信息有可能会阻塞，所以需要一个单独的协程来处理投票信息
-	go func() {
-		for {
-			select {
-			case mm := <-p.propC:
 				if err := p.raft.Process(mm); err != nil {
 					log.Warn("failed to process Raft message").Err(code.MessageProcErr, err)
 				}

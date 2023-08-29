@@ -5,6 +5,7 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 	types "github.com/ColdToo/Cold2DB/transport/types"
 	"io"
+	"sync"
 	"testing"
 )
 
@@ -20,10 +21,12 @@ func TestStreamWriterAndReader_Run(t *testing.T) {
 	stopC := make(chan struct{})
 
 	writer := &streamWriter{
-		msgC:  make(chan *pb.Message),
-		connC: make(chan io.WriteCloser),
-		stopC: make(chan struct{}),
-		done:  make(chan struct{}),
+		msgC:   make(chan *pb.Message),
+		connC:  make(chan io.WriteCloser),
+		stopC:  make(chan struct{}),
+		done:   make(chan struct{}),
+		mu:     sync.Mutex{},
+		status: status,
 	}
 
 	go func() {
