@@ -2,13 +2,14 @@ package log
 
 import (
 	"fmt"
+	"os"
+	"strings"
+	"time"
+
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/utils"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"os"
-	"strings"
-	"time"
 )
 
 var log *zap.Logger
@@ -20,7 +21,6 @@ const (
 
 func InitLog(config *config.ZapConfig) {
 	if ok := utils.PathExist(config.Director); !ok {
-		fmt.Printf("create %v directory\n", config)
 		_ = os.Mkdir(config.Director, os.ModePerm)
 	}
 
@@ -34,27 +34,27 @@ func InitLog(config *config.ZapConfig) {
 }
 
 func Debugf(msg string, param ...any) {
-	sugaredLog.Debugf(msg, param)
+	sugaredLog.WithOptions(zap.AddCallerSkip(1)).Debugf(msg, param...)
 }
 
 func Infof(msg string, param ...any) {
-	sugaredLog.Infof(msg, param...)
+	sugaredLog.WithOptions(zap.AddCallerSkip(1)).Infof(msg, param...)
 }
 
 func Warnf(msg string, param ...any) {
-	sugaredLog.Warnf(msg, param)
+	sugaredLog.WithOptions(zap.AddCallerSkip(1)).Warnf(msg, param...)
 }
 
 func Errorf(msg string, param ...any) {
-	sugaredLog.Errorf(msg, param)
+	sugaredLog.WithOptions(zap.AddCallerSkip(1)).Errorf(msg, param...)
 }
 
 func Panicf(msg string, param ...any) {
-	sugaredLog.Panicf(msg, param)
+	sugaredLog.WithOptions(zap.AddCallerSkip(1)).Panicf(msg, param...)
 }
 
 func Fatalf(msg string, param ...any) {
-	sugaredLog.Fatalf(msg, param)
+	sugaredLog.WithOptions(zap.AddCallerSkip(1)).Fatalf(msg, param...)
 }
 
 func Debug(msg string) *Fields {
@@ -156,19 +156,20 @@ func (f *Fields) Record() {
 	if f.skip {
 		return
 	}
+
 	switch f.level {
 	case zapcore.DebugLevel:
-		f.zap.Debug(f.msg, f.fields...)
+		f.zap.WithOptions(zap.AddCallerSkip(1)).Debug(f.msg, f.fields...)
 	case zapcore.InfoLevel:
-		f.zap.Info(f.msg, f.fields...)
+		f.zap.WithOptions(zap.AddCallerSkip(1)).Info(f.msg, f.fields...)
 	case zapcore.WarnLevel:
-		f.zap.Warn(f.msg, f.fields...)
+		f.zap.WithOptions(zap.AddCallerSkip(1)).Warn(f.msg, f.fields...)
 	case zapcore.ErrorLevel:
-		f.zap.Error(f.msg, f.fields...)
+		f.zap.WithOptions(zap.AddCallerSkip(1)).Error(f.msg, f.fields...)
 	case zapcore.PanicLevel:
-		f.zap.Panic(f.msg, f.fields...)
+		f.zap.WithOptions(zap.AddCallerSkip(1)).Panic(f.msg, f.fields...)
 	case zapcore.FatalLevel:
-		f.zap.Fatal(f.msg, f.fields...)
+		f.zap.WithOptions(zap.AddCallerSkip(1)).Fatal(f.msg, f.fields...)
 	}
 }
 

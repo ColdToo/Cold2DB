@@ -17,4 +17,5 @@ func TestInitLog(t *testing.T) {
 		LogInConsole:  true,
 	}
 	InitLog(cfg)
+	Debugf("测试")
 }

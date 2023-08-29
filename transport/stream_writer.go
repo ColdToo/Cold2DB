@@ -42,6 +42,7 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport, 
 		connC:   make(chan io.WriteCloser),
 		stopC:   make(chan struct{}),
 		done:    make(chan struct{}),
+		errorC:  errorC,
 	}
 	go w.run()
 	return w

@@ -11,6 +11,7 @@ func main() {
 	config.InitConfig()
 	log.InitLog(config.GetZapConf())
 	db.InitDB(config.GetDBConf())
+	log.Info("start success").Record()
 
 	localIpAddr, localId, peerUrl := config.GetLocalInfo()
 	proposeC := make(chan []byte)
