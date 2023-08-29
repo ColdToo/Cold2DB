@@ -92,7 +92,7 @@ func (cr *streamReader) dial() (*messageDecoderAndReader, error) {
 	log.Info("start dial remote peer").Str("from", cr.localId.Str()).Str("to", cr.peerID.Str()).
 		Str("address", cr.peerIp).Record()
 
-	dail := net.Dialer{Timeout: 10, KeepAlive: 0}
+	dail := net.Dialer{Timeout: 10, KeepAlive: 10}
 	Conn, err := dail.Dial("tcp", cr.peerIp)
 	if err != nil {
 		return nil, err

@@ -3,9 +3,52 @@ package transport
 import (
 	"fmt"
 	"github.com/ColdToo/Cold2DB/pb"
+	"github.com/stretchr/testify/assert"
 	"net"
 	"testing"
 	"time"
+)
+
+var (
+	message1 = pb.Message{
+		Type:       pb.MsgProp,
+		To:         1,
+		From:       2,
+		Term:       4,
+		LogTerm:    4,
+		Index:      101,
+		Commit:     100,
+		Reject:     true,
+		RejectHint: 100,
+		Entries: []pb.Entry{
+			{
+				Term:  4,
+				Index: 101,
+				Type:  pb.EntryNormal,
+				Data:  []byte{1, 2},
+			},
+		},
+	}
+
+	message2 = pb.Message{
+		Type:       pb.MsgProp,
+		To:         11,
+		From:       21,
+		Term:       41,
+		LogTerm:    41,
+		Index:      102,
+		Commit:     100,
+		Reject:     true,
+		RejectHint: 100,
+		Entries: []pb.Entry{
+			{
+				Term:  4,
+				Index: 101,
+				Type:  pb.EntryNormal,
+				Data:  []byte{1, 2},
+			},
+		},
+	}
 )
 
 // 测试粘包下的编解码
@@ -33,8 +76,13 @@ func TestDataPack(t *testing.T) {
 					if err != nil {
 						t.Log(err)
 					}
+					if pbmsg.Index == message1.Index {
+						assert.Equal(t, pbmsg, message1)
+					}
 
-					t.Log(pbmsg)
+					if pbmsg.Index == message2.Index {
+						assert.Equal(t, pbmsg, message2)
+					}
 				}
 			}(conn)
 		}
@@ -49,46 +97,6 @@ func TestDataPack(t *testing.T) {
 		}
 
 		enc := &messageEncoderAndWriter{conn}
-
-		message1 := pb.Message{
-			Type:       pb.MsgProp,
-			To:         1,
-			From:       2,
-			Term:       4,
-			LogTerm:    4,
-			Index:      101,
-			Commit:     100,
-			Reject:     true,
-			RejectHint: 100,
-			Entries: []pb.Entry{
-				{
-					Term:  4,
-					Index: 101,
-					Type:  pb.EntryNormal,
-					Data:  []byte{1, 2},
-				},
-			},
-		}
-
-		message2 := pb.Message{
-			Type:       pb.MsgProp,
-			To:         11,
-			From:       21,
-			Term:       41,
-			LogTerm:    41,
-			Index:      101,
-			Commit:     100,
-			Reject:     true,
-			RejectHint: 100,
-			Entries: []pb.Entry{
-				{
-					Term:  4,
-					Index: 101,
-					Type:  pb.EntryNormal,
-					Data:  []byte{1, 2},
-				},
-			},
-		}
 
 		enc.encodeAndWrite(message1)
 		enc.encodeAndWrite(message2)
