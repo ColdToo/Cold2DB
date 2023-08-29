@@ -13,17 +13,7 @@ import (
 )
 
 func TestListenPeerConn(t *testing.T) {
-	cfg := &config.ZapConfig{
-		Level:         "debug",
-		Format:        "console",
-		Prefix:        "[Cold2DB]",
-		Director:      "./log",
-		ShowLine:      true,
-		EncodeLevel:   "LowercaseColorLevelEncoder",
-		StacktraceKey: "stacktrace",
-		LogInConsole:  true,
-	}
-	log.InitLog(cfg)
+	initLog()
 	trans := &Transport{
 		LocalID: types.ID(1),
 		Peers:   make(map[types.ID]Peer),
@@ -86,4 +76,18 @@ func TestListenPeerConn(t *testing.T) {
 			assert.Equal(t, testip, strings.Split(mockPeer1.peerIp, ":")[0])
 		})
 	}
+}
+
+func initLog() {
+	cfg := &config.ZapConfig{
+		Level:         "debug",
+		Format:        "console",
+		Prefix:        "[Cold2DB]",
+		Director:      "./log",
+		ShowLine:      true,
+		EncodeLevel:   "LowercaseColorLevelEncoder",
+		StacktraceKey: "stacktrace",
+		LogInConsole:  true,
+	}
+	log.InitLog(cfg)
 }

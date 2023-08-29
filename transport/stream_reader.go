@@ -7,6 +7,7 @@ import (
 	types "github.com/ColdToo/Cold2DB/transport/types"
 	"net"
 	"sync"
+	"time"
 )
 
 type streamReader struct {
@@ -43,12 +44,14 @@ func startStreamReader(localID, peerId types.ID, status *peerStatus,
 
 func (cr *streamReader) run() {
 	var err error
-	log.Info("started stream reader with remote peer").Str(code.LocalId, cr.localId.Str()).
-		Str(code.RemoteId, cr.peerID.Str()).Record()
+	log.Info("started stream reader").Str(code.LocalId, cr.localId.Str()).
+		Str(code.RemoteId, cr.peerID.Str()).Str(code.RemoteIp, cr.peerIp).Record()
 	for {
+		time.Sleep(time.Second)
 		cr.enc, err = cr.dial()
 		if err != nil {
 			cr.peerStatus.deactivate(failureType{source: cr.peerID.Str(), action: "dial"}, err.Error())
+			log.Errorf("dial remote peer failed", err)
 			continue
 		}
 		cr.peerStatus.activate()
@@ -74,14 +77,6 @@ func (cr *streamReader) decodeLoop() {
 		case recvC <- &m:
 		case <-cr.done:
 			return
-		default:
-			if cr.peerStatus.isActive() {
-				log.Warn("dropped internal Raft message since receiving buffer is full (overloaded network)").
-					Str("message-type", m.Type.String()).
-					Str("local-member-id", cr.localId.Str()).
-					Str("remote-peer-id", types.ID(m.From).Str()).
-					Bool("remote-peer-active", cr.peerStatus.isActive()).Record()
-			}
 		}
 	}
 }
@@ -94,7 +89,7 @@ func (cr *streamReader) stop() {
 }
 
 func (cr *streamReader) dial() (*messageDecoderAndReader, error) {
-	log.Debug("start dial remote peer").Str("from", cr.localId.Str()).Str("to", cr.peerID.Str()).
+	log.Info("start dial remote peer").Str("from", cr.localId.Str()).Str("to", cr.peerID.Str()).
 		Str("address", cr.peerIp).Record()
 
 	dail := net.Dialer{Timeout: 10, KeepAlive: 0}
@@ -103,7 +98,7 @@ func (cr *streamReader) dial() (*messageDecoderAndReader, error) {
 		return nil, err
 	}
 
-	log.Debug("dial remote peer success").Str("from", cr.localId.Str()).Str("to", cr.peerID.Str()).
+	log.Info("dial remote peer success").Str("from", cr.localId.Str()).Str("to", cr.peerID.Str()).
 		Str("address", cr.peerIp).Record()
 
 	return &messageDecoderAndReader{Conn}, nil

@@ -27,8 +27,7 @@ func TestStoppableListener_Accept(t *testing.T) {
 			}
 		}
 	}()
-	time.Sleep(5 * time.Second)
-
+	time.Sleep(1 * time.Second)
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Errorf("Failed to connect to listener: %v", err)
@@ -43,7 +42,7 @@ func TestStoppableListener_Accept(t *testing.T) {
 
 	conn, err = net.Dial("tcp", addr)
 	if err != nil {
-		t.Errorf("Failed to connect to listener: %v", err)
+		t.Logf("Failed to connect to listener: %v", err)
 	}
-	assert.NotEqual(t, err, nil)
+	assert.NotEqual(t, nil, err)
 }
