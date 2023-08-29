@@ -19,6 +19,7 @@ func TestStoppableListener_Accept(t *testing.T) {
 
 	go func() {
 		for {
+			time.Sleep(1 * time.Millisecond)
 			_, err := ln.Accept()
 			if err != nil {
 				if strings.Contains(err.Error(), "server stopped") {
