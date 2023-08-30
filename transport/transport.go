@@ -15,11 +15,11 @@ import (
 
 type RaftTransport interface {
 	Process(m *pb.Message) error
-	IsIDRemoved(id uint64) bool
 	ReportUnreachable(id uint64)
 	ReportSnapshotStatus(id uint64, status raft.SnapshotStatus)
 }
 
+//go:generate mockgen -source=./transport.go -destination=./mocks/transport.go -package=mock
 type Transporter interface {
 	ListenPeerAttachConn(localIp string)
 
@@ -64,7 +64,7 @@ func (t *Transport) AddPeer(peerID types.ID, peerIp string) {
 	receiveC := make(chan *pb.Message, recvBufSize)
 	peerStatus := newPeerStatus(peerID)
 	streamReader := startStreamReader(t.LocalID, peerID, peerStatus, t.Raft, t.ErrorC, receiveC, peerIp)
-	streamWriter := startStreamWriter(t.LocalID, peerID, peerStatus, t.Raft, t.ErrorC)
+	streamWriter := startStreamWriter(t.LocalID, peerID, peerStatus, t.Raft, t.ErrorC, peerIp)
 	p := &peer{
 		localID:      t.LocalID,
 		remoteID:     peerID,
@@ -76,26 +76,25 @@ func (t *Transport) AddPeer(peerID types.ID, peerIp string) {
 		recvC:        receiveC,
 		stopc:        t.StopC,
 	}
-	p.handleReceiveC()
+	go p.handleReceiveC()
 	t.Peers[peerID] = p
-	log.Info("added remote peer success").Str(code.LocalId, t.LocalID.Str()).Str(code.RemoteId, peerID.Str()).Record()
+	log.Info("add remote peer success").Str(code.LocalId, t.LocalID.Str()).Str(code.RemoteId, peerID.Str()).Record()
 }
 
 func (t *Transport) ListenPeerAttachConn(localIp string) {
-	log.Debugf("start app server node id: &s listening", t.LocalID)
 	listener, err := NewStoppableListener(localIp, t.StopC)
 	if err != nil {
 		return
 	}
+	log.Info("start listening").Str("local id", t.LocalID.Str()).Str("addr", localIp).Record()
 	for {
 	flag:
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Panic("Accept tcp err").Record()
+			log.Error("Accept tcp err").Record()
 		}
 
 		remoteAddr := strings.Split(conn.RemoteAddr().String(), ":")
-		log.Debugf("Get conn remote addr = ", remoteAddr)
 
 		for _, v := range t.Peers {
 			p := v.(*peer)

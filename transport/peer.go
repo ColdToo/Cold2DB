@@ -55,18 +55,16 @@ type peer struct {
 }
 
 func (p *peer) handleReceiveC() {
-	go func() {
-		for {
-			select {
-			case mm := <-p.recvC:
-				if err := p.raft.Process(mm); err != nil {
-					log.Warn("failed to process Raft message").Err(code.MessageProcErr, err)
-				}
-			case <-p.stopc:
-				return
+	for {
+		select {
+		case mm := <-p.recvC:
+			if err := p.raft.Process(mm); err != nil {
+				log.Warn("failed to process Raft message").Err(code.MessageProcErr, err)
 			}
+		case <-p.stopc:
+			return
 		}
-	}()
+	}
 }
 
 func (p *peer) Send(m *pb.Message) {

@@ -216,8 +216,6 @@ func (an *AppNode) Process(m *pb.Message) error {
 	return an.raftNode.Step(m)
 }
 
-func (an *AppNode) IsIDRemoved(id uint64) bool { return false }
-
 func (an *AppNode) ReportUnreachable(id uint64) { an.raftNode.ReportUnreachable(id) }
 
 func (an *AppNode) ReportSnapshotStatus(id uint64, status raft.SnapshotStatus) {

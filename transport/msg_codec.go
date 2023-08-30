@@ -77,10 +77,10 @@ func (pkg *Package) PackToBinary() ([]byte, error) {
 	return dataBuff.Bytes(), nil
 }
 
-func GetPack(rc io.Reader) (pkg Package, err error) {
+func GetPack(rc io.ReadCloser) (pkg Package, err error) {
 	headData := make([]byte, HeaderLength)
 	if _, err := io.ReadFull(rc, headData); err != nil {
-		log.Debugf("read msg head error ", err)
+		return pkg, err
 	}
 	dataBuff := bytes.NewReader(headData)
 	err = binary.Read(dataBuff, binary.LittleEndian, &pkg.DataLen)

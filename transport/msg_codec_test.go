@@ -75,6 +75,7 @@ func TestDataPack(t *testing.T) {
 					pbmsg, err := dec.decodeAndRead()
 					if err != nil {
 						t.Log(err)
+						continue
 					}
 					if pbmsg.Index == message1.Index {
 						assert.Equal(t, pbmsg, message1)

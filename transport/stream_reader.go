@@ -5,6 +5,7 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 	types "github.com/ColdToo/Cold2DB/transport/types"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -45,12 +46,15 @@ func (cr *streamReader) run() {
 	for {
 		m, err := cr.enc.decodeAndRead()
 		if err != nil {
-			log.Errorf("failed read from conn", err)
-			cr.dial()
-			continue
+			if strings.Contains(err.Error(), "EOF") {
+				continue
+			} else {
+				log.Errorf("failed read from conn", err)
+				cr.dial()
+				continue
+			}
 		}
 		cr.receiveC <- &m
-
 		select {
 		case <-cr.stopC:
 			return

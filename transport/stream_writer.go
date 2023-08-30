@@ -31,11 +31,12 @@ type streamWriter struct {
 	errorC chan error
 }
 
-func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport, errorC chan error) *streamWriter {
+func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport, errorC chan error, peerIp string) *streamWriter {
 	w := &streamWriter{
 		localID: local,
 		peerID:  id,
 		status:  status,
+		peerIp:  peerIp,
 		r:       r,
 		msgC:    make(chan *pb.Message, streamBufSize),
 		connC:   make(chan io.WriteCloser),
@@ -49,8 +50,8 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport, 
 
 func (cw *streamWriter) run() {
 	var msgC chan *pb.Message
-	log.Info("started stream writer with remote peer").Str(code.LocalId, cw.localID.Str()).
-		Str(code.RemoteId, cw.peerID.Str()).Record()
+	log.Info("started stream writer run").Str(code.LocalId, cw.localID.Str()).
+		Str(code.RemoteId, cw.peerID.Str()).Str(code.RemoteIp, cw.peerIp).Record()
 	for {
 		select {
 		case m := <-msgC:
