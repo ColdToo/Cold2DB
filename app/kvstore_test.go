@@ -42,7 +42,6 @@ func TestKvStore_Propose_OK(t *testing.T) {
 			delete := true
 			expiredAt := time.Now().UnixNano()
 
-			flagC := make(chan bool, 1)
 			if tt.name == "ok" {
 				go func() {
 					result, _ := kvStore.Propose(key, val, delete, expiredAt)
@@ -55,7 +54,7 @@ func TestKvStore_Propose_OK(t *testing.T) {
 				for _, v := range kvStore.monitorKV {
 					close(v)
 				}
-				time.Sleep(2 * time.Second)
+				time.Sleep(3 * time.Second)
 			}
 		})
 	}
