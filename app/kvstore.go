@@ -12,17 +12,22 @@ type KV = logfile.KV
 
 type KvStore struct {
 	db         db.DB
-	proposeC   chan<- []byte           // channel for proposing updates
-	monitorKV  map[int64]chan struct{} //todo 使用这方式会不会导致内存过大
+	proposeC   chan<- []byte            // channel for proposing updates
+	monitorKV  map[uint64]chan struct{} // todo 使用这种方式会不会导致内存过大
 	ReqTimeout time.Duration
 }
 
-func NewKVStore(proposeC chan<- []byte) *KvStore {
+func NewKVStore(proposeC chan<- []byte, requestTimeOut int) *KvStore {
 	cold2DB, err := db.GetDB()
 	if err != nil {
 		log.Panicf("get db failed %s", err.Error())
 	}
-	s := &KvStore{db: cold2DB, proposeC: proposeC}
+	s := &KvStore{
+		db:         cold2DB,
+		proposeC:   proposeC,
+		monitorKV:  make(map[uint64]chan struct{}),
+		ReqTimeout: time.Duration(requestTimeOut) * time.Second,
+	}
 	return s
 }
 
@@ -32,7 +37,7 @@ func (s *KvStore) Lookup(key []byte) ([]byte, error) {
 
 func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
 	timeOutC := time.NewTimer(s.ReqTimeout)
-	uid := time.Now().UnixNano()
+	uid := uint64(time.Now().UnixNano())
 	kv := &KV{
 		Id:        uid,
 		Key:       key,
@@ -42,7 +47,7 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	if delete {
 		kv.Type = logfile.TypeDelete
 	}
-	buf, _ := kv.GobEncode()
+	buf, _ := logfile.GobEncode(kv)
 	s.proposeC <- buf
 
 	sig := make(chan struct{})

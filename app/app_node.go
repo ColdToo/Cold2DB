@@ -162,7 +162,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 
 	var kv KV
 	walEntries := make([]logfile.WalEntry, len(entries))
-	walEntriesId := make([]int64, 0)
+	walEntriesId := make([]uint64, 0)
 	for _, entry := range entries {
 		kv, err = logfile.GobDecode(entry.Data)
 		if err != nil {

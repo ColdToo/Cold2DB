@@ -11,14 +11,14 @@ func main() {
 	config.InitConfig()
 	log.InitLog(config.GetZapConf())
 	db.InitDB(config.GetDBConf())
-	log.Info("start success").Record()
 
 	localIpAddr, localId, peerUrl := config.GetLocalInfo()
-	proposeC := make(chan []byte)
+	raftConfig := config.GetRaftConf()
+	proposeC := make(chan []byte, raftConfig.RequestLimit)
 	confChangeC := make(chan pb.ConfChange)
 	kvApiStopC := make(chan struct{})
 
-	kvStore := NewKVStore(proposeC)
-	StartAppNode(localId, peerUrl, proposeC, confChangeC, kvApiStopC, kvStore, config.GetRaftConf(), localIpAddr)
+	kvStore := NewKVStore(proposeC, raftConfig.RequestTimeout)
+	StartAppNode(localId, peerUrl, proposeC, confChangeC, kvApiStopC, kvStore, raftConfig, localIpAddr)
 	ServeHttpKVAPI(kvStore, localIpAddr, confChangeC, kvApiStopC)
 }

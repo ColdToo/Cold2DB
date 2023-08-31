@@ -1,9 +1,11 @@
 package config
 
 type RaftConfig struct {
-	ElectionTick  int
-	HeartbeatTick int
-	Nodes         []Node `yaml:"nodes"`
+	ElectionTick   int
+	HeartbeatTick  int
+	RequestLimit   int
+	RequestTimeout int
+	Nodes          []Node `yaml:"nodes"`
 }
 
 type Node struct {
