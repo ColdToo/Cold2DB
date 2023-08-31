@@ -43,7 +43,6 @@ func TestKvStore_Propose_OK(t *testing.T) {
 		close(v)
 	}
 	time.Sleep(3 * time.Second)
-
 }
 
 func TestKvStore_Propose_TimeOut(t *testing.T) {
