@@ -12,14 +12,6 @@ const (
 	SnapshotFailure SnapshotStatus = 2
 )
 
-// Message is a struct that contains a raft Message and a ReadCloser. The type
-// of raft message MUST be MsgSnap, which contains the raft meta-data and an
-// additional data []byte field that contains the snapshot of the actual state
-// machine.
-// Message contains the ReadCloser field for handling large snapshot. This avoid
-// copying the entire snapshot into a byte array, which consumes a lot of memory.
-//
-// User of Message should close the Message after sending it.
 type Message struct {
 	pb.Message
 	ReadCloser io.ReadCloser
@@ -35,9 +27,6 @@ func NewMessage(rs pb.Message, rc io.ReadCloser, rcSize int64) *Message {
 	}
 }
 
-// CloseNotify returns a channel that receives a single value
-// when the message sent is finished. true indicates the sent
-// is successful.
 func (m Message) CloseNotify() <-chan bool {
 	return m.closeC
 }

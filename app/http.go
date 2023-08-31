@@ -2,10 +2,11 @@ package main
 
 import (
 	"encoding/json"
-	"github.com/ColdToo/Cold2DB/log"
-	"github.com/ColdToo/Cold2DB/pb"
 	"io/ioutil"
 	"net/http"
+
+	"github.com/ColdToo/Cold2DB/log"
+	"github.com/ColdToo/Cold2DB/pb"
 )
 
 const (
@@ -39,12 +40,13 @@ func ServeHttpKVAPI(kvStore *KvStore, Addr string, confChangeC chan<- pb.ConfCha
 		if err := srv.ListenAndServe(); err != nil {
 			log.Fatal(err.Error())
 		}
-		<-doneC
-		close(srv.Handler.(*HttpKVAPI).confChangeC)
-		if err := srv.Shutdown(nil); err != nil {
-			log.Fatal(err.Error())
-		}
 	}()
+
+	<-doneC
+	close(srv.Handler.(*HttpKVAPI).confChangeC)
+	if err := srv.Shutdown(nil); err != nil {
+		log.Fatal(err.Error())
+	}
 }
 
 func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -53,10 +55,11 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == GET:
-		if v, err := h.store.Lookup([]byte(key)); err != nil {
-			w.Write(v)
-		} else {
+		v, err := ioutil.ReadAll(r.Body)
+		if v, err = h.store.Lookup(v); err != nil {
 			http.Error(w, "Failed to GET", http.StatusNotFound)
+		} else {
+			w.Write(v)
 		}
 
 	case r.Method == PUT:
@@ -75,7 +78,6 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case r.Method == DELETE:
-		//todo 支持批量delete
 		ok, err := h.store.Propose([]byte(key), nil, true, 0)
 		if err != nil {
 			return
@@ -85,7 +87,6 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		//更改节点配置相关
-
 	case r.Method == POST:
 		v, err := ioutil.ReadAll(r.Body)
 		if err != nil {
@@ -98,11 +99,7 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.NodeUpdate(nodeInfo, w)
 
 	default:
-		w.Header().Set("Allow", "PUT")
-		w.Header().Add("Allow", "GET")
-		w.Header().Add("Allow", "POST")
-		w.Header().Add("Allow", "DELETE")
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, "Method not allowed,Only support put、get、post、delete", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -122,6 +119,6 @@ func (h *HttpKVAPI) NodeUpdate(updateInfo *UpdateNodeInfo, w http.ResponseWriter
 		}
 	}
 	h.confChangeC <- cc
-	//todo 配置变更成功后才返回
+	// todo 配置变更成功后才应该返回
 	w.WriteHeader(http.StatusNoContent)
 }

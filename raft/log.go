@@ -5,7 +5,7 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
-// log structure
+//  log structure
 //
 //	snapshot/first.................. applied............ committed.............last
 //	--------|--------mem-table----------|--------------memory-entries-----------|

@@ -11,7 +11,8 @@ import (
 
 // MaxHeaderSize max entry header size.
 // crc32   kSize	vSize
-//  4    +   2   +   2       = 8
+//
+//	4    +   2   +   2       = 8
 const (
 	KeySize       = 2
 	ValSize       = 2
@@ -30,16 +31,18 @@ const (
 )
 
 type KV struct {
-	Id        int64
+	Type      EntryType
+	Id        uint64
+	ExpiredAt int64
 	Key       []byte
 	Value     []byte
-	Type      EntryType
-	ExpiredAt int64
 }
 
-func (k KV) GobEncode() ([]byte, error) {
+func GobEncode(KV any) ([]byte, error) {
 	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(k); err != nil {
+	err := gob.NewEncoder(&buf).Encode(KV)
+	if err != nil {
+		log.Errorf("encode err:", err)
 		return nil, err
 	}
 	return buf.Bytes(), nil
@@ -62,7 +65,6 @@ type entryHeader struct {
 }
 
 func decodeHeader(buf []byte) (*entryHeader, int64) {
-	// 重构
 	if len(buf) <= 4 {
 		return nil, 0
 	}
@@ -109,7 +111,8 @@ type WalEntry struct {
 // |  crc  | key size | value size | expiredAt |  index  |   term  |   type  |  key  |  value  |
 // +-------+----------+------------+-----------+---------+---------+---------+-------+---------+
 // |---------------HEADER----------|----------------------------VALUE--------------------------|
-//         |--------------------------crc check------------------------------------------------|
+//
+// |--------------------------crc check--------------------------------------------------------|
 func (e *WalEntry) EncodeWalEntry() ([]byte, int) {
 	if e == nil {
 		return nil, 0
@@ -153,12 +156,12 @@ func (e *WalEntry) EncodeMemEntry() []byte {
 
 func (e *WalEntry) TransToPbEntry() (pbEnt *pb.Entry) {
 	kv := KV{
-		Key:       e.Key,
-		Value:     e.Value,
+		Key: e.Key,
+		//Value:     e.Value,
 		Type:      e.Type,
 		ExpiredAt: e.ExpiredAt,
 	}
-	buf, _ := kv.GobEncode()
+	buf, _ := GobEncode(kv)
 	pbEnt = &pb.Entry{
 		Index: e.Index,
 		Term:  e.Term,
@@ -192,7 +195,8 @@ type LogEntry struct {
 // |  crc  | key size | value size | expiredAt |  index  |   term  |   type  |  key  |  value  |
 // +-------+----------+------------+-----------+---------+---------+---------+-------+---------+
 // |---------------HEADER----------|----------------------------VALUE--------------------------|
-//         |--------------------------crc check------------------------------------------------|
+//
+//	|--------------------------crc check------------------------------------------------|
 func EncodeLogEntry(e *LogEntry) ([]byte, int) {
 	if e == nil {
 		return nil, 0

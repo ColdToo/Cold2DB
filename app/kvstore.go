@@ -20,22 +20,14 @@ type KvStore struct {
 func NewKVStore(proposeC chan<- []byte) *KvStore {
 	cold2DB, err := db.GetDB()
 	if err != nil {
-		log.Panicf("get db failed", err)
+		log.Panicf("get db failed %s", err.Error())
 	}
 	s := &KvStore{db: cold2DB, proposeC: proposeC}
 	return s
 }
 
 func (s *KvStore) Lookup(key []byte) ([]byte, error) {
-	val, err := s.db.Get(key)
-	if err != nil {
-		return nil, err
-	}
-	return val, nil
-}
-
-func (s *KvStore) Scan(lowKey, highKey []byte) ([]byte, error) {
-	return nil, nil
+	return s.db.Get(key)
 }
 
 func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
@@ -65,6 +57,10 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	}
 }
 
-func (s *KvStore) BatchPropose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
-	return false, nil
+func (s *KvStore) BatchPropose() {
+	return
+}
+
+func (s *KvStore) Scan(lowKey, highKey []byte) ([][]byte, error) {
+	return nil, nil
 }

@@ -21,9 +21,9 @@ type AppNode struct {
 	raftNode  *raft.RaftNode
 	transport transport.Transporter
 
-	proposeC    chan []byte        // 提议 (k,v)
-	confChangeC chan pb.ConfChange // 提议更改配置文件
-	kvApiStopC  chan struct{}      // 关闭http服务器的信号
+	proposeC    chan []byte        // 提议 (k,v) channel
+	confChangeC chan pb.ConfChange // 提议更改配置文件 channel
+	kvApiStopC  chan struct{}      // 关闭http服务器的信号 channel
 }
 
 func StartAppNode(localId int, peersUrl []string, proposeC chan []byte, confChangeC chan pb.ConfChange,
@@ -114,12 +114,13 @@ func (an *AppNode) serveRaftNode(heartbeatTick int) {
 			//通知raftNode本轮ready已经处理完可以进行下一轮处理
 			an.raftNode.Advance()
 
-			//如果发现致命错误需要停止服务
+			//如果网络层发现致命错误需要停止服务
 		case err := <-an.transport.GetErrorC():
 			log.Panicf("transport get critical err", err)
 			an.stop()
 			return
 
+			//如果网络层发现致命错误需要停止服务
 		case err := <-an.raftNode.ErrorC:
 			log.Panicf("raftNode get critical err", err)
 			an.stop()
