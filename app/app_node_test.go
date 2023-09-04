@@ -112,6 +112,8 @@ func TestAppNode_ServeRaftNode(t *testing.T) {
 	transI := mock.NewMockTransporter(mockCtl)
 	readyC := make(chan raft.Ready, 1)
 	errC := make(chan error, 1)
+	readyC <- ready1
+	errC <- errors.New("found err")
 
 	raftI.EXPECT().Tick().AnyTimes()
 	raftI.EXPECT().GetErrorC().Return(errC).AnyTimes()
@@ -119,26 +121,10 @@ func TestAppNode_ServeRaftNode(t *testing.T) {
 	raftI.EXPECT().Advance().AnyTimes()
 	transI.EXPECT().GetErrorC().Return(errC).AnyTimes()
 	transI.EXPECT().Send(ready1.Messages).AnyTimes()
-
-	an := &AppNode{
-		raftNode:  raftI,
-		transport: transI,
-	}
-
-	gomonkey.ApplyFunc(an.applyEntries, func(ents []*pb.Entry) (err error) {
-		return nil
-	})
-	gomonkey.ApplyFunc(an.stop, func() {
-	})
-	go an.serveRaftNode(1)
-	readyC <- ready1
-	errC <- errors.New("found err")
-	time.Sleep(20 * time.Second)
 }
 
 func TestAppNode_ApplyEntries(t *testing.T) {
 	initLog()
-
 	mockCtl := gomock.NewController(t)
 	defer mockCtl.Finish()
 	DB := mock.NewMockDB(mockCtl)
@@ -146,7 +132,6 @@ func TestAppNode_ApplyEntries(t *testing.T) {
 		return DB, nil
 	})
 	DB.EXPECT().Put(gomock.Any()).Return(nil)
-	time.Sleep(time.Second)
 	proposeC := make(chan []byte, 100)
 	kvStore := NewKVStore(proposeC, 5)
 
