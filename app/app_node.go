@@ -18,7 +18,7 @@ type AppNode struct {
 	peersUrl []string
 
 	kvStore   *KvStore
-	raftNode  *raft.RaftNode
+	raftNode  raft.RaftLayer
 	transport transport.Transporter
 
 	proposeC    chan []byte        // 提议 (k,v) channel
@@ -81,14 +81,14 @@ func (an *AppNode) servePropCAndConfC() {
 		case prop := <-an.proposeC:
 			err := an.raftNode.Propose(prop)
 			if err != nil {
-				return
+				log.Errorf("propose err", err)
 			}
 		case cc := <-an.confChangeC:
 			confChangeCount++
 			cc.ID = confChangeCount
 			err := an.raftNode.ProposeConfChange(cc)
 			if err != nil {
-				return
+				log.Errorf("propose conf err", err)
 			}
 		}
 	}
@@ -103,8 +103,8 @@ func (an *AppNode) serveRaftNode(heartbeatTick int) {
 		case <-ticker.C:
 			an.raftNode.Tick()
 
-		case rd := <-an.raftNode.ReadyC:
-			err := an.handleReady(rd)
+		case rd := <-an.raftNode.GetReadyC():
+			err := an.applyEntries(rd.CommittedEntries)
 			if err != nil {
 				log.Errorf("", err)
 			}
@@ -120,8 +120,10 @@ func (an *AppNode) serveRaftNode(heartbeatTick int) {
 			an.stop()
 			return
 
-			//如果网络层发现致命错误需要停止服务
-		case err := <-an.raftNode.ErrorC:
+			//如果Raft层发现致命错误需要停止服务
+
+			//如果raft层发现致命错误需要停止服务
+		case err := <-an.raftNode.GetErrorC():
 			log.Panicf("raftNode get critical err", err)
 			an.stop()
 			return
@@ -129,8 +131,7 @@ func (an *AppNode) serveRaftNode(heartbeatTick int) {
 	}
 }
 
-func (an *AppNode) handleReady(rd raft.Ready) (err error) {
-	ents := rd.CommittedEntries
+func (an *AppNode) applyEntries(ents []*pb.Entry) (err error) {
 	entries := make([]*pb.Entry, len(ents))
 
 	//apply entries
@@ -143,7 +144,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 			entries = append(entries, entry)
 
 		case pb.EntryConfChange:
-			var cc *pb.ConfChange
+			var cc pb.ConfChange
 			cc.Unmarshal(ents[i].Data)
 			an.raftNode.ApplyConfChange(cc)
 			switch cc.Type {
@@ -188,6 +189,7 @@ func (an *AppNode) handleReady(rd raft.Ready) (err error) {
 
 	for _, id := range walEntriesId {
 		close(an.kvStore.monitorKV[id])
+		delete(an.kvStore.monitorKV, id)
 	}
 	return nil
 }

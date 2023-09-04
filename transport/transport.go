@@ -19,7 +19,7 @@ type RaftTransport interface {
 	ReportSnapshotStatus(id uint64, status raft.SnapshotStatus)
 }
 
-//go:generate mockgen -source=./transport.go -destination=./mocks/transport.go -package=mock
+//go:generate mockgen -source=./transport.go -destination=../mocks/transport.go -package=mock
 type Transporter interface {
 	ListenPeerAttachConn(localIp string)
 

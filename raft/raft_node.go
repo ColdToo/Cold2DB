@@ -10,24 +10,19 @@ var ErrStepLocalMsg = errors.New("raft: cannot step raft local message")
 
 var ErrStepPeerNotFound = errors.New("raft: cannot step as peer not found")
 
-type SoftState struct {
-	LeaderID uint64
-	RaftRole Role
-}
-
-type Peer struct {
-	ID      uint64
-	Context []byte
-}
-
-type Ready struct {
-	*SoftState
-
-	pb.HardState
-
-	CommittedEntries []*pb.Entry // 待apply的entry
-
-	Messages []*pb.Message // 待发送给其他节点的message
+//go:generate mockgen -source=./raft_node.go -destination=../mocks/raft_node.go -package=mock
+type RaftLayer interface {
+	Advance()
+	GetReadyC() chan Ready
+	Step(m *pb.Message) error
+	Tick()
+	Propose(buffer []byte) error
+	ProposeConfChange(cc pb.ConfChange) error
+	ApplyConfChange(cc pb.ConfChange)
+	ReportUnreachable(id uint64)
+	GetErrorC() chan error
+	ReportSnapshot(id uint64, status SnapshotStatus)
+	Stop()
 }
 
 type RaftNode struct {
@@ -47,35 +42,55 @@ type RaftNode struct {
 	prevHardSt pb.HardState
 }
 
-func NewRaftNode(config *RaftOpts) (*RaftNode, error) {
+type SoftState struct {
+	LeaderID uint64
+	RaftRole Role
+}
+
+type Peer struct {
+	ID      uint64
+	Context []byte
+}
+
+type Ready struct {
+	SoftState SoftState
+
+	HardState pb.HardState
+
+	CommittedEntries []*pb.Entry // 待apply的entry
+
+	Messages []*pb.Message // 待发送给其他节点的message
+}
+
+func newRaftNode(config *RaftOpts) (*RaftNode, error) {
 	raft, err := NewRaft(config)
 	if err != nil {
 		return nil, err
 	}
 	ReadyC := make(chan Ready)
 	AdvanceC := make(chan struct{})
-	return &RaftNode{Raft: raft, ReadyC: ReadyC, AdvanceC: AdvanceC}, nil
+	rn := &RaftNode{Raft: raft, ReadyC: ReadyC, AdvanceC: AdvanceC}
+	rn.run()
+	return rn, nil
 }
 
-func StartRaftNode(c *RaftOpts, peers []Peer) *RaftNode {
+func StartRaftNode(c *RaftOpts, peers []Peer) RaftLayer {
 	if len(peers) == 0 {
 		panic("no peers given; use RestartNode instead")
 	}
-	rn, err := NewRaftNode(c)
+	rn, err := newRaftNode(c)
 	if err != nil {
 		panic(err)
 	}
-	go rn.run()
 	return rn
 }
 
-func RestartRaftNode(c *RaftOpts) *RaftNode {
+func RestartRaftNode(c *RaftOpts) RaftLayer {
 	//todo restart和start的区别是什么
-	rn, err := NewRaftNode(c)
+	rn, err := newRaftNode(c)
 	if err != nil {
 		panic(err)
 	}
-	go rn.run()
 	return rn
 }
 
@@ -102,6 +117,21 @@ func (rn *RaftNode) Propose(buffer []byte) error {
 		Type:    pb.MsgProp,
 		From:    rn.Raft.id,
 		Entries: ents})
+}
+
+func (rn *RaftNode) Advance() {
+	//appnode处理完一次后需要更新raftlog的first applied
+	rn.Raft.RaftLog.RefreshFirstAndAppliedIndex()
+	//需要将log中的entryies进行裁剪
+	rn.AdvanceC <- struct{}{}
+}
+
+func (rn *RaftNode) GetReadyC() chan Ready {
+	return rn.ReadyC
+}
+
+func (rn *RaftNode) GetErrorC() chan error {
+	return rn.ErrorC
 }
 
 func (rn *RaftNode) newReady() Ready {
@@ -132,7 +162,7 @@ func (rn *RaftNode) newReady() Ready {
 	return rd
 }
 
-func (rn *RaftNode) HasReady() bool {
+func (rn *RaftNode) hasReady() bool {
 	hardState := pb.HardState{
 		Term:    rn.Raft.Term,
 		Vote:    rn.Raft.VoteFor,
@@ -149,13 +179,6 @@ func (rn *RaftNode) HasReady() bool {
 	return false
 }
 
-func (rn *RaftNode) Advance() {
-	//appnode处理完一次后需要更新raftlog的first applied
-	rn.Raft.RaftLog.RefreshFirstAndAppliedIndex()
-	//需要将log中的entryies进行裁剪
-	rn.AdvanceC <- struct{}{}
-}
-
 func (rn *RaftNode) run() {
 	var readyC chan Ready
 	var advanceC chan struct{}
@@ -165,7 +188,7 @@ func (rn *RaftNode) run() {
 		// 应用层通过将advanceC置为nil来标识,如果advanceC
 		if advanceC != nil {
 			readyC = nil
-		} else if rn.HasReady() {
+		} else if rn.hasReady() {
 			rd = rn.newReady()
 			readyC = rn.ReadyC
 		}
@@ -193,14 +216,13 @@ func (rn *RaftNode) run() {
 	}
 }
 
+// 节点变更
 // Campaign todo leaderTransfree
 func (rn *RaftNode) Campaign() error {
 	return rn.Raft.Step(&pb.Message{
 		Type: pb.MsgHup,
 	})
 }
-
-//节点变更
 
 func (rn *RaftNode) TransferLeader(transferee uint64) {
 	_ = rn.Raft.Step(&pb.Message{Type: pb.MsgTransferLeader, From: transferee})
@@ -218,8 +240,8 @@ func (rn *RaftNode) ProposeConfChange(cc pb.ConfChange) error {
 	})
 }
 
-func (rn *RaftNode) ApplyConfChange(cc *pb.ConfChange) *pb.ConfState {
-	return nil
+func (rn *RaftNode) ApplyConfChange(cc pb.ConfChange) {
+	return
 }
 
 //网络层报告接口

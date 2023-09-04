@@ -12,8 +12,8 @@ type KV = logfile.KV
 
 type KvStore struct {
 	db         db.DB
-	proposeC   chan<- []byte            // channel for proposing updates
-	monitorKV  map[uint64]chan struct{} // todo 使用这种方式会不会导致内存过大
+	proposeC   chan<- []byte
+	monitorKV  map[uint64]chan struct{}
 	ReqTimeout time.Duration
 }
 
