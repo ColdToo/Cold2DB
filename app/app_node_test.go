@@ -1,12 +1,17 @@
 package main
 
 import (
+	"errors"
 	"github.com/ColdToo/Cold2DB/config"
+	"github.com/ColdToo/Cold2DB/db"
+	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
 	mock "github.com/ColdToo/Cold2DB/mocks"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"
 )
@@ -102,21 +107,79 @@ func TestAppNode_ServeRaftNode(t *testing.T) {
 	initLog()
 	mockCtl := gomock.NewController(t)
 	defer mockCtl.Finish()
+
 	raftI := mock.NewMockRaftLayer(mockCtl)
 	transI := mock.NewMockTransporter(mockCtl)
-	readyC := make(chan raft.Ready)
-	readyC <- ready1
+	readyC := make(chan raft.Ready, 1)
+	errC := make(chan error, 1)
 
-	raftI.EXPECT().Tick()
-	raftI.EXPECT().GetErrorC().Return(make(chan error))
-	raftI.EXPECT().GetReadyC().Return(readyC)
-	raftI.EXPECT().Advance()
-	transI.EXPECT().GetErrorC().Return(make(chan error))
-	transI.EXPECT().Send(ready1.Messages)
+	raftI.EXPECT().Tick().AnyTimes()
+	raftI.EXPECT().GetErrorC().Return(errC).AnyTimes()
+	raftI.EXPECT().GetReadyC().Return(readyC).AnyTimes()
+	raftI.EXPECT().Advance().AnyTimes()
+	transI.EXPECT().GetErrorC().Return(errC).AnyTimes()
+	transI.EXPECT().Send(ready1.Messages).AnyTimes()
+
 	an := &AppNode{
 		raftNode:  raftI,
 		transport: transI,
 	}
 
-	an.serveRaftNode(1)
+	gomonkey.ApplyFunc(an.applyEntries, func(ents []*pb.Entry) (err error) {
+		return nil
+	})
+	gomonkey.ApplyFunc(an.stop, func() {
+	})
+	go an.serveRaftNode(1)
+	readyC <- ready1
+	errC <- errors.New("found err")
+	time.Sleep(20 * time.Second)
+}
+
+func TestAppNode_ApplyEntries(t *testing.T) {
+	initLog()
+
+	mockCtl := gomock.NewController(t)
+	defer mockCtl.Finish()
+	DB := mock.NewMockDB(mockCtl)
+	gomonkey.ApplyFunc(db.GetDB, func() (db.DB, error) {
+		return DB, nil
+	})
+	DB.EXPECT().Put(gomock.Any()).Return(nil)
+	time.Sleep(time.Second)
+	proposeC := make(chan []byte, 100)
+	kvStore := NewKVStore(proposeC, 5)
+
+	k := KV{
+		Id:        1,
+		Key:       []byte("key"),
+		Value:     []byte("value"),
+		Type:      logfile.TypeDelete,
+		ExpiredAt: 1234567890,
+	}
+
+	encoded, err := logfile.GobEncode(k)
+	assert.NoError(t, err)
+
+	entry := &pb.Entry{
+		Term:  4,
+		Index: 101,
+		Type:  pb.EntryNormal,
+		Data:  encoded,
+	}
+
+	entries := []*pb.Entry{
+		entry,
+	}
+
+	okC := make(chan struct{})
+	kvStore.monitorKV[k.Id] = okC
+	an := &AppNode{
+		kvStore: kvStore,
+	}
+
+	an.applyEntries(entries)
+
+	<-okC
+	t.Log("apply success")
 }

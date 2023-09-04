@@ -104,6 +104,7 @@ func (an *AppNode) serveRaftNode(heartbeatTick int) {
 			an.raftNode.Tick()
 
 		case rd := <-an.raftNode.GetReadyC():
+			log.Infof("start handle ready %v", rd.HardState)
 			err := an.applyEntries(rd.CommittedEntries)
 			if err != nil {
 				log.Errorf("", err)
@@ -113,14 +114,13 @@ func (an *AppNode) serveRaftNode(heartbeatTick int) {
 
 			//通知raftNode本轮ready已经处理完可以进行下一轮处理
 			an.raftNode.Advance()
+			log.Infof("handle ready success %v", rd.HardState)
 
 			//如果网络层发现致命错误需要停止服务
 		case err := <-an.transport.GetErrorC():
 			log.Panicf("transport get critical err", err)
 			an.stop()
 			return
-
-			//如果Raft层发现致命错误需要停止服务
 
 			//如果raft层发现致命错误需要停止服务
 		case err := <-an.raftNode.GetErrorC():
@@ -132,7 +132,7 @@ func (an *AppNode) serveRaftNode(heartbeatTick int) {
 }
 
 func (an *AppNode) applyEntries(ents []*pb.Entry) (err error) {
-	entries := make([]*pb.Entry, len(ents))
+	entries := make([]*pb.Entry, 0)
 
 	//apply entries
 	for i, entry := range ents {
@@ -225,6 +225,7 @@ func (an *AppNode) ReportSnapshotStatus(id uint64, status raft.SnapshotStatus) {
 	an.raftNode.ReportSnapshot(id, status)
 }
 
+// todo 关闭整个raft服务,回收相关资源
 func (an *AppNode) stop() {
 	an.transport.Stop()
 	an.raftNode.Stop()

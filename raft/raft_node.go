@@ -38,7 +38,7 @@ type RaftNode struct {
 	done   chan struct{}
 	stop   chan struct{}
 
-	prevSoftSt *SoftState
+	prevSoftSt SoftState
 	prevHardSt pb.HardState
 }
 
