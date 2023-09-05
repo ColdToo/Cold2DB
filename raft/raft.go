@@ -34,6 +34,8 @@ type RaftOpts struct {
 type Raft struct {
 	id uint64
 
+	LeaderID uint64
+
 	Term uint64
 
 	VoteFor uint64
@@ -53,8 +55,6 @@ type Raft struct {
 
 	// 需要发送给其他节点的的消息
 	msgs []*pb.Message
-
-	LeaderID uint64
 
 	heartbeatTimeout int
 

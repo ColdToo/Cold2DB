@@ -18,7 +18,6 @@ func max(a, b uint64) uint64 {
 	return b
 }
 
-// IsEmptyHardState returns true if the given HardState is empty.
 func IsEmptyHardState(st pb.HardState) bool {
 	return isHardStateEqual(st, pb.HardState{})
 }

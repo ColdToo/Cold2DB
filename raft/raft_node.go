@@ -27,7 +27,9 @@ type RaftLayer interface {
 type RaftNode struct {
 	Raft *Raft
 
-	recvC chan pb.Message
+	prevSoftSt SoftState
+	prevHardSt pb.HardState
+
 	confC chan pb.ConfChange
 
 	ReadyC   chan Ready
@@ -36,9 +38,6 @@ type RaftNode struct {
 	ErrorC chan error
 	done   chan struct{}
 	stop   chan struct{}
-
-	prevSoftSt SoftState
-	prevHardSt pb.HardState
 }
 
 type SoftState struct {
@@ -146,6 +145,9 @@ func (rn *RaftNode) newReady() Ready {
 	return rd
 }
 
+// 1、需要持久化的状态有改变
+// 2、有待applied的entries
+// 3、有待发送给其他节点的msg
 func (rn *RaftNode) hasReady() bool {
 	hardState := pb.HardState{
 		Term:    rn.Raft.Term,
@@ -153,11 +155,13 @@ func (rn *RaftNode) hasReady() bool {
 		Applied: rn.Raft.RaftLog.applied,
 	}
 
-	//硬状态有改变、有待applied的entries、有待发送给其他节点的msg
 	if !IsEmptyHardState(hardState) && !isHardStateEqual(rn.prevHardSt, hardState) {
 		return true
 	}
-	if len(rn.Raft.msgs) > 0 || rn.Raft.RaftLog.hasNextApplyEnts() {
+	if len(rn.Raft.msgs) > 0 {
+		return true
+	}
+	if rn.Raft.RaftLog.hasNextApplyEnts() {
 		return true
 	}
 	return false
