@@ -2,7 +2,6 @@ package raft
 
 import (
 	"errors"
-	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
@@ -86,7 +85,6 @@ func StartRaftNode(c *RaftOpts, peers []Peer) RaftLayer {
 }
 
 func RestartRaftNode(c *RaftOpts) RaftLayer {
-	//todo restart和start的区别是什么
 	rn, err := newRaftNode(c)
 	if err != nil {
 		panic(err)
@@ -99,13 +97,7 @@ func (rn *RaftNode) Tick() {
 }
 
 func (rn *RaftNode) Step(m *pb.Message) error {
-	if IsLocalMsg(m.Type) {
-		return ErrStepLocalMsg
-	}
-	if pr := rn.Raft.Progress[m.From]; pr != nil || !IsResponseMsg(m.Type) {
-		return rn.Raft.Step(m)
-	}
-	return ErrStepPeerNotFound
+	return rn.Raft.Step(m)
 }
 
 // Propose 用于kv请求propose
@@ -120,18 +112,10 @@ func (rn *RaftNode) Propose(buffer []byte) error {
 }
 
 func (rn *RaftNode) Advance() {
-	//appnode处理完一次后需要更新raftlog的first applied
+	//todo appnode处理完一次后需要更新raftlog的first applied
 	rn.Raft.RaftLog.RefreshFirstAndAppliedIndex()
 	//需要将log中的entryies进行裁剪
 	rn.AdvanceC <- struct{}{}
-}
-
-func (rn *RaftNode) GetReadyC() chan Ready {
-	return rn.ReadyC
-}
-
-func (rn *RaftNode) GetErrorC() chan error {
-	return rn.ErrorC
 }
 
 func (rn *RaftNode) newReady() Ready {
@@ -194,15 +178,6 @@ func (rn *RaftNode) run() {
 		}
 
 		select {
-		// todo 网络层获取要处理的message,网络层应该直接通过Propose调用，还是通过该channel进行异步调用？
-		case m := <-rn.recvC:
-			if pr := rn.Raft.Progress[m.From]; pr != nil {
-				err := rn.Raft.Step(&m)
-				if err != nil {
-					log.Errorf("", err)
-				}
-			}
-
 		case readyC <- rd:
 			advanceC = rn.AdvanceC
 
@@ -216,13 +191,15 @@ func (rn *RaftNode) run() {
 	}
 }
 
-// 节点变更
-// Campaign todo leaderTransfree
-func (rn *RaftNode) Campaign() error {
-	return rn.Raft.Step(&pb.Message{
-		Type: pb.MsgHup,
-	})
+func (rn *RaftNode) GetReadyC() chan Ready {
+	return rn.ReadyC
 }
+
+func (rn *RaftNode) GetErrorC() chan error {
+	return rn.ErrorC
+}
+
+// 配置变更
 
 func (rn *RaftNode) TransferLeader(transferee uint64) {
 	_ = rn.Raft.Step(&pb.Message{Type: pb.MsgTransferLeader, From: transferee})
@@ -255,5 +232,5 @@ func (rn *RaftNode) ReportSnapshot(id uint64, status SnapshotStatus) {
 }
 
 func (rn *RaftNode) Stop() {
-
+	// todo 回收raft相关资源
 }

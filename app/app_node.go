@@ -23,11 +23,11 @@ type AppNode struct {
 
 	proposeC    chan []byte        // 提议 (k,v) channel
 	confChangeC chan pb.ConfChange // 提议更改配置文件 channel
-	kvApiStopC  chan struct{}      // 关闭http服务器的信号 channel
+	kvHTTPStopC chan struct{}      // 关闭http服务器的信号 channel
 }
 
 func StartAppNode(localId int, peersUrl []string, proposeC chan []byte, confChangeC chan pb.ConfChange,
-	kvApiStopC chan struct{}, kvStore *KvStore, config *config.RaftConfig, localIp string) {
+	kvHTTPStopC chan struct{}, kvStore *KvStore, config *config.RaftConfig, localIp string) {
 	an := &AppNode{
 		localId:     localId,
 		localIp:     localIp,
@@ -35,7 +35,7 @@ func StartAppNode(localId int, peersUrl []string, proposeC chan []byte, confChan
 		kvStore:     kvStore,
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
-		kvApiStopC:  kvApiStopC,
+		kvHTTPStopC: kvHTTPStopC,
 	}
 
 	an.startRaftNode(config)
@@ -225,12 +225,12 @@ func (an *AppNode) ReportSnapshotStatus(id uint64, status raft.SnapshotStatus) {
 	an.raftNode.ReportSnapshot(id, status)
 }
 
-// todo 关闭整个raft服务,回收相关资源
+// todo 关闭kv存储服务,回收相关资源
 func (an *AppNode) stop() {
 	an.transport.Stop()
 	an.raftNode.Stop()
 	an.kvStore.db.Close()
 	close(an.proposeC)
 	close(an.confChangeC)
-	close(an.kvApiStopC)
+	close(an.kvHTTPStopC)
 }

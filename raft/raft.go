@@ -92,10 +92,9 @@ func NewRaft(c *RaftOpts) (raft *Raft, err error) {
 		return
 	}
 	raft = new(Raft)
-	raft.RaftLog, err = newRaftLog(c.Storage)
 	raft.id = c.ID
-	raft.stepFunc = stepFollower
-	raft.Role = Follower
+	raft.RaftLog, err = newRaftLog(c.Storage)
+	raft.becomeFollower(raft.Term, 0)
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatTimeout = c.HeartbeatTick
 	return

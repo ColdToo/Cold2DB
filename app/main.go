@@ -16,9 +16,9 @@ func main() {
 	raftConfig := config.GetRaftConf()
 	proposeC := make(chan []byte, raftConfig.RequestLimit)
 	confChangeC := make(chan pb.ConfChange)
-	kvApiStopC := make(chan struct{})
+	kvHTTPStopC := make(chan struct{})
 
 	kvStore := NewKVStore(proposeC, raftConfig.RequestTimeout)
-	StartAppNode(localId, peerUrl, proposeC, confChangeC, kvApiStopC, kvStore, raftConfig, localIpAddr)
-	ServeHttpKVAPI(kvStore, localIpAddr, confChangeC, kvApiStopC)
+	StartAppNode(localId, peerUrl, proposeC, confChangeC, kvHTTPStopC, kvStore, raftConfig, localIpAddr)
+	ServeHttpKVAPI(kvStore, localIpAddr, confChangeC, kvHTTPStopC)
 }
