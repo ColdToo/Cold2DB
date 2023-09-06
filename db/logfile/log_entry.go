@@ -20,18 +20,18 @@ const (
 	IndexSize     = 8
 	TermSize      = 8
 	ExpiredAtSize = 8
-	EntryTypeSize = 1
+	KVTypeSize    = 1
 )
 
-// EntryType type of Entry.
-type EntryType byte
+// KVType type of Entry.
+type KVType byte
 
 const (
-	TypeDelete EntryType = iota + 1
+	TypeDelete KVType = iota + 1
 )
 
 type KV struct {
-	Type      EntryType
+	Type      KVType
 	Id        uint64
 	ExpiredAt int64
 	Key       []byte
@@ -58,7 +58,7 @@ func GobDecode(data []byte) (kv KV, err error) {
 
 type entryHeader struct {
 	crc32     uint32 // check sum
-	typ       EntryType
+	typ       KVType
 	kSize     uint32
 	vSize     uint32
 	expiredAt int64 // time.Unix
@@ -70,7 +70,7 @@ func decodeHeader(buf []byte) (*entryHeader, int64) {
 	}
 	h := &entryHeader{
 		crc32: binary.LittleEndian.Uint32(buf[:4]),
-		typ:   EntryType(buf[4]),
+		typ:   KVType(buf[4]),
 	}
 	var index = 5
 	ksize, n := binary.Varint(buf[index:])
@@ -101,7 +101,7 @@ type WalEntry struct {
 	Term      uint64
 	Key       []byte
 	Value     []byte
-	Type      EntryType
+	Type      KVType
 	ExpiredAt int64
 }
 
@@ -125,7 +125,7 @@ func (e *WalEntry) EncodeWalEntry() ([]byte, int) {
 
 	// encode value
 	index += KeySize + ValSize
-	var size = index + len(e.Key) + len(e.Value) + ExpiredAtSize + IndexSize + TermSize + EntryTypeSize
+	var size = index + len(e.Key) + len(e.Value) + ExpiredAtSize + IndexSize + TermSize + KVTypeSize
 	buf := make([]byte, size)
 	copy(buf[:index], header[:])
 	index = size
@@ -133,10 +133,10 @@ func (e *WalEntry) EncodeWalEntry() ([]byte, int) {
 	binary.LittleEndian.PutUint64(buf[index+ExpiredAtSize:], uint64(e.ExpiredAt))
 	binary.LittleEndian.PutUint64(buf[index+ExpiredAtSize+IndexSize:], e.Index)
 	binary.LittleEndian.PutUint64(buf[index+ExpiredAtSize+IndexSize+TermSize:], e.Term)
-	buf[index+ExpiredAtSize+IndexSize+TermSize+EntryTypeSize] = byte(e.Type)
+	buf[index+ExpiredAtSize+IndexSize+TermSize+KVTypeSize] = byte(e.Type)
 
-	copy(buf[index+ExpiredAtSize+IndexSize+TermSize+EntryTypeSize:], e.Key)
-	copy(buf[index+ExpiredAtSize+IndexSize+TermSize+EntryTypeSize+len(e.Key):], e.Value)
+	copy(buf[index+ExpiredAtSize+IndexSize+TermSize+KVTypeSize:], e.Key)
+	copy(buf[index+ExpiredAtSize+IndexSize+TermSize+KVTypeSize+len(e.Key):], e.Value)
 
 	// crc32.
 	crc := crc32.ChecksumIEEE(buf[4:])
@@ -145,12 +145,12 @@ func (e *WalEntry) EncodeWalEntry() ([]byte, int) {
 }
 
 func (e *WalEntry) EncodeMemEntry() []byte {
-	buf := make([]byte, IndexSize+TermSize+ExpiredAtSize+EntryTypeSize+len(e.Value))
+	buf := make([]byte, IndexSize+TermSize+ExpiredAtSize+KVTypeSize+len(e.Value))
 	binary.LittleEndian.PutUint64(buf[:], e.Index)
 	binary.LittleEndian.PutUint64(buf[IndexSize:], e.Term)
 	binary.LittleEndian.PutUint64(buf[IndexSize+TermSize:], uint64(e.ExpiredAt))
 	copy(buf[IndexSize+TermSize+ExpiredAtSize:], string(e.Type))
-	copy(buf[IndexSize+TermSize+ExpiredAtSize+EntryTypeSize:], string(e.Type))
+	copy(buf[IndexSize+TermSize+ExpiredAtSize+KVTypeSize:], string(e.Type))
 	return buf
 }
 
@@ -178,14 +178,14 @@ func DecodeMemEntry(buf []byte) (e *WalEntry) {
 	e.Index = binary.LittleEndian.Uint64(buf[9:13])
 	copy(typ, buf[13:14])
 	copy(e.Value, buf[14:])
-	e.Type = EntryType(typ[0])
+	e.Type = KVType(typ[0])
 	return
 }
 
 type LogEntry struct {
 	Key       []byte
 	Value     []byte
-	Type      EntryType
+	Type      KVType
 	ExpiredAt int64
 }
 

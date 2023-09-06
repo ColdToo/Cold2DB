@@ -19,10 +19,7 @@ const (
 )
 
 type RaftOpts struct {
-	// local raft id
 	ID uint64
-
-	//peers []uint64 //peers ip
 
 	Storage Storage
 
@@ -84,15 +81,12 @@ type Progress struct {
 }
 
 func NewRaft(c *RaftOpts) (raft *Raft, err error) {
-	if err != nil {
-		return
-	}
 	raft = new(Raft)
 	raft.id = c.ID
-	raft.RaftLog = newRaftLog(c.Storage)
-	raft.becomeFollower(raft.Term, 0)
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatTimeout = c.HeartbeatTick
+	raft.RaftLog = newRaftLog(c.Storage)
+	raft.becomeFollower(raft.Term, 0)
 	return
 }
 
@@ -106,36 +100,28 @@ type stepFunc func(r *Raft, m *pb.Message) error
 
 func stepLeader(r *Raft, m *pb.Message) error {
 	switch m.Type {
-	case pb.MsgProp:
-		r.handlePropMsg(m)
 	case pb.MsgBeat:
 		r.bcastHeartbeat()
+	case pb.MsgProp:
+		r.handlePropMsg(m)
 	case pb.MsgHeartbeatResp:
 		r.handleHeartbeatResponse(m)
 	case pb.MsgAppResp:
 		r.handleAppendResponse(m)
 	case pb.MsgVote:
 		r.handleVoteRequest(m)
-
-		//todo 剩下逻辑
-	case pb.MsgSnapStatus:
-	case pb.MsgUnreachable:
-	case pb.MsgTransferLeader:
 	}
 	return nil
 }
 
 func stepFollower(r *Raft, m *pb.Message) error {
 	switch m.Type {
+	case pb.MsgHeartbeat:
+		r.handleHeartbeat(*m)
 	case pb.MsgApp:
 		r.handleAppendEntries(*m)
-	case pb.MsgHeartbeat:
-		r.electionElapsed = 0
-		r.LeaderID = m.From
-		r.handleHeartbeat(*m)
 	case pb.MsgVote:
 		r.handleVoteRequest(m)
-	case pb.MsgSnap:
 	}
 	return nil
 }
@@ -269,8 +255,8 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 	// 目标节点所期望的下一条日志的上一条日志
 	preLogTerm, err := r.RaftLog.Term(preLogIndex)
 	if err != nil {
+		// todo 日志如果被压缩那么需要发送快照
 		if err == ErrCompacted {
-			r.sendSnapshot(to)
 			return err
 		}
 		return err
@@ -317,8 +303,8 @@ func (r *Raft) bcastHeartbeat() {
 	}
 }
 
-// todo 发送心跳时将最新的commited信息也同步给follower节点
 func (r *Raft) sendHeartbeat(to uint64) {
+	// todo 发送心跳时将最新的commited信息也同步给follower节点
 	msg := &pb.Message{
 		Type: pb.MsgBeat,
 		To:   to,
@@ -459,6 +445,21 @@ func (r *Raft) sendVoteResponse(candidate uint64, reject bool) {
 
 // ------------------ follower behavior ------------------
 
+func (r *Raft) handleHeartbeat(m pb.Message) {
+	if m.Term < r.Term {
+		r.sendHeartbeatResponse(m.From, true)
+		return
+	}
+	r.electionElapsed = 0
+	r.LeaderID = m.From
+	r.becomeFollower(m.Term, m.From)
+	// todo 根据leader的committed位置挪动本地节点committed的位置
+	if r.RaftLog.committed > m.Commit {
+		r.RaftLog.committed = m.Commit
+	}
+	r.sendHeartbeatResponse(m.From, false)
+}
+
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	r.electionElapsed = 0
 	if m.Term < r.Term {
@@ -491,21 +492,6 @@ func (r *Raft) sendAppendResponse(to uint64, reject bool) {
 		Index:  r.RaftLog.LastIndex(),
 	}
 	r.msgs = append(r.msgs, msg)
-}
-
-func (r *Raft) handleHeartbeat(m pb.Message) {
-	if m.Term < r.Term {
-		r.sendHeartbeatResponse(m.From, true)
-		return
-	}
-
-	r.becomeFollower(m.Term, m.From)
-	// todo 根据leader的committed位置挪动本地节点committed的位置
-	if r.RaftLog.committed > m.Commit {
-		r.RaftLog.committed = m.Commit
-	}
-
-	r.sendHeartbeatResponse(m.From, false)
 }
 
 func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {

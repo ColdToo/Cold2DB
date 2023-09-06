@@ -60,11 +60,8 @@ func (an *AppNode) startRaftNode(config *config.RaftConfig) {
 		Storage:       an.kvStore.db.(*db.Cold2DB),
 		ElectionTick:  config.ElectionTick,
 		HeartbeatTick: config.HeartbeatTick}
-	if an.IsRestartNode() {
-		an.raftNode = raft.RestartRaftNode(opts)
-	} else {
-		an.raftNode = raft.StartRaftNode(opts, rpeers)
-	}
+
+	an.raftNode = raft.StartRaftNode(opts, rpeers)
 }
 
 func (an *AppNode) IsRestartNode() (flag bool) {
@@ -110,7 +107,9 @@ func (an *AppNode) serveRaftNode() {
 				log.Errorf("", err)
 			}
 
-			an.transport.Send(rd.Messages)
+			if len(rd.Messages) > 0 {
+				an.transport.Send(rd.Messages)
+			}
 
 			//通知raftNode本轮ready已经处理完可以进行下一轮处理
 			an.raftNode.Advance()

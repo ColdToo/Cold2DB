@@ -60,8 +60,8 @@ type Ready struct {
 	Messages []*pb.Message // 待发送给其他节点的message
 }
 
-func newRaftNode(config *RaftOpts) (*RaftNode, error) {
-	raft, err := NewRaft(config)
+func newRaftNode(opt *RaftOpts) (*RaftNode, error) {
+	raft, err := NewRaft(opt)
 	if err != nil {
 		return nil, err
 	}
@@ -73,9 +73,6 @@ func newRaftNode(config *RaftOpts) (*RaftNode, error) {
 }
 
 func StartRaftNode(c *RaftOpts, peers []Peer) RaftLayer {
-	if len(peers) == 0 {
-		panic("no peers given; use RestartNode instead")
-	}
 	rn, err := newRaftNode(c)
 	if err != nil {
 		panic(err)
