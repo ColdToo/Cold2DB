@@ -46,6 +46,18 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 	return 0, ErrUnavailable
 }
 
+func (l *RaftLog) LastIndex() uint64 {
+	return l.last
+}
+
+func (l *RaftLog) AppliedIndex() uint64 {
+	return l.applied
+}
+
+func (l *RaftLog) CommittedIndex() uint64 {
+	return l.committed
+}
+
 func (l *RaftLog) nextApplyEnts() (ents []*pb.Entry) {
 	if len(l.entries) > 0 && l.committed > l.applied {
 		return l.entries[0 : l.committed-l.applied]
@@ -55,10 +67,6 @@ func (l *RaftLog) nextApplyEnts() (ents []*pb.Entry) {
 
 func (l *RaftLog) hasNextApplyEnts() bool {
 	return l.committed > l.applied
-}
-
-func (l *RaftLog) LastIndex() uint64 {
-	return l.last
 }
 
 func (l *RaftLog) AppendEntries(ents []pb.Entry) {

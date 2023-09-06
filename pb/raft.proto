@@ -59,9 +59,10 @@ message Message {
 	optional uint64      index       = 6  [(nullable) = false];
 	repeated Entry       entries     = 7  [(nullable) = false];
 	optional uint64      applied     = 8  [(nullable) = false];
-	optional Snapshot    snapshot    = 9  [(nullable) = false];
-	optional bool        reject      = 10 [(nullable) = false];
-	optional uint64      rejectHint  = 11 [(nullable) = false];
+	optional uint64      committed   = 9  [(nullable) = false];
+	optional Snapshot    snapshot    = 10  [(nullable) = false];
+	optional bool        reject      = 11 [(nullable) = false];
+	optional uint64      rejectHint  = 12 [(nullable) = false];
 }
 
 message HardState {

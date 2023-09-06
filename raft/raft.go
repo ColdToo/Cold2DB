@@ -35,13 +35,10 @@ type Raft struct {
 
 	Term uint64
 
-	VoteFor uint64
-
 	// votes records
-	votes map[uint64]bool
-
-	voteCount int
-
+	VoteFor     uint64
+	votes       map[uint64]bool
+	voteCount   int
 	rejectCount int
 
 	RaftLog *RaftLog
@@ -74,8 +71,6 @@ type Raft struct {
 	electionElapsed int
 }
 
-// match:当前log lastindex
-// next:当前log lastindex+1
 type Progress struct {
 	Match, Next uint64
 }
@@ -102,32 +97,34 @@ func stepLeader(r *Raft, m *pb.Message) error {
 	switch m.Type {
 	case pb.MsgBeat:
 		r.bcastHeartbeat()
-	case pb.MsgProp:
-		r.handlePropMsg(m)
 	case pb.MsgHeartbeatResp:
 		r.handleHeartbeatResponse(m)
+	case pb.MsgProp:
+		r.handlePropMsg(m)
 	case pb.MsgAppResp:
 		r.handleAppendResponse(m)
-	case pb.MsgVote:
-		r.handleVoteRequest(m)
 	}
 	return nil
 }
 
 func stepFollower(r *Raft, m *pb.Message) error {
 	switch m.Type {
+	case pb.MsgHup:
+		r.campaign()
+	case pb.MsgVote:
+		r.handleVoteRequest(m)
 	case pb.MsgHeartbeat:
 		r.handleHeartbeat(*m)
 	case pb.MsgApp:
 		r.handleAppendEntries(*m)
-	case pb.MsgVote:
-		r.handleVoteRequest(m)
 	}
 	return nil
 }
 
 func stepCandidate(r *Raft, m *pb.Message) error {
 	switch m.Type {
+	case pb.MsgHup:
+		r.campaign()
 	case pb.MsgVoteResp:
 		r.handleVoteResponse(*m)
 	case pb.MsgVote:
@@ -160,6 +157,7 @@ func (r *Raft) becomeCandidate() {
 	r.votes = make(map[uint64]bool)
 	r.votes[r.id] = true
 	r.voteCount = 1
+	r.tick = r.tickElection
 	r.resetTick()
 }
 
@@ -210,6 +208,11 @@ func (r *Raft) tickHeartbeat() {
 			return
 		}
 	}
+}
+
+func (r *Raft) campaign() {
+	r.becomeCandidate()
+	r.bcastVoteRequest()
 }
 
 // ------------------- leader behavior -------------------
@@ -304,12 +307,12 @@ func (r *Raft) bcastHeartbeat() {
 }
 
 func (r *Raft) sendHeartbeat(to uint64) {
-	// todo 发送心跳时将最新的commited信息也同步给follower节点
 	msg := &pb.Message{
-		Type: pb.MsgBeat,
-		To:   to,
-		From: r.id,
-		Term: r.Term,
+		Type:   pb.MsgBeat,
+		To:     to,
+		From:   r.id,
+		Term:   r.Term,
+		Commit: r.RaftLog.CommittedIndex(),
 	}
 	r.msgs = append(r.msgs, msg)
 }
@@ -381,12 +384,38 @@ func (r *Raft) bcastVoteRequest() {
 	}
 }
 
-func (r *Raft) handleVoteResponse(m pb.Message) {
-	if m.Term > r.Term {
-		r.becomeFollower(m.Term, r.LeaderID)
-		r.VoteFor = m.From
+func (r *Raft) handleVoteRequest(m *pb.Message) {
+	//如果票已经投给别的节点则拒绝
+	if r.VoteFor != None && r.VoteFor != m.From {
+		r.sendVoteResponse(m.From, true)
+	} else if r.VoteFor != None && r.VoteFor == m.From {
+		r.sendVoteResponse(m.From, false)
+	}
+
+	//applied index是否更新是判断能否成为leader的重要依据
+	appliedIndex := r.RaftLog.AppliedIndex()
+	appliedTerm, _ := r.RaftLog.Term(appliedIndex)
+	if appliedTerm > m.Term && appliedIndex > m.Index {
+		r.sendVoteResponse(m.From, true)
 		return
 	}
+
+	//若applied index和 相同则比较term
+	if r.Term > m.Term {
+		r.sendVoteResponse(m.From, true)
+		return
+	}
+
+	//如果两个节点的term相同那么进入下一轮选举
+	if r.VoteFor == m.From {
+		r.sendVoteResponse(m.From, true)
+	}
+
+	r.becomeFollower(m.Term, m.From)
+	r.sendVoteResponse(m.From, false)
+}
+
+func (r *Raft) handleVoteResponse(m pb.Message) {
 	if !m.Reject {
 		r.votes[m.From] = true
 		r.voteCount += 1
@@ -399,37 +428,6 @@ func (r *Raft) handleVoteResponse(m pb.Message) {
 	} else if r.rejectCount > len(r.Progress)/2 {
 		r.becomeFollower(r.Term, r.LeaderID)
 	}
-}
-
-func (r *Raft) handleVoteRequest(m *pb.Message) {
-	if r.Term > m.Term {
-		r.sendVoteResponse(m.From, true)
-		return
-	}
-
-	//若不是follower变为follower再进行处理
-	if !r.isFollower() && m.Term > r.Term {
-		r.becomeFollower(r.Term, r.LeaderID)
-	}
-
-	//如果已经投给别的节点则拒绝
-	if r.VoteFor != None && r.VoteFor != m.From {
-		r.sendVoteResponse(m.From, true)
-	}
-
-	if r.VoteFor == m.From {
-		r.sendVoteResponse(m.From, true)
-	}
-
-	appliedTerm, _ := r.RaftLog.Term(r.RaftLog.applied)
-	//比较applied index 的大小 todo  是否还需要比较其他东西？
-	if r.VoteFor == None && (appliedTerm > m.LogTerm) {
-		r.sendVoteResponse(m.From, false)
-		return
-	}
-
-	r.resetRealElectionTimeout()
-	r.sendVoteResponse(m.From, true)
 }
 
 func (r *Raft) sendVoteResponse(candidate uint64, reject bool) {
@@ -446,13 +444,8 @@ func (r *Raft) sendVoteResponse(candidate uint64, reject bool) {
 // ------------------ follower behavior ------------------
 
 func (r *Raft) handleHeartbeat(m pb.Message) {
-	if m.Term < r.Term {
-		r.sendHeartbeatResponse(m.From, true)
-		return
-	}
 	r.electionElapsed = 0
 	r.LeaderID = m.From
-	r.becomeFollower(m.Term, m.From)
 	// todo 根据leader的committed位置挪动本地节点committed的位置
 	if r.RaftLog.committed > m.Commit {
 		r.RaftLog.committed = m.Commit
@@ -495,6 +488,7 @@ func (r *Raft) sendAppendResponse(to uint64, reject bool) {
 }
 
 func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
+	//todo 告知目前follower的commit applied 进度
 	msg := &pb.Message{
 		Type:   pb.MsgHeartbeatResp,
 		From:   r.id,

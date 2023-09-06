@@ -38,14 +38,14 @@ func StartAppNode(localId int, peersUrl []string, proposeC chan []byte, confChan
 		kvHTTPStopC: kvHTTPStopC,
 	}
 
+	// 完成当前节点与集群中其他节点之间的网络连接
+	an.servePeerRaft()
+	// 启动Raft算法层
 	an.startRaftNode(config)
-
-	// 启动一个goroutine,处理节点变更以及日志提议
-	go an.servePropCAndConfC()
 	// 启动一个goroutine,处理appLayer与raftLayer的交互
 	go an.serveRaftNode()
-	// 启动一个goroutine,监听当前节点与集群中其他节点之间的网络连接
-	go an.servePeerRaft()
+	// 启动一个goroutine,处理节点变更以及日志提议
+	go an.servePropCAndConfC()
 
 	return
 }
@@ -66,6 +66,25 @@ func (an *AppNode) startRaftNode(config *config.RaftConfig) {
 
 func (an *AppNode) IsRestartNode() (flag bool) {
 	return an.kvStore.db.IsRestartNode()
+}
+
+func (an *AppNode) servePeerRaft() {
+	an.transport = &transport.Transport{
+		LocalID:   types.ID(an.localId),
+		ClusterID: 0x1000,
+		Raft:      an,
+		ErrorC:    make(chan error),
+		Peers:     make(map[types.ID]transport.Peer),
+		StopC:     make(chan struct{}),
+	}
+
+	go an.transport.ListenPeerAttachConn(an.localIp)
+
+	for i := range an.peersUrl {
+		if i+1 != an.localId {
+			an.transport.AddPeer(types.ID(i+1), an.peersUrl[i])
+		}
+	}
 }
 
 func (an *AppNode) servePropCAndConfC() {
@@ -191,25 +210,6 @@ func (an *AppNode) applyEntries(ents []*pb.Entry) (err error) {
 		delete(an.kvStore.monitorKV, id)
 	}
 	return nil
-}
-
-func (an *AppNode) servePeerRaft() {
-	an.transport = &transport.Transport{
-		LocalID:   types.ID(an.localId),
-		ClusterID: 0x1000,
-		Raft:      an,
-		ErrorC:    make(chan error),
-		Peers:     make(map[types.ID]transport.Peer),
-		StopC:     make(chan struct{}),
-	}
-
-	for i := range an.peersUrl {
-		if i+1 != an.localId {
-			an.transport.AddPeer(types.ID(i+1), an.peersUrl[i])
-		}
-	}
-
-	go an.transport.ListenPeerAttachConn(an.localIp)
 }
 
 // Process Rat网络层接口,网络层通过该接口与RaftNode交互
