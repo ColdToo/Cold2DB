@@ -56,6 +56,16 @@ type Raft struct {
 	// 需要发送给其他节点的的消息
 	msgs []*pb.Message
 
+	//不同角色指向不同的stepFunc
+	stepFunc stepFunc
+
+	//不同角色指向不同的tick驱动函数
+	tick func()
+
+	//heartbeat interval是leader发送心跳的间隔时间。
+	//election timeout是follower多久没收到心跳要重新选举的时间。
+	//etcd默认heartbeat interval是100ms，election timeout是[1000,2000]ms。
+	//heartbeat interval一般小于election timeout。
 	heartbeatTimeout int
 
 	electionTimeout int
@@ -65,20 +75,6 @@ type Raft struct {
 	heartbeatElapsed int
 
 	electionElapsed int
-
-	// 有更适合当master的节点，比如说有更高的负载，更好的网络条件。
-	leadTransferee uint64
-
-	//不同角色指向不同的stepFunc
-	stepFunc stepFunc
-
-	//不同角色指向不同的tick驱动函数
-	tick func()
-
-	//Check Quorum 是针对这种情况：当 Leader 被网络分区的时，其他实例已经选举出了新的 Leader，旧 Leader 不能收到新 Leader 的消息，
-	//这时它自己不能发现自己已不是 Leader。Check Quorum 机制可以帮助 Leader 主动发现这种情况：在electionTimeOut过期的时候检查Quorum，
-	//发现自己不能与多数节点保持正常通信时，及时退为 Follower
-	checkQuorum bool
 }
 
 // match:当前log lastindex
@@ -131,13 +127,6 @@ func stepLeader(r *Raft, m *pb.Message) error {
 
 func stepFollower(r *Raft, m *pb.Message) error {
 	switch m.Type {
-	// todo 应该设计一个负载均衡的组件直接将提议发送给leader，而不是在follower这里转发给leader？
-	case pb.MsgProp:
-		if r.LeaderID == None {
-			log.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
-			return errors.New(code.ErrProposalDropped)
-		}
-		m.To = r.LeaderID
 	case pb.MsgApp:
 		r.handleAppendEntries(*m)
 	case pb.MsgHeartbeat:
@@ -147,7 +136,6 @@ func stepFollower(r *Raft, m *pb.Message) error {
 	case pb.MsgVote:
 		r.handleVoteRequest(m)
 	case pb.MsgSnap:
-
 	}
 	return nil
 }
@@ -164,44 +152,16 @@ func stepCandidate(r *Raft, m *pb.Message) error {
 	return nil
 }
 
-func (r *Raft) tickElection() {
-	r.electionElapsed++
-	if r.electionElapsed >= r.electionTimeout {
-		r.electionElapsed = 0
-		err := r.Step(&pb.Message{From: r.id, Type: pb.MsgHup})
-		if err != nil {
-			log.Error("msg").Err(code.TickErr, err).Record()
-			return
-		}
-	}
-}
-
-func (r *Raft) tickHeartbeat() {
-	if r.Role != Leader {
-		log.Panic("only leader can increase beat").Record()
-		return
-	}
-	r.heartbeatElapsed++
-	if r.heartbeatElapsed >= r.heartbeatTimeout {
-		r.heartbeatElapsed = 0
-		err := r.Step(&pb.Message{From: r.id, Type: pb.MsgBeat})
-		if err != nil {
-			log.Error("msg").Err(code.TickErr, err).Record()
-			return
-		}
-	}
-}
-
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	log.Debugf("%v become follower", r.id)
 	r.Role = Follower
 	r.Term = term
-	r.stepFunc = stepFollower
 	r.LeaderID = lead
 	r.votes = nil
 	r.voteCount = 0
 	r.rejectCount = 0
-	r.leadTransferee = None
+	r.stepFunc = stepFollower
+	r.tick = r.tickElection
 	r.resetTick()
 }
 
@@ -218,10 +178,11 @@ func (r *Raft) becomeCandidate() {
 }
 
 func (r *Raft) becomeLeader() {
+	log.Debugf("%v become leader", r.id)
 	r.Role = Leader
 	r.LeaderID = r.id
 	r.stepFunc = stepLeader
-	r.RaftLog.committed = 0
+	r.tick = r.tickHeartbeat
 	for _, v := range r.Progress {
 		v.Match = 0
 		v.Next = r.RaftLog.LastIndex() + 1 //因为不知道其他节点的目前日志的一个状态，默认同步
@@ -239,6 +200,30 @@ func (r *Raft) becomeLeader() {
 	r.RaftLog.AppendEntries(entries)
 	r.bcastAppendEntries()
 	r.updateCommit()
+}
+
+func (r *Raft) tickElection() {
+	r.electionElapsed++
+	if r.electionElapsed >= r.realElectionTimeout {
+		r.electionElapsed = 0
+		err := r.Step(&pb.Message{From: r.id, Type: pb.MsgHup})
+		if err != nil {
+			log.Error("msg").Err(code.TickErr, err).Record()
+			return
+		}
+	}
+}
+
+func (r *Raft) tickHeartbeat() {
+	r.heartbeatElapsed++
+	if r.heartbeatElapsed >= r.heartbeatTimeout {
+		r.heartbeatElapsed = 0
+		err := r.Step(&pb.Message{From: r.id, Type: pb.MsgBeat})
+		if err != nil {
+			log.Error("msg").Err(code.TickErr, err).Record()
+			return
+		}
+	}
 }
 
 // ------------------- leader behavior -------------------
@@ -332,7 +317,7 @@ func (r *Raft) bcastHeartbeat() {
 	}
 }
 
-// todo 发送心跳的时候是否也可以将commited信息同步给fowller节点？
+// todo 发送心跳时将最新的commited信息也同步给follower节点
 func (r *Raft) sendHeartbeat(to uint64) {
 	msg := &pb.Message{
 		Type: pb.MsgBeat,
@@ -363,27 +348,11 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 	r.updateCommit()
 }
 
-// todo hearbeat response是否应该也携带一部分消息传递给follower
 func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
 	if m.Term > r.Term {
 		r.becomeFollower(m.Term, None)
 		return
 	}
-}
-
-func (r *Raft) sendSnapshot(to uint64) {
-	snap, err := r.RaftLog.storage.GetSnapshot()
-	if err != nil {
-		return
-	}
-	r.msgs = append(r.msgs, &pb.Message{
-		Type:     pb.MsgSnap,
-		From:     r.id,
-		To:       to,
-		Term:     r.Term,
-		Snapshot: snap,
-	})
-	r.Progress[to].Next = snap.Metadata.Index + 1
 }
 
 func (r *Raft) updateCommit() {
@@ -464,14 +433,6 @@ func (r *Raft) handleVoteRequest(m *pb.Message) {
 
 	if r.VoteFor == m.From {
 		r.sendVoteResponse(m.From, true)
-	}
-
-	if r.isMoreUpToDateThan(m.LogTerm, m.Index) {
-		if r.Term < m.Term {
-			r.becomeFollower(m.Term, None)
-		}
-		r.sendVoteResponse(m.From, true)
-		return
 	}
 
 	appliedTerm, _ := r.RaftLog.Term(r.RaftLog.applied)
@@ -591,12 +552,4 @@ func (r *Raft) resetTick() {
 
 func (r *Raft) resetRealElectionTimeout() {
 	r.realElectionTimeout = r.electionTimeout + rand.Intn(r.electionTimeout)
-}
-
-func (r *Raft) isMoreUpToDateThan(logTerm, index uint64) bool {
-	lastTerm, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
-	if lastTerm > logTerm || (lastTerm == logTerm && r.RaftLog.LastIndex() > index) {
-		return true
-	}
-	return false
 }

@@ -32,8 +32,6 @@ func newRaftLog(storage Storage) *RaftLog {
 	return &RaftLog{storage: storage, first: firstIndex, applied: appliedIndex, entries: emptyEntS}
 }
 
-//todo entries 逻辑需要重新判断
-
 // Term 根据index返回term,如果raft log中没有那么就从mem table中获取,如果mem table也获取不到那么说明这条日志已经被compact了,此时需要传输快照
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	if i > l.applied {

@@ -43,7 +43,7 @@ func StartAppNode(localId int, peersUrl []string, proposeC chan []byte, confChan
 	// 启动一个goroutine,处理节点变更以及日志提议
 	go an.servePropCAndConfC()
 	// 启动一个goroutine,处理appLayer与raftLayer的交互
-	go an.serveRaftNode(config.HeartbeatTick)
+	go an.serveRaftNode()
 	// 启动一个goroutine,监听当前节点与集群中其他节点之间的网络连接
 	go an.servePeerRaft()
 
@@ -94,8 +94,8 @@ func (an *AppNode) servePropCAndConfC() {
 	}
 }
 
-func (an *AppNode) serveRaftNode(heartbeatTick int) {
-	ticker := time.NewTicker(time.Duration(heartbeatTick) * time.Millisecond)
+func (an *AppNode) serveRaftNode() {
+	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 
 	for {
