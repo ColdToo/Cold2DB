@@ -213,8 +213,7 @@ func (an *AppNode) servePeerRaft() {
 	go an.transport.ListenPeerAttachConn(an.localIp)
 }
 
-//  Rat网络层接口,网络层通过该接口与RaftNode交互
-
+// Process Rat网络层接口,网络层通过该接口与RaftNode交互
 func (an *AppNode) Process(m *pb.Message) error {
 	return an.raftNode.Step(m)
 }

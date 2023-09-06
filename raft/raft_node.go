@@ -91,15 +91,12 @@ func RestartRaftNode(c *RaftOpts) RaftLayer {
 	return rn
 }
 
-func (rn *RaftNode) Tick() {
-	rn.Raft.tick()
-}
-
+// Step 网络层通过该方法处理message信息
 func (rn *RaftNode) Step(m *pb.Message) error {
 	return rn.Raft.Step(m)
 }
 
-// Propose 用于kv请求propose
+// Propose 用于kv请求提议
 func (rn *RaftNode) Propose(buffer []byte) error {
 	ent := pb.Entry{Data: buffer}
 	ents := make([]pb.Entry, 0)
@@ -110,10 +107,27 @@ func (rn *RaftNode) Propose(buffer []byte) error {
 		Entries: ents})
 }
 
+// ProposeConfChange 用于配置变更信息处理
+func (rn *RaftNode) ProposeConfChange(cc pb.ConfChange) error {
+	data, err := cc.Marshal()
+	if err != nil {
+		return err
+	}
+	ent := pb.Entry{Type: pb.EntryConfChange, Data: data}
+	return rn.Raft.Step(&pb.Message{
+		Type:    pb.MsgProp,
+		Entries: []pb.Entry{ent},
+	})
+}
+
+func (rn *RaftNode) Tick() {
+	rn.Raft.tick()
+}
+
 func (rn *RaftNode) Advance() {
-	//todo appnode处理完一次后需要更新raftlog的first applied
+	// 每当appNode处理完一次ready后需要更新raftlog的first applied
 	rn.Raft.RaftLog.RefreshFirstAndAppliedIndex()
-	//需要将log中的entryies进行裁剪
+	//需要将log中的entries进行裁剪
 	rn.AdvanceC <- struct{}{}
 }
 
@@ -207,18 +221,6 @@ func (rn *RaftNode) GetErrorC() chan error {
 
 func (rn *RaftNode) TransferLeader(transferee uint64) {
 	_ = rn.Raft.Step(&pb.Message{Type: pb.MsgTransferLeader, From: transferee})
-}
-
-func (rn *RaftNode) ProposeConfChange(cc pb.ConfChange) error {
-	data, err := cc.Marshal()
-	if err != nil {
-		return err
-	}
-	ent := pb.Entry{Type: pb.EntryConfChange, Data: data}
-	return rn.Raft.Step(&pb.Message{
-		Type:    pb.MsgProp,
-		Entries: []pb.Entry{ent},
-	})
 }
 
 func (rn *RaftNode) ApplyConfChange(cc pb.ConfChange) {

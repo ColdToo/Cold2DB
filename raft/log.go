@@ -25,14 +25,28 @@ type RaftLog struct {
 	storage Storage
 }
 
-func newRaftLog(storage Storage) (*RaftLog, error) {
+func newRaftLog(storage Storage) *RaftLog {
 	firstIndex := storage.FirstIndex()
 	appliedIndex := storage.AppliedIndex()
-	emptyEntsS := make([]*pb.Entry, 0)
-	return &RaftLog{storage: storage, first: firstIndex, applied: appliedIndex, entries: emptyEntsS}, nil
+	emptyEntS := make([]*pb.Entry, 0)
+	return &RaftLog{storage: storage, first: firstIndex, applied: appliedIndex, entries: emptyEntS}
 }
 
 //todo entries 逻辑需要重新判断
+
+// Term 根据index返回term,如果raft log中没有那么就从mem table中获取,如果mem table也获取不到那么说明这条日志已经被compact了,此时需要传输快照
+func (l *RaftLog) Term(i uint64) (uint64, error) {
+	if i > l.applied {
+		return l.entries[i-l.applied].Index, nil
+	} else {
+		term, err := l.storage.Term(i)
+		if err != nil {
+			return term, err
+		}
+	}
+
+	return 0, ErrUnavailable
+}
 
 func (l *RaftLog) nextApplyEnts() (ents []*pb.Entry) {
 	if len(l.entries) > 0 && l.committed > l.applied {
@@ -49,24 +63,11 @@ func (l *RaftLog) LastIndex() uint64 {
 	return l.last
 }
 
-// Term 根据index返回term,如果raft log中没有那么就从mem table中获取,如果mem table也获取不到那么说明这条日志已经被compact了
-func (l *RaftLog) Term(i uint64) (uint64, error) {
-	if i > l.applied {
-		return l.entries[i-l.applied].Index, nil
-	} else {
-		term, err := l.storage.Term(i)
-		if err != nil {
-			return term, err
-		}
-	}
-
-	return 0, ErrUnavailable
-}
-
 func (l *RaftLog) AppendEntries(ents []pb.Entry) {
 	for _, e := range ents {
 		l.entries = append(l.entries, &e)
 	}
+	//todo 更新last
 }
 
 func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
@@ -98,6 +99,7 @@ func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
 }
 
 func (l *RaftLog) RefreshFirstAndAppliedIndex() {
+	// todo 使用锁来保证first
 	l.first = l.storage.FirstIndex()
 	l.applied = l.storage.AppliedIndex()
 }

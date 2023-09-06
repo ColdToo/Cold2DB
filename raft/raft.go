@@ -93,7 +93,7 @@ func NewRaft(c *RaftOpts) (raft *Raft, err error) {
 	}
 	raft = new(Raft)
 	raft.id = c.ID
-	raft.RaftLog, err = newRaftLog(c.Storage)
+	raft.RaftLog = newRaftLog(c.Storage)
 	raft.becomeFollower(raft.Term, 0)
 	raft.electionTimeout = c.ElectionTick
 	raft.heartbeatTimeout = c.HeartbeatTick
