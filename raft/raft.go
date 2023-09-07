@@ -41,7 +41,7 @@ type Raft struct {
 	voteCount   int
 	rejectCount int
 
-	RaftLog *RaftLog
+	RaftLog Log
 
 	Progress map[uint64]*Progress
 
@@ -290,7 +290,7 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 		LogTerm: preLogTerm,
 		Index:   preLogIndex,
 		Entries: sendEntries,
-		Commit:  r.RaftLog.committed,
+		Commit:  r.RaftLog.CommittedIndex(),
 	}
 
 	r.msgs = append(r.msgs, msg)
@@ -346,7 +346,7 @@ func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
 
 func (r *Raft) updateCommit() {
 	commitUpdated := false
-	for i := r.RaftLog.committed; i <= r.RaftLog.LastIndex(); i += 1 {
+	for i := r.RaftLog.CommittedIndex(); i <= r.RaftLog.LastIndex(); i += 1 {
 		matchCnt := 0
 		for _, p := range r.Progress {
 			if p.Match >= i {
@@ -355,8 +355,8 @@ func (r *Raft) updateCommit() {
 		}
 
 		term, _ := r.RaftLog.Term(i)
-		if matchCnt > len(r.Progress)/2 && term == r.Term && r.RaftLog.committed != i {
-			r.RaftLog.committed = i
+		if matchCnt > len(r.Progress)/2 && term == r.Term && r.RaftLog.CommittedIndex() != i {
+			r.RaftLog.SetCommittedIndex(i)
 			commitUpdated = true
 		}
 	}
@@ -365,10 +365,72 @@ func (r *Raft) updateCommit() {
 	}
 }
 
+// ------------------ follower behavior ------------------
+
+func (r *Raft) handleHeartbeat(m pb.Message) {
+	r.electionElapsed = 0
+	r.LeaderID = m.From
+	// todo 根据leader的committed位置挪动本地节点committed的位置
+	if r.RaftLog.CommittedIndex() > m.Commit {
+		//r.RaftLog.CommittedIndex() = m.Commit
+	}
+	r.sendHeartbeatResponse(m.From, false)
+}
+
+func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
+	logTerm, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
+	msg := &pb.Message{
+		Type:    pb.MsgHeartbeatResp,
+		From:    r.id,
+		To:      to,
+		Term:    r.Term,
+		Reject:  reject,
+		Index:   r.RaftLog.LastIndex(),
+		LogTerm: logTerm,
+		Commit:  r.RaftLog.CommittedIndex(),
+		Applied: r.RaftLog.AppliedIndex(),
+	}
+	r.msgs = append(r.msgs, msg)
+}
+
+func (r *Raft) handleAppendEntries(m pb.Message) {
+	r.electionElapsed = 0
+	if m.Term < r.Term {
+		r.sendAppendResponse(m.From, true)
+		return
+	}
+	r.LeaderID = m.From
+
+	//检查日志是否匹配
+	term, err := r.RaftLog.Term(m.Index)
+	if err != nil || term != m.LogTerm {
+		r.sendAppendResponse(m.From, true)
+		return
+	}
+
+	if len(m.Entries) > 0 {
+		r.RaftLog.AppendEntries(m.Entries)
+	}
+
+	r.sendAppendResponse(m.From, false)
+}
+
+func (r *Raft) sendAppendResponse(to uint64, reject bool) {
+	msg := &pb.Message{
+		Type:   pb.MsgAppResp,
+		From:   r.id,
+		To:     to,
+		Term:   r.Term,
+		Reject: reject,
+		Index:  r.RaftLog.LastIndex(),
+	}
+	r.msgs = append(r.msgs, msg)
+}
+
 // ------------------ candidate behavior ------------------
 
 func (r *Raft) bcastVoteRequest() {
-	appliedTerm, _ := r.RaftLog.Term(r.RaftLog.applied)
+	appliedTerm, _ := r.RaftLog.Term(r.RaftLog.AppliedIndex())
 	for peer := range r.Progress {
 		if peer != r.id {
 			msg := &pb.Message{
@@ -377,7 +439,7 @@ func (r *Raft) bcastVoteRequest() {
 				To:      peer,
 				Term:    r.Term,
 				LogTerm: appliedTerm,
-				Index:   r.RaftLog.applied,
+				Index:   r.RaftLog.AppliedIndex(),
 			}
 			r.msgs = append(r.msgs, msg)
 		}
@@ -439,75 +501,6 @@ func (r *Raft) sendVoteResponse(candidate uint64, reject bool) {
 		Reject: reject,
 	}
 	r.msgs = append(r.msgs, msg)
-}
-
-// ------------------ follower behavior ------------------
-
-func (r *Raft) handleHeartbeat(m pb.Message) {
-	r.electionElapsed = 0
-	r.LeaderID = m.From
-	// todo 根据leader的committed位置挪动本地节点committed的位置
-	if r.RaftLog.committed > m.Commit {
-		r.RaftLog.committed = m.Commit
-	}
-	r.sendHeartbeatResponse(m.From, false)
-}
-
-func (r *Raft) handleAppendEntries(m pb.Message) {
-	r.electionElapsed = 0
-	if m.Term < r.Term {
-		r.sendAppendResponse(m.From, true)
-		return
-	}
-	r.LeaderID = m.From
-
-	//检查日志是否匹配
-	term, err := r.RaftLog.Term(m.Index)
-	if err != nil || term != m.LogTerm {
-		r.sendAppendResponse(m.From, true)
-		return
-	}
-
-	if len(m.Entries) > 0 {
-		r.RaftLog.AppendEntries(m.Entries)
-	}
-
-	r.sendAppendResponse(m.From, false)
-}
-
-func (r *Raft) sendAppendResponse(to uint64, reject bool) {
-	msg := &pb.Message{
-		Type:   pb.MsgAppResp,
-		From:   r.id,
-		To:     to,
-		Term:   r.Term,
-		Reject: reject,
-		Index:  r.RaftLog.LastIndex(),
-	}
-	r.msgs = append(r.msgs, msg)
-}
-
-func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
-	//todo 告知目前follower的commit applied 进度
-	msg := &pb.Message{
-		Type:   pb.MsgHeartbeatResp,
-		From:   r.id,
-		To:     to,
-		Term:   r.Term,
-		Reject: reject,
-		Index:  r.RaftLog.LastIndex(),
-	}
-	r.msgs = append(r.msgs, msg)
-}
-
-func (r *Raft) handleSnapshot(m pb.Message) {
-	r.electionElapsed = 0
-	r.LeaderID = m.From
-	return
-}
-
-func (r *Raft) handleLeaderTransfer(m pb.Message) {
-	return
 }
 
 // ------------------ public behavior ------------------------

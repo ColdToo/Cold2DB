@@ -130,7 +130,7 @@ func (rn *RaftNode) Advance() {
 
 func (rn *RaftNode) newReady() Ready {
 	rd := Ready{
-		CommittedEntries: rn.Raft.RaftLog.nextApplyEnts(),
+		CommittedEntries: rn.Raft.RaftLog.NextApplyEnts(),
 	}
 	if len(rn.Raft.msgs) > 0 {
 		rd.Messages = rn.Raft.msgs
@@ -146,7 +146,7 @@ func (rn *RaftNode) newReady() Ready {
 	hardState := pb.HardState{
 		Term:    rn.Raft.Term,
 		Vote:    rn.Raft.VoteFor,
-		Applied: rn.Raft.RaftLog.applied,
+		Applied: rn.Raft.RaftLog.AppliedIndex(),
 	}
 	if !isHardStateEqual(rn.prevHardSt, hardState) {
 		rd.HardState = hardState
@@ -163,7 +163,7 @@ func (rn *RaftNode) hasReady() bool {
 	hardState := pb.HardState{
 		Term:    rn.Raft.Term,
 		Vote:    rn.Raft.VoteFor,
-		Applied: rn.Raft.RaftLog.applied,
+		Applied: rn.Raft.RaftLog.AppliedIndex(),
 	}
 
 	if !IsEmptyHardState(hardState) && !isHardStateEqual(rn.prevHardSt, hardState) {
@@ -172,7 +172,7 @@ func (rn *RaftNode) hasReady() bool {
 	if len(rn.Raft.msgs) > 0 {
 		return true
 	}
-	if rn.Raft.RaftLog.hasNextApplyEnts() {
+	if rn.Raft.RaftLog.HasNextApplyEnts() {
 		return true
 	}
 	return false

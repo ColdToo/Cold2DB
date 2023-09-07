@@ -11,6 +11,19 @@ import (
 //	--------|--------mem-table----------|--------------memory-entries-----------|
 //	                   wal
 
+type Log interface {
+	Term(i uint64) (uint64, error)
+	LastIndex() uint64
+	AppliedIndex() uint64
+	SetCommittedIndex(i uint64)
+	CommittedIndex() uint64
+	NextApplyEnts() (ents []*pb.Entry)
+	HasNextApplyEnts() bool
+	AppendEntries(ents []pb.Entry)
+	Entries(low, high uint64) (ents []*pb.Entry, err error)
+	RefreshFirstAndAppliedIndex()
+}
+
 type RaftLog struct {
 	first uint64
 
@@ -25,7 +38,7 @@ type RaftLog struct {
 	storage Storage
 }
 
-func newRaftLog(storage Storage) *RaftLog {
+func newRaftLog(storage Storage) Log {
 	firstIndex := storage.FirstIndex()
 	appliedIndex := storage.AppliedIndex()
 	emptyEntS := make([]*pb.Entry, 0)
@@ -58,14 +71,18 @@ func (l *RaftLog) CommittedIndex() uint64 {
 	return l.committed
 }
 
-func (l *RaftLog) nextApplyEnts() (ents []*pb.Entry) {
+func (l *RaftLog) SetCommittedIndex(i uint64) {
+	l.committed = i
+}
+
+func (l *RaftLog) NextApplyEnts() (ents []*pb.Entry) {
 	if len(l.entries) > 0 && l.committed > l.applied {
 		return l.entries[0 : l.committed-l.applied]
 	}
 	return nil
 }
 
-func (l *RaftLog) hasNextApplyEnts() bool {
+func (l *RaftLog) HasNextApplyEnts() bool {
 	return l.committed > l.applied
 }
 

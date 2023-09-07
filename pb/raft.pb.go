@@ -320,12 +320,13 @@ type Message struct {
 	Index                uint64      `protobuf:"varint,6,opt,name=index" json:"index"`
 	Entries              []Entry     `protobuf:"bytes,7,rep,name=entries" json:"entries"`
 	Commit               uint64      `protobuf:"varint,8,opt,name=commit" json:"commit"`
-	Snapshot             Snapshot    `protobuf:"bytes,9,opt,name=snapshot" json:"snapshot"`
-	Reject               bool        `protobuf:"varint,10,opt,name=reject" json:"reject"`
-	RejectHint           uint64      `protobuf:"varint,11,opt,name=rejectHint" json:"rejectHint"`
-	XXX_NoUnkeyedLiteral struct{}    `json:"-"`
-	XXX_unrecognized     []byte      `json:"-"`
-	XXX_sizecache        int32       `json:"-"`
+	Applied              uint64
+	Snapshot             Snapshot `protobuf:"bytes,9,opt,name=snapshot" json:"snapshot"`
+	Reject               bool     `protobuf:"varint,10,opt,name=reject" json:"reject"`
+	RejectHint           uint64   `protobuf:"varint,11,opt,name=rejectHint" json:"rejectHint"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
 }
 
 func (m *Message) Reset()         { *m = Message{} }
