@@ -321,6 +321,7 @@ type Message struct {
 	Entries              []Entry     `protobuf:"bytes,7,rep,name=entries" json:"entries"`
 	Commit               uint64      `protobuf:"varint,8,opt,name=commit" json:"commit"`
 	Applied              uint64
+	Last                 uint64
 	Snapshot             Snapshot `protobuf:"bytes,9,opt,name=snapshot" json:"snapshot"`
 	Reject               bool     `protobuf:"varint,10,opt,name=reject" json:"reject"`
 	RejectHint           uint64   `protobuf:"varint,11,opt,name=rejectHint" json:"rejectHint"`

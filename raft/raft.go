@@ -236,6 +236,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 
 func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
 	//通过follower的applied index,leader可以将部分满足要求的 committed entry apply 置为applied index
+	// todo follower是否可以携带last字段 leader从而更新commited index
 	if m.Applied < r.RaftLog.CommittedIndex() {
 		// todo 移动applied index 到 preapplied index
 	}
@@ -243,7 +244,6 @@ func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
 }
 
 func (r *Raft) handlePropMsg(m *pb.Message) {
-	// todo last index 是否会被多个协程同时修改
 	lastIndex := r.RaftLog.LastIndex()
 	ents := make([]pb.Entry, 0)
 	for _, e := range m.Entries {
@@ -273,27 +273,26 @@ func (r *Raft) bcastAppendEntries() {
 func (r *Raft) sendAppendEntries(to uint64) error {
 	lastIndex := r.RaftLog.LastIndex()
 
+	// 如果最后一条日志索引>=追随者的nextIndex，才会发送entries
+	if lastIndex < r.Progress[to].Next {
+		return errors.New("dont need to send append message")
+	}
+
 	// 目标节点所期望的下一条日志的上一条日志
 	preLogIndex := r.Progress[to].Next - 1
 
 	// 目标节点所期望的下一条日志的上一条日志
 	preLogTerm, err := r.RaftLog.Term(preLogIndex)
 	if err != nil {
-		// todo 日志如果被压缩那么需要发送快照
+		// 日志如果被压缩那么需要发送快照,说明此时需要的index已经小于applied index了
 		if err == ErrCompacted {
-			return err
+			//todo 开始发送快照
 		}
 		return err
 	}
 
-	// 如果最后一条日志索引>=追随者的nextIndex，才会发送entries
-	if lastIndex < preLogIndex {
-		return errors.New("dont need  to send")
-	}
-
-	// 发送节点需要的entry
-	// nextLog ----- lastLog
-	entries, err := r.RaftLog.Entries(preLogIndex+1, lastIndex)
+	// 发送节点需要的entry nextLog ----- lastLog
+	entries, err := r.RaftLog.Entries(r.Progress[to].Next, lastIndex)
 	if err != nil {
 		return err
 	}
@@ -320,12 +319,7 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 }
 
 func (r *Raft) handleAppendResponse(m *pb.Message) {
-	if m.Term > r.Term {
-		r.becomeFollower(m.Term, None)
-		return
-	}
-
-	//当被follower拒绝时，与follower对齐剩下日志
+	//todo 当被follower拒绝时，与follower对齐剩下日志
 	if m.Reject {
 		log.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d",
 			r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
@@ -335,11 +329,11 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 		r.Progress[m.From].Next = m.Index
 	}
 
-	//todo 当大多数节点认可了一个日志后将该日志置为commited
-	r.updateCommit()
+	//todo 当大多数节点append某个日志后将该日志置为commited,根据follower节点返回的applied index将部分commited index转为preApplied index
+	r.updateCommitIndexAndPreAppliedIndex(m.Applied, m.Index)
 }
 
-func (r *Raft) updateCommit() {
+func (r *Raft) updateCommitIndexAndPreAppliedIndex(last, applied uint64) {
 	commitUpdated := false
 	for i := r.RaftLog.CommittedIndex(); i <= r.RaftLog.LastIndex(); i += 1 {
 		matchCnt := 0
