@@ -122,7 +122,7 @@ func (rn *RaftNode) Tick() {
 }
 
 func (rn *RaftNode) Advance() {
-	// 每当appNode处理完一次ready后需要更新raftlog的first applied
+	// 每当appNode处理完一次ready后需要更新raftlog的first index 和 applied index
 	rn.Raft.RaftLog.RefreshFirstAndAppliedIndex()
 	//需要将log中的entries进行裁剪
 	rn.AdvanceC <- struct{}{}

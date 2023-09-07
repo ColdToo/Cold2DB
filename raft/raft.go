@@ -129,8 +129,6 @@ func stepCandidate(r *Raft, m *pb.Message) error {
 		r.handleVoteResponse(*m)
 	case pb.MsgVote:
 		r.handleVoteRequest(m)
-	case pb.MsgApp:
-		r.handleAppendEntries(*m)
 	}
 	return nil
 }
@@ -153,11 +151,11 @@ func (r *Raft) becomeCandidate() {
 	r.Role = Candidate
 	r.Term += 1
 	r.VoteFor = r.id
-	r.stepFunc = stepCandidate
 	r.votes = make(map[uint64]bool)
 	r.votes[r.id] = true
 	r.voteCount = 1
 	r.tick = r.tickElection
+	r.stepFunc = stepCandidate
 	r.resetTick()
 }
 
@@ -175,7 +173,7 @@ func (r *Raft) becomeLeader() {
 	r.resetTick()
 	entries := make([]pb.Entry, 1)
 
-	// todo 更换leader后是否应该强制让follower节点将raft log memory段空间情况，然后同步applied段的entry
+	// todo 更换leader后强制让follower节点将raft log memory段空间情况，然后同步applied段的entry
 	entries = append(entries, pb.Entry{
 		Type:  pb.EntryNormal,
 		Term:  r.Term,
@@ -216,8 +214,36 @@ func (r *Raft) campaign() {
 }
 
 // ------------------- leader behavior -------------------
+func (r *Raft) bcastHeartbeat() {
+	for peer := range r.Progress {
+		if peer != r.id {
+			r.sendHeartbeat(peer)
+		}
+	}
+}
+
+func (r *Raft) sendHeartbeat(to uint64) {
+	//通过携带的committed信息，follower节点可以知道哪些entry已经被committed
+	msg := &pb.Message{
+		Type:   pb.MsgBeat,
+		To:     to,
+		From:   r.id,
+		Term:   r.Term,
+		Commit: r.RaftLog.CommittedIndex(),
+	}
+	r.msgs = append(r.msgs, msg)
+}
+
+func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
+	//通过follower的applied index,leader可以将部分满足要求的 committed entry apply 置为applied index
+	if m.Applied < r.RaftLog.CommittedIndex() {
+		// todo 移动applied index 到 preapplied index
+	}
+
+}
 
 func (r *Raft) handlePropMsg(m *pb.Message) {
+	// todo last index 是否会被多个协程同时修改
 	lastIndex := r.RaftLog.LastIndex()
 	ents := make([]pb.Entry, 0)
 	for _, e := range m.Entries {
@@ -250,11 +276,6 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 	// 目标节点所期望的下一条日志的上一条日志
 	preLogIndex := r.Progress[to].Next - 1
 
-	// 如果最后一条日志索引>=追随者的nextIndex，才会发送entries
-	if lastIndex < preLogIndex {
-		return errors.New("dont need  to send")
-	}
-
 	// 目标节点所期望的下一条日志的上一条日志
 	preLogTerm, err := r.RaftLog.Term(preLogIndex)
 	if err != nil {
@@ -263,6 +284,11 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 			return err
 		}
 		return err
+	}
+
+	// 如果最后一条日志索引>=追随者的nextIndex，才会发送entries
+	if lastIndex < preLogIndex {
+		return errors.New("dont need  to send")
 	}
 
 	// 发送节点需要的entry
@@ -274,12 +300,7 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 
 	sendEntries := make([]pb.Entry, 0)
 	for _, en := range entries {
-		sendEntries = append(sendEntries, pb.Entry{
-			Type:  en.Type,
-			Term:  en.Term,
-			Index: en.Index,
-			Data:  en.Data,
-		})
+		sendEntries = append(sendEntries, *en)
 	}
 
 	msg := &pb.Message{
@@ -296,25 +317,6 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 	r.msgs = append(r.msgs, msg)
 
 	return nil
-}
-
-func (r *Raft) bcastHeartbeat() {
-	for peer := range r.Progress {
-		if peer != r.id {
-			r.sendHeartbeat(peer)
-		}
-	}
-}
-
-func (r *Raft) sendHeartbeat(to uint64) {
-	msg := &pb.Message{
-		Type:   pb.MsgBeat,
-		To:     to,
-		From:   r.id,
-		Term:   r.Term,
-		Commit: r.RaftLog.CommittedIndex(),
-	}
-	r.msgs = append(r.msgs, msg)
 }
 
 func (r *Raft) handleAppendResponse(m *pb.Message) {
@@ -335,13 +337,6 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 
 	//todo 当大多数节点认可了一个日志后将该日志置为commited
 	r.updateCommit()
-}
-
-func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
-	if m.Term > r.Term {
-		r.becomeFollower(m.Term, None)
-		return
-	}
 }
 
 func (r *Raft) updateCommit() {

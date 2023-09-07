@@ -7,8 +7,8 @@ import (
 
 //  log structure
 //
-//	snapshot/first.................. applied............ committed.............last
-//	--------|--------mem-table----------|--------------memory-entries-----------|
+//	snapshot/first.................. applied......preApplied....... committed.............last
+//	--------|--------mem-table----------|------------------------memory-entries-----------|
 //	                   wal
 
 type Log interface {
@@ -17,17 +17,23 @@ type Log interface {
 	AppliedIndex() uint64
 	SetCommittedIndex(i uint64)
 	CommittedIndex() uint64
+	SetPreAppliedIndex(i uint64)
+	PreAppliedIndex() (i uint64)
+	RefreshFirstAndAppliedIndex()
+
 	NextApplyEnts() (ents []*pb.Entry)
 	HasNextApplyEnts() bool
 	AppendEntries(ents []pb.Entry)
 	Entries(low, high uint64) (ents []*pb.Entry, err error)
-	RefreshFirstAndAppliedIndex()
+	ClearUnAppliedEntries()
 }
 
 type RaftLog struct {
 	first uint64
 
 	applied uint64
+
+	preApplied uint64
 
 	committed uint64
 
@@ -75,6 +81,20 @@ func (l *RaftLog) SetCommittedIndex(i uint64) {
 	l.committed = i
 }
 
+func (l *RaftLog) SetPreAppliedIndex(i uint64) {
+	l.preApplied = i
+}
+
+func (l *RaftLog) PreAppliedIndex() (i uint64) {
+	return l.preApplied
+}
+
+func (l *RaftLog) RefreshFirstAndAppliedIndex() {
+	// todo 使用锁来保证first
+	l.first = l.storage.FirstIndex()
+	l.applied = l.storage.AppliedIndex()
+}
+
 func (l *RaftLog) NextApplyEnts() (ents []*pb.Entry) {
 	if len(l.entries) > 0 && l.committed > l.applied {
 		return l.entries[0 : l.committed-l.applied]
@@ -83,7 +103,7 @@ func (l *RaftLog) NextApplyEnts() (ents []*pb.Entry) {
 }
 
 func (l *RaftLog) HasNextApplyEnts() bool {
-	return l.committed > l.applied
+	return l.preApplied > l.applied
 }
 
 func (l *RaftLog) AppendEntries(ents []pb.Entry) {
@@ -121,8 +141,6 @@ func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
 	return
 }
 
-func (l *RaftLog) RefreshFirstAndAppliedIndex() {
-	// todo 使用锁来保证first
-	l.first = l.storage.FirstIndex()
-	l.applied = l.storage.AppliedIndex()
+func (l *RaftLog) ClearUnAppliedEntries() {
+	l.entries = nil
 }
