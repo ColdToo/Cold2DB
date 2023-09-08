@@ -428,6 +428,7 @@ func (r *Raft) bcastVoteRequest() {
 				Term:    r.Term,
 				LogTerm: appliedTerm,
 				Index:   r.RaftLog.AppliedIndex(),
+				Applied: r.RaftLog.AppliedIndex(),
 			}
 			r.msgs = append(r.msgs, msg)
 		}
@@ -482,11 +483,12 @@ func (r *Raft) handleVoteResponse(m pb.Message) {
 
 func (r *Raft) sendVoteResponse(candidate uint64, reject bool) {
 	msg := &pb.Message{
-		Type:   pb.MsgVoteResp,
-		From:   r.id,
-		To:     candidate,
-		Term:   r.Term,
-		Reject: reject,
+		Type:    pb.MsgVoteResp,
+		From:    r.id,
+		To:      candidate,
+		Term:    r.Term,
+		Applied: r.RaftLog.AppliedIndex(),
+		Reject:  reject,
 	}
 	r.msgs = append(r.msgs, msg)
 }
