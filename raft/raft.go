@@ -134,7 +134,7 @@ func stepCandidate(r *Raft, m *pb.Message) error {
 }
 
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
-	log.Debugf("%v become follower", r.id)
+	log.Infof("%v become follower", r.id)
 	r.Role = Follower
 	r.Term = term
 	r.LeaderID = lead
@@ -147,7 +147,7 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 }
 
 func (r *Raft) becomeCandidate() {
-	log.Debugf("%v become candidate", r.id)
+	log.Infof("%v become candidate", r.id)
 	r.Role = Candidate
 	r.Term += 1
 	r.VoteFor = r.id
@@ -160,7 +160,7 @@ func (r *Raft) becomeCandidate() {
 }
 
 func (r *Raft) becomeLeader() {
-	log.Debugf("%v become leader", r.id)
+	log.Infof("%v become leader", r.id)
 	r.Role = Leader
 	r.LeaderID = r.id
 	r.stepFunc = stepLeader
@@ -169,19 +169,18 @@ func (r *Raft) becomeLeader() {
 		v.Match = 0
 		v.Next = r.RaftLog.LastIndex() + 1 //因为不知道其他节点的目前日志的一个状态，默认同步
 	}
-	// NOTE: Leader should propose a noop entry on its term for sync un applied entries
-	r.resetTick()
-	entries := make([]pb.Entry, 1)
 
-	// todo 更换leader后强制让follower节点将raft log memory段空间情况，然后同步applied段的entry
+	// todo 新leader需要清除其他follower节点的memory区域的entries,以及和其他节点同步wal memory段的applied群
+	entries := make([]pb.Entry, 1)
 	entries = append(entries, pb.Entry{
 		Type:  pb.EntryNormal,
 		Term:  r.Term,
 		Index: r.RaftLog.LastIndex() + 1,
 		Data:  nil})
+
 	r.RaftLog.AppendEntries(entries)
 	r.bcastAppendEntries()
-	r.updateCommit()
+	r.resetTick()
 }
 
 func (r *Raft) tickElection() {
@@ -236,11 +235,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 
 func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
 	//通过follower的applied index,leader可以将部分满足要求的 committed entry apply 置为applied index
-	// todo follower是否可以携带last字段 leader从而更新commited index
-	if m.Applied < r.RaftLog.CommittedIndex() {
-		// todo 移动applied index 到 preapplied index
-	}
-
+	r.updateCommitIndexAndPreAppliedIndex(m.Last, m.Applied)
 }
 
 func (r *Raft) handlePropMsg(m *pb.Message) {
@@ -329,8 +324,8 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 		r.Progress[m.From].Next = m.Index
 	}
 
-	//todo 当大多数节点append某个日志后将该日志置为commited,根据follower节点返回的applied index将部分commited index转为preApplied index
-	r.updateCommitIndexAndPreAppliedIndex(m.Applied, m.Index)
+	//todo 当大多数节点append某个日志后将该日志置为commited,根据follower节点返回的applied last将部分commited index转为preApplied index
+	r.updateCommitIndexAndPreAppliedIndex(m.Last, m.Applied)
 }
 
 func (r *Raft) updateCommitIndexAndPreAppliedIndex(last, applied uint64) {
@@ -357,26 +352,22 @@ func (r *Raft) updateCommitIndexAndPreAppliedIndex(last, applied uint64) {
 // ------------------ follower behavior ------------------
 
 func (r *Raft) handleHeartbeat(m pb.Message) {
-	r.electionElapsed = 0
-	r.LeaderID = m.From
-	// todo 根据leader的committed位置挪动本地节点committed的位置
-	if r.RaftLog.CommittedIndex() > m.Commit {
-		//r.RaftLog.CommittedIndex() = m.Commit
+	//todo 是否会有其他节点传来心跳消息？
+	if r.LeaderID == m.From {
+		r.electionElapsed = 0
+		r.sendHeartbeatResponse(m.From, false)
+		r.updateCommitIndexEntry(m.Commit)
 	}
-	r.sendHeartbeatResponse(m.From, false)
 }
 
 func (r *Raft) sendHeartbeatResponse(to uint64, reject bool) {
-	logTerm, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
 	msg := &pb.Message{
 		Type:    pb.MsgHeartbeatResp,
 		From:    r.id,
 		To:      to,
 		Term:    r.Term,
 		Reject:  reject,
-		Index:   r.RaftLog.LastIndex(),
-		LogTerm: logTerm,
-		Commit:  r.RaftLog.CommittedIndex(),
+		Last:    r.RaftLog.LastIndex(),
 		Applied: r.RaftLog.AppliedIndex(),
 	}
 	r.msgs = append(r.msgs, msg)
@@ -388,9 +379,8 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		r.sendAppendResponse(m.From, true)
 		return
 	}
-	r.LeaderID = m.From
 
-	//检查日志是否匹配
+	//检查日志是否匹配,不匹配需要指出期望的日志
 	term, err := r.RaftLog.Term(m.Index)
 	if err != nil || term != m.LogTerm {
 		r.sendAppendResponse(m.From, true)
@@ -402,18 +392,27 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	}
 
 	r.sendAppendResponse(m.From, false)
+	r.updateCommitIndexEntry(m.Commit)
 }
 
 func (r *Raft) sendAppendResponse(to uint64, reject bool) {
 	msg := &pb.Message{
-		Type:   pb.MsgAppResp,
-		From:   r.id,
-		To:     to,
-		Term:   r.Term,
-		Reject: reject,
-		Index:  r.RaftLog.LastIndex(),
+		Type:    pb.MsgAppResp,
+		From:    r.id,
+		To:      to,
+		Term:    r.Term,
+		Reject:  reject,
+		Applied: r.RaftLog.AppliedIndex(),
+		Index:   r.RaftLog.LastIndex(),
 	}
 	r.msgs = append(r.msgs, msg)
+}
+
+func (r *Raft) updateCommitIndexEntry(commitIndex uint64) {
+	// todo 根据leader的committed位置挪动本地节点committed的位置
+	if r.RaftLog.CommittedIndex() > commitIndex {
+		//r.RaftLog.CommittedIndex() = m.Commit
+	}
 }
 
 // ------------------ candidate behavior ------------------
