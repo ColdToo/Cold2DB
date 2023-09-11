@@ -25,24 +25,15 @@ type RaftLayer interface {
 }
 
 type RaftNode struct {
-	Raft *Raft
-
-	prevSoftSt SoftState
+	Raft       *Raft
 	prevHardSt pb.HardState
+	confC      chan pb.ConfChange
+	ReadyC     chan Ready
 
-	confC chan pb.ConfChange
-
-	ReadyC   chan Ready
 	AdvanceC chan struct{}
-
-	ErrorC chan error
-	done   chan struct{}
-	stop   chan struct{}
-}
-
-type SoftState struct {
-	LeaderID uint64
-	RaftRole Role
+	ErrorC   chan error
+	done     chan struct{}
+	stop     chan struct{}
 }
 
 type Peer struct {
@@ -51,8 +42,6 @@ type Peer struct {
 }
 
 type Ready struct {
-	SoftState SoftState
-
 	HardState pb.HardState
 
 	CommittedEntries []*pb.Entry // 待apply的entry
@@ -132,15 +121,11 @@ func (rn *RaftNode) newReady() Ready {
 	rd := Ready{
 		CommittedEntries: rn.Raft.RaftLog.NextApplyEnts(),
 	}
+
 	if len(rn.Raft.msgs) > 0 {
 		rd.Messages = rn.Raft.msgs
-	}
-
-	//todo 应用层拿soft state干嘛？
-	if rn.prevSoftSt.LeaderID != rn.Raft.LeaderID || rn.prevSoftSt.RaftRole != rn.Raft.Role {
-		rn.prevSoftSt.LeaderID = rn.Raft.LeaderID
-		rn.prevSoftSt.RaftRole = rn.Raft.Role
-		rd.SoftState = rn.prevSoftSt
+		//todo 清空msg防止重复发送，这里会不会出现并发问题
+		rn.Raft.msgs = make([]*pb.Message, 0)
 	}
 
 	hardState := pb.HardState{
@@ -148,18 +133,21 @@ func (rn *RaftNode) newReady() Ready {
 		Vote:    rn.Raft.VoteFor,
 		Applied: rn.Raft.RaftLog.AppliedIndex(),
 	}
+
 	if !isHardStateEqual(rn.prevHardSt, hardState) {
 		rd.HardState = hardState
 	}
 
-	rn.Raft.msgs = make([]*pb.Message, 0)
 	return rd
 }
 
 // 1、需要持久化的状态有改变
 // 2、有待applied的entries
 // 3、有待发送给其他节点的msg
-func (rn *RaftNode) hasReady() bool {
+
+func (rn *RaftNode) Ready() (rd Ready) {
+	rd = Ready{}
+
 	hardState := pb.HardState{
 		Term:    rn.Raft.Term,
 		Vote:    rn.Raft.VoteFor,
@@ -167,15 +155,19 @@ func (rn *RaftNode) hasReady() bool {
 	}
 
 	if !IsEmptyHardState(hardState) && !isHardStateEqual(rn.prevHardSt, hardState) {
-		return true
+		rd.HardState = hardState
 	}
+
 	if len(rn.Raft.msgs) > 0 {
-		return true
+		rd.Messages = rn.Raft.msgs
+		//todo 清空msg防止重复发送，这里会不会出现并发问题
+		rn.Raft.msgs = make([]*pb.Message, 0)
 	}
+
 	if rn.Raft.RaftLog.HasNextApplyEnts() {
-		return true
+		CommittedEntries := rn.Raft.RaftLog.NextApplyEnts()
 	}
-	return false
+	return
 }
 
 func (rn *RaftNode) run() {
@@ -187,8 +179,7 @@ func (rn *RaftNode) run() {
 		// 应用层通过将advanceC置为nil来标识,如果advanceC
 		if advanceC != nil {
 			readyC = nil
-		} else if rn.hasReady() {
-			rd = rn.newReady()
+		} else if rd = rn.Ready(); rd != nil {
 			readyC = rn.ReadyC
 		}
 

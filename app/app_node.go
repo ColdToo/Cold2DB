@@ -121,9 +121,18 @@ func (an *AppNode) serveRaftNode() {
 
 		case rd := <-an.raftNode.GetReadyC():
 			log.Infof("start handle ready %v", rd.HardState)
-			err := an.applyEntries(rd.CommittedEntries)
-			if err != nil {
-				log.Errorf("", err)
+			if len(rd.CommittedEntries) > 0 {
+				err := an.applyEntries(rd.CommittedEntries)
+				if err != nil {
+					log.Errorf("apply entries failed", err)
+				}
+			}
+
+			if !raft.IsEmptyHardState(rd.HardState) {
+				err := an.saveHardState(rd.HardState)
+				if err != nil {
+					log.Errorf("", err)
+				}
 			}
 
 			if len(rd.Messages) > 0 {
@@ -135,12 +144,14 @@ func (an *AppNode) serveRaftNode() {
 			log.Infof("handle ready success %v", rd.HardState)
 
 			//如果网络层发现致命错误需要停止服务
+
 		case err := <-an.transport.GetErrorC():
 			log.Panicf("transport get critical err", err)
 			an.stop()
 			return
 
 			//如果raft层发现致命错误需要停止服务
+
 		case err := <-an.raftNode.GetErrorC():
 			log.Panicf("raftNode get critical err", err)
 			an.stop()
@@ -210,6 +221,10 @@ func (an *AppNode) applyEntries(ents []*pb.Entry) (err error) {
 		delete(an.kvStore.monitorKV, id)
 	}
 	return nil
+}
+
+func (an *AppNode) saveHardState(state pb.HardState) error {
+	return an.kvStore.db.SaveHardState(state)
 }
 
 // Process Rat网络层接口,网络层通过该接口与RaftNode交互

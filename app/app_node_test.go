@@ -18,7 +18,6 @@ import (
 
 var (
 	ready1 = raft.Ready{
-		SoftState: raft.SoftState{},
 		HardState: pb.HardState{},
 		Messages:  []*pb.Message{message1, message2},
 	}

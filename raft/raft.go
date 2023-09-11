@@ -329,6 +329,7 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 }
 
 func (r *Raft) updateCommitIndexAndPreAppliedIndex(last, applied uint64) {
+	//todo 根据大部分节点的next将committed
 	commitUpdated := false
 	for i := r.RaftLog.CommittedIndex(); i <= r.RaftLog.LastIndex(); i += 1 {
 		matchCnt := 0

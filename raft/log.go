@@ -96,9 +96,6 @@ func (l *RaftLog) RefreshFirstAndAppliedIndex() {
 }
 
 func (l *RaftLog) NextApplyEnts() (ents []*pb.Entry) {
-	if len(l.entries) > 0 && l.committed > l.applied {
-		return l.entries[0 : l.committed-l.applied]
-	}
 	return nil
 }
 
