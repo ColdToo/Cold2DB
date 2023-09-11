@@ -38,8 +38,8 @@ type Raft struct {
 	// votes records
 	VoteFor     uint64
 	votes       map[uint64]bool
-	voteCount   int
-	rejectCount int
+	voteCount   int //获取的认可票数
+	rejectCount int //获取的拒绝票数
 
 	RaftLog Log
 
@@ -397,6 +397,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 }
 
 func (r *Raft) sendAppendResponse(to uint64, reject bool) {
+	term, _ := r.RaftLog.Term(r.RaftLog.LastIndex())
 	msg := &pb.Message{
 		Type:    pb.MsgAppResp,
 		From:    r.id,
@@ -405,14 +406,14 @@ func (r *Raft) sendAppendResponse(to uint64, reject bool) {
 		Reject:  reject,
 		Applied: r.RaftLog.AppliedIndex(),
 		Index:   r.RaftLog.LastIndex(),
+		LogTerm: term,
 	}
 	r.msgs = append(r.msgs, msg)
 }
 
-func (r *Raft) updateCommitIndexEntry(commitIndex uint64) {
-	// todo 根据leader的committed位置挪动本地节点committed的位置
-	if r.RaftLog.CommittedIndex() > commitIndex {
-		//r.RaftLog.CommittedIndex() = m.Commit
+func (r *Raft) updateCommitIndexEntry(leaderCommitIndex uint64) {
+	if leaderCommitIndex > r.RaftLog.CommittedIndex() {
+		r.RaftLog.SetCommittedIndex(leaderCommitIndex)
 	}
 }
 
