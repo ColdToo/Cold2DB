@@ -12,7 +12,7 @@ var ErrStepPeerNotFound = errors.New("raft: cannot step as peer not found")
 //go:generate mockgen -source=./raft_node.go -destination=../mocks/raft_node.go -package=mock
 type RaftLayer interface {
 	Advance()
-	GetReadyC() chan Ready
+	GetReadyC() chan *Ready
 	Step(m *pb.Message) error
 	Tick()
 	Propose(buffer []byte) error
@@ -28,7 +28,7 @@ type RaftNode struct {
 	Raft       *Raft
 	prevHardSt pb.HardState
 	confC      chan pb.ConfChange
-	ReadyC     chan Ready
+	ReadyC     chan *Ready
 
 	AdvanceC chan struct{}
 	ErrorC   chan error
@@ -54,14 +54,14 @@ func newRaftNode(opt *RaftOpts) (*RaftNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	ReadyC := make(chan Ready)
+	ReadyC := make(chan *Ready)
 	AdvanceC := make(chan struct{})
 	rn := &RaftNode{Raft: raft, ReadyC: ReadyC, AdvanceC: AdvanceC}
 	rn.run()
 	return rn, nil
 }
 
-func StartRaftNode(c *RaftOpts, peers []Peer) RaftLayer {
+func StartRaftNode(c *RaftOpts) RaftLayer {
 	rn, err := newRaftNode(c)
 	if err != nil {
 		panic(err)
@@ -145,8 +145,8 @@ func (rn *RaftNode) newReady() Ready {
 // 2、有待applied的entries
 // 3、有待发送给其他节点的msg
 
-func (rn *RaftNode) Ready() (rd Ready) {
-	rd = Ready{}
+func (rn *RaftNode) Ready() (rd *Ready) {
+	rd = new(Ready)
 
 	hardState := pb.HardState{
 		Term:    rn.Raft.Term,
@@ -165,15 +165,15 @@ func (rn *RaftNode) Ready() (rd Ready) {
 	}
 
 	if rn.Raft.RaftLog.HasNextApplyEnts() {
-		CommittedEntries := rn.Raft.RaftLog.NextApplyEnts()
+		rd.CommittedEntries = rn.Raft.RaftLog.NextApplyEnts()
 	}
 	return
 }
 
 func (rn *RaftNode) run() {
-	var readyC chan Ready
+	var readyC chan *Ready
 	var advanceC chan struct{}
-	var rd Ready
+	var rd *Ready
 
 	for {
 		// 应用层通过将advanceC置为nil来标识,如果advanceC
@@ -197,7 +197,7 @@ func (rn *RaftNode) run() {
 	}
 }
 
-func (rn *RaftNode) GetReadyC() chan Ready {
+func (rn *RaftNode) GetReadyC() chan *Ready {
 	return rn.ReadyC
 }
 

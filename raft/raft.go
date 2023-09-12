@@ -3,6 +3,7 @@ package raft
 import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/code"
+	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"math/rand"
@@ -26,6 +27,8 @@ type RaftOpts struct {
 	ElectionTick int
 
 	HeartbeatTick int
+
+	Peers []config.Node
 }
 
 type Raft struct {
@@ -43,7 +46,7 @@ type Raft struct {
 
 	RaftLog Log
 
-	Progress map[uint64]*Progress
+	Progress map[uint64]Progress
 
 	Role Role
 
@@ -82,6 +85,11 @@ func NewRaft(c *RaftOpts) (raft *Raft, err error) {
 	raft.heartbeatTimeout = c.HeartbeatTick
 	raft.RaftLog = newRaftLog(c.Storage)
 	raft.becomeFollower(raft.Term, 0)
+	progress := make(map[uint64]Progress)
+	for _, peer := range c.Peers {
+		progress[peer.ID] = Progress{}
+	}
+	raft.Progress = progress
 	return
 }
 
@@ -125,10 +133,10 @@ func stepCandidate(r *Raft, m *pb.Message) error {
 	switch m.Type {
 	case pb.MsgHup:
 		r.campaign()
-	case pb.MsgVoteResp:
-		r.handleVoteResponse(*m)
 	case pb.MsgVote:
 		r.handleVoteRequest(m)
+	case pb.MsgVoteResp:
+		r.handleVoteResponse(*m)
 	}
 	return nil
 }
@@ -314,14 +322,11 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 }
 
 func (r *Raft) handleAppendResponse(m *pb.Message) {
-	//todo 当被follower拒绝时，与follower对齐剩下日志
 	if m.Reject {
-		log.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d",
-			r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
-		r.Progress[m.From].Next = m.RejectHint
+		log.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d", r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
+		//todo 设计一个算法快速找到冲突的日志
 		r.sendAppendEntries(m.From)
 	} else {
-		r.Progress[m.From].Next = m.Index
 	}
 
 	//todo 当大多数节点append某个日志后将该日志置为commited,根据follower节点返回的applied last将部分commited index转为preApplied index
@@ -429,7 +434,6 @@ func (r *Raft) bcastVoteRequest() {
 				To:      peer,
 				Term:    r.Term,
 				LogTerm: appliedTerm,
-				Index:   r.RaftLog.AppliedIndex(),
 				Applied: r.RaftLog.AppliedIndex(),
 			}
 			r.msgs = append(r.msgs, msg)
@@ -447,21 +451,15 @@ func (r *Raft) handleVoteRequest(m *pb.Message) {
 
 	//applied index是否更新是判断能否成为leader的重要依据
 	appliedIndex := r.RaftLog.AppliedIndex()
-	appliedTerm, _ := r.RaftLog.Term(appliedIndex)
-	if appliedTerm > m.Term && appliedIndex > m.Index {
+	if appliedIndex > m.Applied {
 		r.sendVoteResponse(m.From, true)
 		return
 	}
 
-	//若applied index和 相同则比较term
-	if r.Term > m.Term {
+	//若applied index 相同则比较term
+	if r.Term >= m.Term {
 		r.sendVoteResponse(m.From, true)
 		return
-	}
-
-	//如果两个节点的term相同那么进入下一轮选举
-	if r.VoteFor == m.From {
-		r.sendVoteResponse(m.From, true)
 	}
 
 	r.becomeFollower(m.Term, m.From)
@@ -469,7 +467,12 @@ func (r *Raft) handleVoteRequest(m *pb.Message) {
 }
 
 func (r *Raft) handleVoteResponse(m pb.Message) {
-	if !m.Reject {
+	//需要过滤掉重复的投票信息
+	if _, ok := r.votes[m.From]; !ok {
+		return
+	}
+
+	if !m.Reject && !r.votes[m.From] {
 		r.votes[m.From] = true
 		r.voteCount += 1
 	} else {

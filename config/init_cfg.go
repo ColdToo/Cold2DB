@@ -53,14 +53,14 @@ func GetDBConf() *DBConfig {
 	return Conf.DBConfig
 }
 
-func GetLocalInfo() (localIpAddr string, localId int, peerUrl []string) {
+func GetLocalInfo() (localIpAddr string, localId uint64, nodes []Node) {
 	raftConf := Conf.RaftConfig
 	for _, node := range raftConf.Nodes {
 		if strings.Contains(node.EAddr, "127.0.0.1") && strings.Contains(node.IAddr, "127.0.0.1") {
 			localId = node.ID
 			localIpAddr = node.EAddr
 		}
-		peerUrl = append(peerUrl, node.IAddr)
+		nodes = append(nodes, node)
 	}
 	return
 }

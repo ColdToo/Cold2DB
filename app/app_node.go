@@ -13,9 +13,9 @@ import (
 )
 
 type AppNode struct {
-	localId  int
-	localIp  string
-	peersUrl []string
+	localId uint64
+	localIp string
+	peers   []config.Node
 
 	kvStore   *KvStore
 	raftNode  raft.RaftLayer
@@ -26,12 +26,12 @@ type AppNode struct {
 	kvHTTPStopC chan struct{}      // 关闭http服务器的信号 channel
 }
 
-func StartAppNode(localId int, peersUrl []string, proposeC chan []byte, confChangeC chan pb.ConfChange,
-	kvHTTPStopC chan struct{}, kvStore *KvStore, config *config.RaftConfig, localIp string) {
+func StartAppNode(localId uint64, nodes []config.Node, proposeC chan []byte, confChangeC chan pb.ConfChange,
+	kvHTTPStopC chan struct{}, kvStore *KvStore, raftConfig *config.RaftConfig, localIp string) {
 	an := &AppNode{
 		localId:     localId,
 		localIp:     localIp,
-		peersUrl:    peersUrl,
+		peers:       nodes,
 		kvStore:     kvStore,
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
@@ -41,7 +41,7 @@ func StartAppNode(localId int, peersUrl []string, proposeC chan []byte, confChan
 	// 完成当前节点与集群中其他节点之间的网络连接
 	an.servePeerRaft()
 	// 启动Raft算法层
-	an.startRaftNode(config)
+	an.startRaftNode(raftConfig)
 	// 启动一个goroutine,处理appLayer与raftLayer的交互
 	go an.serveRaftNode()
 	// 启动一个goroutine,处理节点变更以及日志提议
@@ -51,17 +51,15 @@ func StartAppNode(localId int, peersUrl []string, proposeC chan []byte, confChan
 }
 
 func (an *AppNode) startRaftNode(config *config.RaftConfig) {
-	rpeers := make([]raft.Peer, len(an.peersUrl))
-	for i := range rpeers {
-		rpeers[i] = raft.Peer{ID: uint64(i + 1)}
-	}
 	opts := &raft.RaftOpts{
-		ID:            uint64(an.localId),
+		ID:            an.localId,
 		Storage:       an.kvStore.db.(*db.Cold2DB),
 		ElectionTick:  config.ElectionTick,
-		HeartbeatTick: config.HeartbeatTick}
+		HeartbeatTick: config.HeartbeatTick,
+		Peers:         an.peers,
+	}
 
-	an.raftNode = raft.StartRaftNode(opts, rpeers)
+	an.raftNode = raft.StartRaftNode(opts)
 }
 
 func (an *AppNode) IsRestartNode() (flag bool) {
@@ -80,15 +78,12 @@ func (an *AppNode) servePeerRaft() {
 
 	go an.transport.ListenPeerAttachConn(an.localIp)
 
-	for i := range an.peersUrl {
-		if i+1 != an.localId {
-			an.transport.AddPeer(types.ID(i+1), an.peersUrl[i])
-		}
+	for _, peer := range an.peers {
+		an.transport.AddPeer(types.ID(peer.ID), peer.IAddr)
 	}
 }
 
 func (an *AppNode) servePropCAndConfC() {
-	//todo 用于 prometheus 指标
 	confChangeCount := uint64(0)
 
 	//当proposeC和confChangeC关闭后退出该goroutine,并停止raft服务

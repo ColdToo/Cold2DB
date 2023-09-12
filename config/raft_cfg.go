@@ -9,7 +9,7 @@ type RaftConfig struct {
 }
 
 type Node struct {
-	ID    int    `yaml:"id"`
+	ID    uint64 `yaml:"id"`
 	EAddr string `yaml:"eAddr"`
 	IAddr string `yaml:"iAddr"`
 }
