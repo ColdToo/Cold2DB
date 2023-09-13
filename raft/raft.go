@@ -242,8 +242,8 @@ func (r *Raft) sendHeartbeat(to uint64) {
 }
 
 func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
-	//通过follower的applied index,leader可以将部分满足要求的 committed entry apply 置为applied index
-	r.updateCommitIndexAndPreAppliedIndex(m.Last, m.Applied)
+	//通过follower的applied index,leader可以将部分满足要求的 committed entry apply 置为pre applied index
+	r.updatePreAppliedIndex(m.Last, m.Applied)
 }
 
 func (r *Raft) handlePropMsg(m *pb.Message) {
@@ -327,14 +327,40 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 		//todo 设计一个算法快速找到冲突的日志
 		r.sendAppendEntries(m.From)
 	} else {
+
 	}
 
 	//todo 当大多数节点append某个日志后将该日志置为commited,根据follower节点返回的applied last将部分commited index转为preApplied index
-	r.updateCommitIndexAndPreAppliedIndex(m.Last, m.Applied)
+	r.updatePreAppliedIndex(m.Last, m.Applied)
+	r.updateCommittedIndex()
 }
 
-func (r *Raft) updateCommitIndexAndPreAppliedIndex(last, applied uint64) {
-	//todo 根据大部分节点的next将committed
+// 根据progress中大部分peer的next情况推进committed的进度
+func (r *Raft) updateCommittedIndex() {
+	//                      commit
+	//  index 1   2   3   4   5   6   7   8
+	//  node1 1   1   1   1   1
+	//  node2 1   1   1   1   1   1
+	//  node3 1   1   1   1   1   1   1
+	//  node4 1   1   1   1   1   1   1   1
+
+	var count int
+	for _, peer := range r.Progress {
+		if peer.Next > r.RaftLog.CommittedIndex() {
+			count++
+		}
+	}
+	for _, peer := range r.Progress {
+		if peer.Next > r.RaftLog.CommittedIndex() {
+			count++
+		}
+	}
+	if count > len(r.Progress)/2 {
+		r.RaftLog.SetCommittedIndex()
+	}
+}
+
+func (r *Raft) updatePreAppliedIndex(applied uint64) {
 	commitUpdated := false
 	for i := r.RaftLog.CommittedIndex(); i <= r.RaftLog.LastIndex(); i += 1 {
 		matchCnt := 0
@@ -358,7 +384,6 @@ func (r *Raft) updateCommitIndexAndPreAppliedIndex(last, applied uint64) {
 // ------------------ follower behavior ------------------
 
 func (r *Raft) handleHeartbeat(m pb.Message) {
-	//todo 是否会有其他节点传来心跳消息？
 	if r.LeaderID == m.From {
 		r.electionElapsed = 0
 		r.sendHeartbeatResponse(m.From, false)
@@ -454,10 +479,7 @@ func (r *Raft) handleVoteRequest(m *pb.Message) {
 	if appliedIndex > m.Applied {
 		r.sendVoteResponse(m.From, true)
 		return
-	}
-
-	//若applied index 相同则比较term
-	if r.Term >= m.Term {
+	} else if r.Term >= m.Term {
 		r.sendVoteResponse(m.From, true)
 		return
 	}
@@ -488,12 +510,11 @@ func (r *Raft) handleVoteResponse(m pb.Message) {
 
 func (r *Raft) sendVoteResponse(candidate uint64, reject bool) {
 	msg := &pb.Message{
-		Type:    pb.MsgVoteResp,
-		From:    r.id,
-		To:      candidate,
-		Term:    r.Term,
-		Applied: r.RaftLog.AppliedIndex(),
-		Reject:  reject,
+		Type:   pb.MsgVoteResp,
+		From:   r.id,
+		To:     candidate,
+		Term:   r.Term,
+		Reject: reject,
 	}
 	r.msgs = append(r.msgs, msg)
 }

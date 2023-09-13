@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
+	"errors"
+	"hash/crc32"
+
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
-	"hash/crc32"
 )
 
 // MaxHeaderSize max entry header size.
@@ -14,9 +16,10 @@ import (
 //
 //	4    +   2   +   2       = 8
 const (
+	Crc32Size     = 4
 	KeySize       = 2
 	ValSize       = 2
-	MaxHeaderSize = 14
+	MaxHeaderSize = 8
 	IndexSize     = 8
 	TermSize      = 8
 	ExpiredAtSize = 8
@@ -114,11 +117,8 @@ type WalEntry struct {
 //
 // |--------------------------crc check--------------------------------------------------------|
 func (e *WalEntry) EncodeWalEntry() ([]byte, int) {
-	if e == nil {
-		return nil, 0
-	}
+	//encode header
 	header := make([]byte, MaxHeaderSize)
-	// encode header.
 	var index = 4
 	binary.LittleEndian.PutUint16(header[index:], uint16(len(e.Key)))
 	binary.LittleEndian.PutUint16(header[index+KeySize:], uint16(len(e.Key)))
@@ -138,10 +138,51 @@ func (e *WalEntry) EncodeWalEntry() ([]byte, int) {
 	copy(buf[index+ExpiredAtSize+IndexSize+TermSize+KVTypeSize:], e.Key)
 	copy(buf[index+ExpiredAtSize+IndexSize+TermSize+KVTypeSize+len(e.Key):], e.Value)
 
-	// crc32.
+	// crc32
 	crc := crc32.ChecksumIEEE(buf[4:])
 	binary.LittleEndian.PutUint32(buf[:4], crc)
 	return buf, size
+}
+
+func DecodeWalEntry(data []byte) (*WalEntry, error) {
+	if len(data) < MaxHeaderSize {
+		return nil, errors.New("invalid data length")
+	}
+
+	// Decode header
+	header := &entryHeader{
+		crc32:     binary.LittleEndian.Uint32(data[:Crc32Size]),
+		typ:       KVType(data[Crc32Size]),
+		kSize:     binary.LittleEndian.Uint32(data[Crc32Size+KeySize : Crc32Size+KeySize+ValSize]),
+		vSize:     binary.LittleEndian.Uint32(data[Crc32Size+KeySize+ValSize : Crc32Size+KeySize+ValSize+ValSize]),
+		expiredAt: int64(binary.LittleEndian.Uint64(data[Crc32Size+KeySize+ValSize+ValSize : Crc32Size+KeySize+ValSize+ValSize+ExpiredAtSize])),
+	}
+
+	// Decode key and value
+	keyStart := Crc32Size + KeySize + ValSize + ValSize + ExpiredAtSize + IndexSize + TermSize + KVTypeSize
+	keyEnd := keyStart + int(header.kSize)
+	valueStart := keyEnd
+	valueEnd := valueStart + int(header.vSize)
+	key := data[keyStart:keyEnd]
+	value := data[valueStart:valueEnd]
+
+	// Create WalEntry
+	entry := &WalEntry{
+		Index:     binary.LittleEndian.Uint64(data[Crc32Size+KeySize+ValSize+ValSize+ExpiredAtSize : Crc32Size+KeySize+ValSize+ValSize+ExpiredAtSize+IndexSize]),
+		Term:      binary.LittleEndian.Uint64(data[Crc32Size+KeySize+ValSize+ValSize+ExpiredAtSize+IndexSize : Crc32Size+KeySize+ValSize+ValSize+ExpiredAtSize+IndexSize+TermSize]),
+		Key:       key,
+		Value:     value,
+		Type:      header.typ,
+		ExpiredAt: header.expiredAt,
+	}
+
+	// Verify CRC32 checksum
+	crc := crc32.ChecksumIEEE(data[Crc32Size:])
+	if crc != header.crc32 {
+		return nil, errors.New("invalid CRC32 checksum")
+	}
+
+	return entry, nil
 }
 
 func (e *WalEntry) EncodeMemEntry() []byte {
@@ -152,6 +193,17 @@ func (e *WalEntry) EncodeMemEntry() []byte {
 	copy(buf[IndexSize+TermSize+ExpiredAtSize:], string(e.Type))
 	copy(buf[IndexSize+TermSize+ExpiredAtSize+KVTypeSize:], string(e.Type))
 	return buf
+}
+
+func DecodeMemEntry(buf []byte) (e *WalEntry) {
+	typ := make([]byte, 1)
+	e.Index = binary.LittleEndian.Uint64(buf[:4])
+	e.Index = binary.LittleEndian.Uint64(buf[4:9])
+	e.Index = binary.LittleEndian.Uint64(buf[9:13])
+	copy(typ, buf[13:14])
+	copy(e.Value, buf[14:])
+	e.Type = KVType(typ[0])
+	return
 }
 
 func (e *WalEntry) TransToPbEntry() (pbEnt *pb.Entry) {
@@ -168,17 +220,6 @@ func (e *WalEntry) TransToPbEntry() (pbEnt *pb.Entry) {
 		Type:  pb.EntryNormal,
 		Data:  buf,
 	}
-	return
-}
-
-func DecodeMemEntry(buf []byte) (e *WalEntry) {
-	typ := make([]byte, 1)
-	e.Index = binary.LittleEndian.Uint64(buf[:4])
-	e.Index = binary.LittleEndian.Uint64(buf[4:9])
-	e.Index = binary.LittleEndian.Uint64(buf[9:13])
-	copy(typ, buf[13:14])
-	copy(e.Value, buf[14:])
-	e.Type = KVType(typ[0])
 	return
 }
 
