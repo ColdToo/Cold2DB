@@ -61,33 +61,9 @@ func GobDecode(data []byte) (kv KV, err error) {
 }
 
 type entryHeader struct {
-	crc32     uint32 // check sum
-	typ       KVType
-	kSize     uint32
-	vSize     uint32
-	expiredAt int64 // time.Unix
-}
-
-func decodeWALEntryHeader(buf []byte) (*entryHeader, int64) {
-	if len(buf) <= 4 {
-		return nil, 0
-	}
-	h := &entryHeader{
-		crc32: binary.LittleEndian.Uint32(buf[:4]),
-		typ:   KVType(buf[4]),
-	}
-	var index = 5
-	ksize, n := binary.Varint(buf[index:])
-	h.kSize = uint32(ksize)
-	index += n
-
-	vsize, n := binary.Varint(buf[index:])
-	h.vSize = uint32(vsize)
-	index += n
-
-	expiredAt, n := binary.Varint(buf[index:])
-	h.expiredAt = expiredAt
-	return h, int64(index + n)
+	crc32 uint32
+	kSize uint32
+	vSize uint32
 }
 
 type Entry struct {
@@ -125,6 +101,28 @@ func (e *Entry) EncodeWALEntry() ([]byte, int) {
 	crc := crc32.ChecksumIEEE(buf[4:])
 	binary.LittleEndian.PutUint32(buf[:4], crc)
 	return buf, size
+}
+
+func decodeWALEntryHeader(buf []byte) (*entryHeader, int64) {
+	if len(buf) <= 4 {
+		return nil, 0
+	}
+	h := &entryHeader{
+		crc32: binary.LittleEndian.Uint32(buf[:4]),
+		typ:   KVType(buf[4]),
+	}
+	var index = 5
+	ksize, n := binary.Varint(buf[index:])
+	h.kSize = uint32(ksize)
+	index += n
+
+	vsize, n := binary.Varint(buf[index:])
+	h.vSize = uint32(vsize)
+	index += n
+
+	expiredAt, n := binary.Varint(buf[index:])
+	h.expiredAt = expiredAt
+	return h, int64(index + n)
 }
 
 func (e *Entry) EncodeMemEntry() []byte {
