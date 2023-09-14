@@ -100,22 +100,24 @@ func (lf *LogFile) ReadWALEntry(offset int64) (*Entry, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	header, size := decodeWALEntryHeader(headerBuf)
+	header := decodeWALEntryHeader(headerBuf)
 	// the end of entries.
 	if header.crc32 == 0 && header.kSize == 0 && header.vSize == 0 {
 		return nil, 0, ErrEndOfEntry
 	}
 
 	e := &Entry{
-		ExpiredAt: header.expiredAt,
-		Type:      header.typ,
+		Index:     header.Index,
+		Term:      header.Term,
+		Type:      header.Type,
+		ExpiredAt: header.ExpiredAt,
 	}
-	kSize, vSize := int64(header.kSize), int64(header.vSize)
-	var entrySize = size + kSize + vSize
 
-	// read entry key and value.
+	kSize, vSize := int64(header.kSize), int64(header.vSize)
+	var entrySize = HeaderSize + kSize + vSize
+
 	if kSize > 0 || vSize > 0 {
-		kvBuf, err := lf.readBytes(offset+size, kSize+vSize)
+		kvBuf, err := lf.readBytes(offset+HeaderSize, kSize+vSize)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -123,8 +125,8 @@ func (lf *LogFile) ReadWALEntry(offset int64) (*Entry, int64, error) {
 		e.Value = kvBuf[kSize:]
 	}
 
-	// crc32 check.
-	if crc := getEntryCrc(e, headerBuf[crc32.Size:size]); crc != header.crc32 {
+	// todo 使用更强的编码方式纠错检错？
+	if crc := getEntryCrc(e, headerBuf[crc32.Size:]); crc != header.crc32 {
 		return nil, 0, ErrInvalidCrc
 	}
 	return e, entrySize, nil

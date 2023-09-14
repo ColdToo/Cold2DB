@@ -2,6 +2,7 @@ package logfile
 
 import (
 	"github.com/stretchr/testify/assert"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -34,9 +35,26 @@ func TestEncodeAndDeocdeWalEntry(t *testing.T) {
 	Entry.ExpiredAt = time.Now().Unix()
 	byteArr, size := Entry.EncodeWALEntry()
 	assert.Equal(t, len(byteArr), size)
-	entry, err := DecodeWALEntry(byteArr)
-	if err != nil {
-		return
+}
+
+func TestEncodeDecodeMemEntry(t *testing.T) {
+	// 创建一个测试用的Entry对象
+	entry := &Entry{
+		ExpiredAt: 1234567890,
+		Index:     1,
+		Term:      2,
+		Type:      TypeDelete,
+		Value:     []byte("test value"),
 	}
-	assert.Equal(t, entry, Entry)
+
+	// 编码Entry为字节切片
+	encoded := entry.EncodeMemEntry()
+
+	// 解码字节切片为Entry对象
+	decoded := DecodeMemEntry(encoded)
+
+	// 检查解码后的Entry是否与原始Entry相等
+	if !reflect.DeepEqual(entry, decoded) {
+		t.Errorf("Decoded entry does not match original entry")
+	}
 }

@@ -141,7 +141,7 @@ func (m *memManager) openMemtable(memOpt memOpt) (*memtable, error) {
 			offset += size
 			wal.WriteAt += size
 
-			mv := &logfile.WalEntry{
+			mv := &logfile.Entry{
 				Index:     entry.Index,
 				Term:      entry.Term,
 				ExpiredAt: entry.ExpiredAt,
@@ -168,7 +168,7 @@ func (m *memManager) openMemtable(memOpt memOpt) (*memtable, error) {
 	return table, nil
 }
 
-func (m *memManager) getEntryByIndex(mem *memtable, index uint64) *logfile.WalEntry {
+func (m *memManager) getEntryByIndex(mem *memtable, index uint64) *logfile.Entry {
 	value, ok := mem.skl.IndexMap[index]
 	if !ok {
 		return nil
@@ -176,7 +176,7 @@ func (m *memManager) getEntryByIndex(mem *memtable, index uint64) *logfile.WalEn
 	return logfile.DecodeMemEntry(mem.sklIter.GetValueByPosition(value))
 }
 
-func (m *memManager) getEntriesByRange(low, high uint64) (entries []*logfile.WalEntry) {
+func (m *memManager) getEntriesByRange(low, high uint64) (entries []*logfile.Entry) {
 	sort.Slice(m.immuMems, func(i, j int) bool {
 		return m.immuMems[i].CreatAt > m.immuMems[j].CreatAt
 	})

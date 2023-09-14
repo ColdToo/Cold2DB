@@ -16,7 +16,7 @@ import (
 //
 //	4    +   2   +   2       = 8
 const (
-	HeaderSize = 8
+	HeaderSize = 33
 	Crc32Size  = 4
 	KeySize    = 2
 	ValSize    = 2
@@ -61,10 +61,14 @@ func GobDecode(data []byte) (kv KV, err error) {
 	return
 }
 
-type entryHeader struct {
-	crc32 uint32
-	kSize uint32
-	vSize uint32
+type walEntryHeader struct {
+	crc32     uint32
+	kSize     uint32
+	vSize     uint32
+	ExpiredAt int64
+	Index     uint64
+	Term      uint64
+	Type      KVType
 }
 
 type Entry struct {
@@ -80,21 +84,20 @@ type Entry struct {
 // +-------+----------+------------+-----------+---------+---------+---------+-------+---------+
 // |  crc  | key size | value size | expiredAt |  index  |   term  |   type  |  key  |  value  |
 // +-------+----------+------------+-----------+---------+---------+---------+-------+---------+
-// |---------------HEADER----------|----------------------------VALUE--------------------------|
+// |-------------------------HEADER------------------------------------------|------BODY-------|
 //
 // |--------------------------crc check--------------------------------------------------------|
 func (e *Entry) EncodeWALEntry() ([]byte, int) {
-	var size = HeaderSize + ExpiredAtSize + IndexSize + TermSize + KVTypeSize + len(e.Key) + len(e.Value)
+	var size = HeaderSize + len(e.Key) + len(e.Value)
 	buf := make([]byte, size)
 	//encode header
 	binary.LittleEndian.PutUint16(buf[KVSize:], uint16(len(e.Key)))
 	binary.LittleEndian.PutUint16(buf[KVSize+KeySize:], uint16(len(e.Key)))
-
-	//encode value
 	binary.LittleEndian.PutUint64(buf[HeaderSize:], uint64(e.ExpiredAt))
 	binary.LittleEndian.PutUint64(buf[HeaderSize+ExpiredAtSize:], e.Index)
 	binary.LittleEndian.PutUint64(buf[HeaderSize+ExpiredAtSize+IndexSize:], e.Term)
 	buf[HeaderSize+ExpiredAtSize+IndexSize+TermSize] = byte(e.Type)
+	//encode value
 	copy(buf[HeaderSize+ExpiredAtSize+IndexSize+TermSize+KVTypeSize:], e.Key)
 	copy(buf[HeaderSize+ExpiredAtSize+IndexSize+TermSize+KVTypeSize+len(e.Key):], e.Value)
 
@@ -104,29 +107,33 @@ func (e *Entry) EncodeWALEntry() ([]byte, int) {
 	return buf, size
 }
 
-func decodeWALEntryHeader(buf []byte) (*entryHeader, int64) {
+func decodeWALEntryHeader(buf []byte) *walEntryHeader {
 	if len(buf) <= 8 {
-		return nil, 0
+		return nil
 	}
-	h := &entryHeader{
-		crc32: binary.LittleEndian.Uint32(buf[:4]),
-		kSize: binary.LittleEndian.Uint32(buf[KVSize:]),
-		vSize: binary.LittleEndian.Uint32(buf[KVSize+KeySize:]),
+	h := &walEntryHeader{
+		crc32:     binary.LittleEndian.Uint32(buf[:4]),
+		kSize:     binary.LittleEndian.Uint32(buf[KVSize:]),
+		vSize:     binary.LittleEndian.Uint32(buf[KVSize+KeySize:]),
+		ExpiredAt: int64(binary.LittleEndian.Uint64(buf[HeaderSize:])),
+		Index:     binary.LittleEndian.Uint64(buf[HeaderSize+ExpiredAtSize:]),
+		Term:      binary.LittleEndian.Uint64(buf[HeaderSize+ExpiredAtSize+IndexSize:]),
+		Type:      KVType(buf[HeaderSize+ExpiredAtSize+IndexSize+TermSize]),
 	}
-	return h, int64(KVSize + KeySize + Crc32Size)
+	return h
 }
 
-func decodeWALEntryBody(buf []byte, h *entryHeader) (*Entry, error) {
+func decodeWALEntryBody(buf []byte, h *walEntryHeader) (*Entry, error) {
 	if len(buf) < int(h.kSize+h.vSize) {
 		return nil, errors.New("invalid buffer size")
 	}
 	e := &Entry{
-		ExpiredAt: int64(binary.LittleEndian.Uint64(buf[:ExpiredAtSize])),
-		Index:     binary.LittleEndian.Uint64(buf[ExpiredAtSize : ExpiredAtSize+IndexSize]),
-		Term:      binary.LittleEndian.Uint64(buf[ExpiredAtSize+IndexSize : ExpiredAtSize+IndexSize+TermSize]),
-		Type:      KVType(buf[ExpiredAtSize+IndexSize+TermSize]),
-		Key:       buf[ExpiredAtSize+IndexSize+TermSize+KVTypeSize : ExpiredAtSize+IndexSize+TermSize+KVTypeSize+h.kSize],
-		Value:     buf[ExpiredAtSize+IndexSize+TermSize+KVTypeSize+h.kSize : ExpiredAtSize+IndexSize+TermSize+KVTypeSize+h.kSize+h.vSize],
+		ExpiredAt: h.ExpiredAt,
+		Index:     h.Index,
+		Term:      h.Term,
+		Type:      h.Type,
+		Key:       buf[HeaderSize+ExpiredAtSize+IndexSize+TermSize+KVTypeSize : HeaderSize+ExpiredAtSize+IndexSize+TermSize+KVTypeSize+int(h.kSize)],
+		Value:     buf[HeaderSize+ExpiredAtSize+IndexSize+TermSize+KVTypeSize+int(h.kSize) : HeaderSize+ExpiredAtSize+IndexSize+TermSize+KVTypeSize+int(h.kSize)+int(h.vSize)],
 	}
 	return e, nil
 }
