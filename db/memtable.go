@@ -219,8 +219,8 @@ type memOpt struct {
 }
 
 // todo 写入WAL就返回还是写入Memtable再返回？
-func (mt *memtable) put(entry logfile.WalEntry) error {
-	buf, _ := entry.EncodeWalEntry()
+func (mt *memtable) put(entry logfile.Entry) error {
+	buf, _ := entry.EncodeWALEntry()
 	if err := mt.wal.Write(buf); err != nil {
 		return err
 	}
@@ -231,9 +231,9 @@ func (mt *memtable) put(entry logfile.WalEntry) error {
 	return nil
 }
 
-func (mt *memtable) putBatch(entries []logfile.WalEntry) error {
+func (mt *memtable) putBatch(entries []logfile.Entry) error {
 	for _, entry := range entries {
-		buf, _ := entry.EncodeWalEntry()
+		buf, _ := entry.EncodeWALEntry()
 		if err := mt.wal.Write(buf); err != nil {
 			return err
 		}
@@ -247,7 +247,7 @@ func (mt *memtable) putBatch(entries []logfile.WalEntry) error {
 	return nil
 }
 
-func (mt *memtable) putInMemtable(entry logfile.WalEntry) {
+func (mt *memtable) putInMemtable(entry logfile.Entry) {
 	memEntryBuf := entry.EncodeMemEntry()
 	err := mt.sklIter.Put(entry.Key, memEntryBuf, entry.Index)
 	if err != nil {
@@ -259,7 +259,7 @@ func (mt *memtable) putInMemtable(entry logfile.WalEntry) {
 	}
 }
 
-func (mt *memtable) putInMemtableBatch(entries []logfile.WalEntry) {
+func (mt *memtable) putInMemtableBatch(entries []logfile.Entry) {
 	for _, entry := range entries {
 		mt.putInMemtable(entry)
 	}

@@ -137,11 +137,11 @@ func (db *Cold2DB) Scan(lowKey []byte, highKey []byte) (err error) {
 	return err
 }
 
-func (db *Cold2DB) PutBatch(entries []logfile.WalEntry) (err error) {
+func (db *Cold2DB) PutBatch(entries []logfile.Entry) (err error) {
 	return err
 }
 
-func (db *Cold2DB) Put(entries []logfile.WalEntry) (err error) {
+func (db *Cold2DB) Put(entries []logfile.Entry) (err error) {
 	if len(entries) == 1 {
 		err := db.memManager.activeMem.put(entries[0])
 		if err != nil {
