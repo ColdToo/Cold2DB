@@ -2,15 +2,19 @@ package db
 
 import (
 	"fmt"
+	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/logfile"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/stretchr/testify/assert"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
+var testDBPath = "dbtest/walfile"
+
 func TestCold2DB_OpenMemtable(t *testing.T) {
-	memOpt := MockWALFiles()
+	memOpt := MockWALFile(MockTestPath())
 	// Open the memtable
 	memManager := &memManager{}
 	memtable, err := memManager.openMemtable(memOpt)
@@ -31,23 +35,24 @@ func TestCold2DB_OpenMemtable(t *testing.T) {
 }
 
 func TestCold2DB_ReOpenMemtable(t *testing.T) {
-	memOpt := MockWALFiles()
-
-	// Open the memtable
-	memManager := &memManager{}
-	memtable, err := memManager.openMemtable(memOpt)
-	if err != nil {
-		t.Fatal(err)
+	InitLog()
+	for i := 0; i < 10; i++ {
+		MockWALFile(MockTestPath())
 	}
 
-	assert.NotEqual(t, memtable, nil)
+	memOpt := MemOpt{
+		walDirPath: MockTestPath(),
+		fsize:      2048,
+		ioType:     logfile.MMap,
+		memSize:    2048,
+	}
+
+	memManager := &memManager{}
+	memManager.reopenImMemtable(memOpt)
+
 }
 
-func MockWALFiles() MemOpt {
-	path, err := filepath.Abs("dbtest/walfile")
-	if err != nil {
-		fmt.Println(err)
-	}
+func MockWALFile(path string) MemOpt {
 	memOpt := MemOpt{
 		walDirPath: path,
 		walFileId:  time.Now().Unix(),
@@ -75,4 +80,26 @@ func MockWALFiles() MemOpt {
 		fmt.Println(err)
 	}
 	return memOpt
+}
+
+func MockTestPath() (path string) {
+	path, err := filepath.Abs(testDBPath)
+	if err != nil {
+		fmt.Println(err)
+	}
+	return
+}
+
+func InitLog() {
+	cfg := &config.ZapConfig{
+		Level:         "debug",
+		Format:        "console",
+		Prefix:        "[Cold2DB]",
+		Director:      "./log",
+		ShowLine:      true,
+		EncodeLevel:   "LowercaseColorLevelEncoder",
+		StacktraceKey: "stacktrace",
+		LogInConsole:  true,
+	}
+	log.InitLog(cfg)
 }
