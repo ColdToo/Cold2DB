@@ -55,7 +55,7 @@ func TestCold2DB_ReOpenMemtable(t *testing.T) {
 func MockWALFile(path string) MemOpt {
 	memOpt := MemOpt{
 		walDirPath: path,
-		walFileId:  time.Now().Unix(),
+		walFileId:  time.Now().UnixNano(),
 		fsize:      2048,
 		ioType:     logfile.MMap,
 		memSize:    2048,
