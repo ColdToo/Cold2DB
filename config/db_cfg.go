@@ -25,20 +25,16 @@ type MemConfig struct {
 	MemtableNums int
 
 	// MemSpaceWaitTimeout represents timeout for waiting enough memtable space to write.
-	// In this scenario will wait: memtable has reached the maximum nums, and has no time to be flushed into disk.
 	// Default value is 100ms.
 	MemSpaceWaitTimeout time.Duration
 
 	// wal dir path, one memtable corresponds one wal
 	WalDirPath string
 
-	WalSync bool
-
-	WalMMap bool
-
 	// Persist index,IndexerDir dir path to store index meta data
 	IndexerDir string
 
+	//memory index or persist index
 	IndexerType int8
 }
 

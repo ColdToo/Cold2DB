@@ -1,5 +1,24 @@
 package logfile
 
+import (
+	"testing"
+	"time"
+)
+
+func TestOpenLogFile(t *testing.T) {
+	path := "/Users/hlhf/GolandProjects/Cold2DB/db/logfile/dbtest/walfile"
+	fid := time.Now().Unix()
+	fsize := int64(1024)
+	ftype := WALLog
+	ioType := MMap
+
+	lf, err := OpenLogFile(path, fid, fsize, ftype, ioType)
+	if err != nil {
+		t.Errorf("OpenLogFile returned an error: %v", err)
+	}
+	t.Log(lf)
+}
+
 /*
 import (
 	"fmt"

@@ -34,17 +34,12 @@ func NewMemManger(memCfg config.MemConfig) (manager *memManager, err error) {
 	memManger.walDirPath = memCfg.WalDirPath
 	memManger.flushChn = make(chan *memtable, memCfg.MemtableNums-1)
 	memManger.immuMems = make([]*memtable, memCfg.MemtableNums-1)
-	Cold2.memManager = memManger
 
-	var ioType = logfile.BufferedIO
-	if memCfg.WalMMap {
-		ioType = logfile.MMap
-	}
 	memOpt := memOpt{
 		walFileId:  time.Now().Unix(),
 		walDirPath: memCfg.WalDirPath,
 		fsize:      int64(memCfg.MemtableSize),
-		ioType:     ioType,
+		ioType:     logfile.MMap,
 		memSize:    memCfg.MemtableSize,
 	}
 
@@ -65,7 +60,7 @@ func (m *memManager) newMemtable(memOpt memOpt) (*memtable, error) {
 	sklIter.Init(skl)
 	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
 
-	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WAL, memOpt.ioType)
+	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WALLog, memOpt.ioType)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +124,7 @@ func (m *memManager) openMemtable(memOpt memOpt) (*memtable, error) {
 	sklIter.Init(skl)
 	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
 
-	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WAL, memOpt.ioType)
+	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WALLog, memOpt.ioType)
 	if err != nil {
 		return nil, err
 	}
@@ -253,9 +248,6 @@ func (mt *memtable) putInMemtable(entry logfile.Entry) {
 	if err != nil {
 		log.Errorf("", err)
 		return
-	}
-	if err != nil {
-		log.Errorf("", err)
 	}
 }
 

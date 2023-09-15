@@ -35,8 +35,8 @@ const (
 type FileType int8
 
 const (
-	// WAL write ahead log.
-	WAL FileType = iota
+	// WALLog write ahead log.
+	WALLog FileType = iota
 
 	// ValueLog value log.
 	ValueLog
@@ -181,7 +181,7 @@ func (lf *LogFile) Delete() error {
 func (lf *LogFile) getLogFileName(path string, fid int64, ftype FileType) (fname string, err error) {
 	fname = path + PathSeparator + strconv.FormatInt(fid, 10)
 	switch ftype {
-	case WAL:
+	case WALLog:
 		fname = fname + WalSuffixName
 	case ValueLog:
 		fname = fname + VLogSuffixName

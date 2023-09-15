@@ -18,7 +18,7 @@ var Cold2 *Cold2DB
 //go:generate mockgen -source=./db.go -destination=../mocks/db.go -package=mock
 type DB interface {
 	Get(key []byte) (val []byte, err error)
-	Put(entries []logfile.WalEntry) (err error)
+	Put(entries []logfile.Entry) (err error)
 	Scan(lowKey []byte, highKey []byte) (err error)
 	IsRestartNode() bool
 	SaveHardState(st pb.HardState) error
@@ -27,8 +27,6 @@ type DB interface {
 
 type Cold2DB struct {
 	memManager *memManager
-
-	//vlog *valueLog
 
 	hardStateLog *hardStateLog
 
@@ -111,8 +109,8 @@ func dbCfgCheck(dbCfg *config.DBConfig) error {
 			return err
 		}
 	}
-	if dbCfg.MemConfig.MemtableNums <= 0 {
-
+	if dbCfg.MemConfig.MemtableNums <= 5 || dbCfg.MemConfig.MemtableNums > 20 {
+		return errors.New("")
 	}
 	return nil
 }
@@ -143,17 +141,11 @@ func (db *Cold2DB) PutBatch(entries []logfile.Entry) (err error) {
 
 func (db *Cold2DB) Put(entries []logfile.Entry) (err error) {
 	if len(entries) == 1 {
-		err := db.memManager.activeMem.put(entries[0])
-		if err != nil {
-			return err
-		}
+		//todo 判断是否有activeMemTable,防止activeMemTable转移为Immtable时写入数据出错
+		return db.memManager.activeMem.put(entries[0])
 	} else {
-		err := db.memManager.activeMem.putBatch(entries)
-		if err != nil {
-			return err
-		}
+		return db.memManager.activeMem.putBatch(entries)
 	}
-	return
 }
 
 func (db *Cold2DB) IsRestartNode() bool {

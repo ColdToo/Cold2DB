@@ -3,7 +3,6 @@ package index
 import (
 	"encoding/binary"
 	"errors"
-	"os"
 )
 
 var (
@@ -16,7 +15,7 @@ var (
 
 const (
 	indexFileSuffixName = ".INDEX"
-	separator           = string(os.PathSeparator)
+	separator           = "/"
 	metaHeaderSize      = 5 + 5 + 10
 )
 
