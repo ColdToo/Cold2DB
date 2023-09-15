@@ -131,8 +131,10 @@ func (m *memManager) openMemtable(memOpt memOpt) (*memtable, error) {
 	table.wal = wal
 
 	var offset int64 = 0
+	var entry *logfile.Entry
+	var size int64
 	for {
-		if entry, size, err := wal.ReadWALEntry(offset); err == nil {
+		if entry, size, err = wal.ReadWALEntry(offset); err == nil {
 			offset += size
 			wal.WriteAt += size
 
@@ -156,8 +158,6 @@ func (m *memManager) openMemtable(memOpt memOpt) (*memtable, error) {
 		if err == io.EOF || err == logfile.ErrEndOfEntry {
 			break
 		}
-
-		return nil, err
 	}
 
 	return table, nil

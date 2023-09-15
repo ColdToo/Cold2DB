@@ -91,7 +91,7 @@ func (e *Entry) EncodeWALEntry() ([]byte, int) {
 	buf := make([]byte, size)
 	//encode header
 	binary.LittleEndian.PutUint16(buf[KVSize:], uint16(len(e.Key)))
-	binary.LittleEndian.PutUint16(buf[KVSize+KeySize:], uint16(len(e.Key)))
+	binary.LittleEndian.PutUint16(buf[KVSize+KeySize:], uint16(len(e.Value)))
 	binary.LittleEndian.PutUint64(buf[2*KVSize:], uint64(e.ExpiredAt))
 	binary.LittleEndian.PutUint64(buf[2*KVSize+ExpiredAtSize:], e.Index)
 	binary.LittleEndian.PutUint64(buf[2*KVSize+ExpiredAtSize+IndexSize:], e.Term)

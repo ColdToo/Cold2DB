@@ -1,6 +1,7 @@
 package logfile
 
 import (
+	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"
 )
@@ -16,7 +17,7 @@ func TestOpenLogFile(t *testing.T) {
 	if err != nil {
 		t.Errorf("OpenLogFile returned an error: %v", err)
 	}
-	t.Log(lf)
+	assert.NotEqual(t, lf, nil)
 }
 
 /*

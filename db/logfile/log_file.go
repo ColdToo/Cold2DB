@@ -3,7 +3,6 @@ package logfile
 import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/db/iooperator"
-	"hash/crc32"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -65,9 +64,9 @@ type LogFile struct {
 	IoOperator iooperator.IoOperator
 }
 
-func OpenLogFile(path string, fid int64, fsize int64, ftype FileType, ioType IOType) (lf *LogFile, err error) {
+func OpenLogFile(dirPath string, fid int64, fsize int64, ftype FileType, ioType IOType) (lf *LogFile, err error) {
 	lf = &LogFile{Fid: fid}
-	fileName, err := lf.getLogFileName(path, fid, ftype)
+	fileName, err := lf.getLogFileName(dirPath, fid, ftype)
 	if err != nil {
 		return nil, err
 	}
@@ -125,10 +124,7 @@ func (lf *LogFile) ReadWALEntry(offset int64) (*Entry, int64, error) {
 		e.Value = kvBuf[kSize:]
 	}
 
-	// todo 使用更强的编码方式纠错检错？
-	if crc := getEntryCrc(e, headerBuf[crc32.Size:]); crc != header.crc32 {
-		return nil, 0, ErrInvalidCrc
-	}
+	// todo 使用更强的编码方式纠错检错
 	return e, entrySize, nil
 }
 

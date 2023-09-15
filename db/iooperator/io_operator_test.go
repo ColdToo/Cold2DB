@@ -2,13 +2,13 @@ package iooperator
 
 import (
 	"fmt"
-	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/stretchr/testify/assert"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
+// o bufferd io  1 mmap
 func TestNewFileIoOperator(t *testing.T) {
 	testNewIoOperator(t, 0)
 }
@@ -82,13 +82,13 @@ func testNewIoOperator(t *testing.T, ioType uint8) {
 			assert.Nil(t, err)
 
 			var got IoOperator
-			if ioType == uint8(logfile.BufferedIO) {
+			if ioType == 0 {
 				got, err = NewFileIoOperator(absPath, tt.args.fsize)
 			}
-			if ioType == uint8(logfile.MMap) {
+			if ioType == 1 {
 				got, err = NewMMapIoOperator(absPath, tt.args.fsize)
 			}
-			if ioType == uint8(logfile.DirectIO) {
+			if ioType == 2 {
 				got, err = NewDirectorIoOperator(absPath, tt.args.fsize)
 			}
 			defer func() {
