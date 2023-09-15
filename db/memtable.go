@@ -35,7 +35,7 @@ func NewMemManger(memCfg config.MemConfig) (manager *memManager, err error) {
 	memManger.flushChn = make(chan *memtable, memCfg.MemtableNums-1)
 	memManger.immuMems = make([]*memtable, memCfg.MemtableNums-1)
 
-	memOpt := memOpt{
+	memOpt := MemOpt{
 		walFileId:  time.Now().Unix(),
 		walDirPath: memCfg.WalDirPath,
 		fsize:      int64(memCfg.MemtableSize),
@@ -53,7 +53,7 @@ func NewMemManger(memCfg config.MemConfig) (manager *memManager, err error) {
 	return memManger, nil
 }
 
-func (m *memManager) newMemtable(memOpt memOpt) (*memtable, error) {
+func (m *memManager) newMemtable(memOpt MemOpt) (*memtable, error) {
 	var sklIter = new(arenaskl.Iterator)
 	arena := arenaskl.NewArena(memOpt.memSize + uint32(arenaskl.MaxNodeSize))
 	skl := arenaskl.NewSkiplist(arena)
@@ -69,7 +69,7 @@ func (m *memManager) newMemtable(memOpt memOpt) (*memtable, error) {
 	return table, nil
 }
 
-func (m *memManager) reopenImMemtable(memOpt memOpt) {
+func (m *memManager) reopenImMemtable(memOpt MemOpt) {
 	DirEntries, err := os.ReadDir(memOpt.walDirPath)
 	if err != nil {
 		log.Errorf("", err)
@@ -117,7 +117,7 @@ func (m *memManager) reopenImMemtable(memOpt memOpt) {
 	return
 }
 
-func (m *memManager) openMemtable(memOpt memOpt) (*memtable, error) {
+func (m *memManager) openMemtable(memOpt MemOpt) (*memtable, error) {
 	var sklIter = new(arenaskl.Iterator)
 	arena := arenaskl.NewArena(memOpt.memSize + uint32(arenaskl.MaxNodeSize))
 	skl := arenaskl.NewSkiplist(arena)
@@ -198,13 +198,13 @@ type memtable struct {
 	sklIter  *arenaskl.Iterator
 	skl      *arenaskl.Skiplist
 	wal      *logfile.LogFile
-	memOpt   memOpt
+	memOpt   MemOpt
 	maxIndex uint64
 	minIndex uint64
 }
 
 // options held by memtable for opening new memtables.
-type memOpt struct {
+type MemOpt struct {
 	walDirPath string
 	walFileId  int64
 	fsize      int64
