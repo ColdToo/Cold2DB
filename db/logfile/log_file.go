@@ -73,10 +73,6 @@ func OpenLogFile(dirPath string, fid int64, fsize int64, ftype FileType, ioType 
 
 	var operator iooperator.IoOperator
 	switch ioType {
-	case BufferedIO:
-		if operator, err = iooperator.NewFileIoOperator(fileName, fsize); err != nil {
-			return
-		}
 	case MMap:
 		if operator, err = iooperator.NewMMapIoOperator(fileName, fsize); err != nil {
 			return

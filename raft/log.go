@@ -7,9 +7,9 @@ import (
 
 //  log structure
 //
-//	snapshot/first.................. applied......preApplied....... committed.............last
-//	--------|--------mem-table----------|------------------------memory-entries-----------|
-//	                   wal
+//	snapshot/first.................. applied......................committed.............last
+//	--------|--------mem-table----------|-----------------------memory-entries-----------|
+//	                                   wal
 
 type Log interface {
 	Term(i uint64) (uint64, error)
