@@ -1,7 +1,25 @@
+/*
+ * Copyright 2017 Dgraph Labs, Inc. and Contributors
+ * Modifications copyright (C) 2017 Andy Kimball and Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package arenaskl
 
 import (
 	"runtime"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -19,119 +37,66 @@ type Iterator struct {
 	list  *Skiplist
 	arena *Arena
 	nd    *node
-	value []uint64
+	value uint64
 }
 
 func (it *Iterator) Init(list *Skiplist) {
 	it.list = list
 	it.arena = list.arena
 	it.nd = nil
-	it.value = make([]uint64, 3) //根据实际情况确定可能的value数量
+	it.value = 0
 }
 
 func (it *Iterator) Valid() bool { return it.nd != nil }
 
+func (it *Iterator) Key() []byte {
+	return it.nd.getKey(it.arena)
+}
+
+func (it *Iterator) Value() []byte {
+	valOffset, valSize := decodeValue(it.value)
+	return it.arena.GetBytes(valOffset, valSize)
+}
+
+// Next advances to the next position. If there are no following nodes, then
+// Valid() will be false after this call.
 func (it *Iterator) Next() {
 	next := it.list.getNext(it.nd, 0)
-	it.setNode(next)
+	it.setNode(next, false)
 }
 
 func (it *Iterator) Prev() {
 	prev := it.list.getPrev(it.nd, 0)
-	it.setNode(prev)
-}
-
-// SeekToFirst move to head node
-func (it *Iterator) SeekToFirst() {
-	it.setNode(it.list.getNext(it.list.head, 0))
-}
-
-// SeekToLast move to tail node
-func (it *Iterator) SeekToLast() {
-	it.setNode(it.list.getPrev(it.list.tail, 0))
-}
-
-func (it *Iterator) setNode(nd *node) bool {
-	success := false
-	if nd != nil {
-		it.value = nd.value
-		it.nd = nd
-		success = true
-	}
-	return success
-}
-
-func (it *Iterator) seekForSplice(key []byte, spl *[maxHeight]splice) (found bool) {
-	var prev, next *node
-	level := int(it.list.Height() - 1)
-	prev = it.list.head
-
-	//从最高层的头节点开始找key
-	for {
-		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
-		if next == nil {
-			next = it.list.tail
-		}
-		// build spl
-		spl[level].init(prev, next)
-		if level == 0 {
-			break
-		}
-		level--
-	}
-	return
-}
-
-func (it *Iterator) seekForBaseSplice(key []byte) (prev, next *node, found bool) {
-	level := int(it.list.Height() - 1)
-
-	prev = it.list.head
-	//从最高层的头节点开始找key
-	for {
-		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
-		if found {
-			break
-		}
-		if level == 0 {
-			break
-		}
-		level--
-	}
-	return
-}
-
-// put update
-
-func (it *Iterator) Put(key, mv []byte, index uint64) (err error) {
-	if it.Seek(key) {
-		return it.Set(mv, index)
-	}
-	return it.put(key, mv, index)
+	it.setNode(prev, true)
 }
 
 func (it *Iterator) Seek(key []byte) (found bool) {
 	var next *node
 	_, next, found = it.seekForBaseSplice(key)
-	present := it.setNode(next)
+	present := it.setNode(next, false)
 	return found && present
 }
 
-// Set set value 并不会更改之前的value而是为这个key添加一个新的value offset
-func (it *Iterator) Set(val []byte, index uint64) error {
-	newVal, err := it.list.allocVal(val)
-	if err != nil {
-		return err
+func (it *Iterator) SeekForPrev(key []byte) (found bool) {
+	var prev, next *node
+	prev, next, found = it.seekForBaseSplice(key)
+
+	var present bool
+	if found {
+		present = it.setNode(next, true)
+	} else {
+		present = it.setNode(prev, true)
 	}
-	it.value = append(it.value, newVal)
-	it.list.IndexMap[index] = newVal
-	return nil
+
+	return found && present
 }
 
-func (it *Iterator) put(key []byte, val []byte, index uint64) error {
+func (it *Iterator) Put(key []byte, val []byte) error {
 	var spl [maxHeight]splice
-
-	//寻找到要插入的位置
-	it.seekForSplice(key, &spl)
+	if it.seekForSplice(key, &spl) {
+		// Found a matching node, but handle case where it's been deleted.
+		return it.setValueIfDeleted(spl[0].next, val)
+	}
 
 	if it.list.testing {
 		//这段代码是为了更好地测试并发性能
@@ -140,7 +105,7 @@ func (it *Iterator) put(key []byte, val []byte, index uint64) error {
 		runtime.Gosched()
 	}
 
-	nd, height, err := it.list.newNode(key, val, index)
+	nd, height, err := it.list.newNode(key, val)
 	if err != nil {
 		return err
 	}
@@ -224,6 +189,8 @@ func (it *Iterator) put(key []byte, val []byte, index uint64) error {
 				if i != 0 {
 					panic("how can another thread have inserted a node at a non-base level?")
 				}
+
+				return it.setValueIfDeleted(next, val)
 			}
 		}
 	}
@@ -233,22 +200,125 @@ func (it *Iterator) put(key []byte, val []byte, index uint64) error {
 	return nil
 }
 
-// get
+func (it *Iterator) Set(val []byte) error {
+	newVal, err := it.list.allocVal(val)
+	if err != nil {
+		return err
+	}
 
-func (it *Iterator) Key() []byte {
-	return it.nd.getKey(it.arena)
+	return it.trySetValue(newVal)
 }
 
-func (it *Iterator) Value() (values [][]byte) {
-	for _, val := range it.value {
-		valOffset, valSize := decodeValue(val)
-		v := it.arena.GetBytes(valOffset, valSize)
-		values = append(values, v)
+// SeekToFirst 找到头节点的下一个节点，若为尾节点返回nil
+func (it *Iterator) SeekToFirst() {
+	it.setNode(it.list.getNext(it.list.head, 0), false)
+}
+
+// SeekToLast 找到尾节点的上一个节点，若为头节点返回nil
+func (it *Iterator) SeekToLast() {
+	it.setNode(it.list.getPrev(it.list.tail, 0), true)
+}
+
+func (it *Iterator) setNode(nd *node, reverse bool) bool {
+	var value uint64
+
+	success := true
+	for nd != nil {
+		// Skip past deleted nodes.
+		value = atomic.LoadUint64(&nd.value)
+		if value != deletedVal {
+			break
+		}
+
+		success = false
+		if reverse {
+			nd = it.list.getPrev(nd, 0)
+		} else {
+			nd = it.list.getNext(nd, 0)
+		}
+	}
+
+	it.value = value
+	it.nd = nd
+	return success
+}
+
+func (it *Iterator) trySetValue(new uint64) error {
+	if !atomic.CompareAndSwapUint64(&it.nd.value, it.value, new) {
+		old := atomic.LoadUint64(&it.nd.value)
+		if old == deletedVal {
+			return ErrRecordDeleted
+		}
+
+		it.value = old
+		return ErrRecordUpdated
+	}
+
+	it.value = new
+	return nil
+}
+
+func (it *Iterator) setValueIfDeleted(nd *node, val []byte) error {
+	var newVal uint64
+	var err error
+
+	for {
+		old := atomic.LoadUint64(&nd.value)
+		if old != deletedVal {
+			it.value = old
+			it.nd = nd
+			return ErrRecordExists
+		}
+		if newVal == 0 {
+			newVal, err = it.list.allocVal(val)
+			if err != nil {
+				return err
+			}
+		}
+		if atomic.CompareAndSwapUint64(&nd.value, old, newVal) {
+			break
+		}
+	}
+
+	it.value = newVal
+	it.nd = nd
+	return err
+}
+
+// init splice for insert entry
+func (it *Iterator) seekForSplice(key []byte, spl *[maxHeight]splice) (found bool) {
+	var prev, next *node
+	level := int(it.list.Height() - 1)
+	prev = it.list.head
+
+	for {
+		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
+		if next == nil {
+			next = it.list.tail
+		}
+
+		spl[level].init(prev, next)
+		if level == 0 {
+			break
+		}
+		level--
 	}
 	return
 }
 
-func (it *Iterator) GetValueByPosition(val uint64) (eBytes []byte) {
-	valOffset, valSize := decodeValue(val)
-	return it.arena.GetBytes(valOffset, valSize)
+func (it *Iterator) seekForBaseSplice(key []byte) (prev, next *node, found bool) {
+	level := int(it.list.Height() - 1)
+	prev = it.list.head
+
+	for {
+		prev, next, found = it.list.findSpliceForLevel(key, level, prev)
+		if found {
+			break
+		}
+		if level == 0 {
+			break
+		}
+		level--
+	}
+	return
 }

@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
+	"github.com/ColdToo/Cold2DB/pb"
 	"hash/crc32"
 
 	"github.com/ColdToo/Cold2DB/log"
-	"github.com/ColdToo/Cold2DB/pb"
 )
 
 // HeaderSize max entry header size.
@@ -60,6 +60,57 @@ func GobDecode(data []byte) (kv KV, err error) {
 	return
 }
 
+type Entry struct {
+	MemEntry
+	Key []byte
+}
+
+// TransToPbEntry 序列化为pb entry作为raft节点之间日志同步时使用
+func (e *Entry) TransToPbEntry() (pbEnt *pb.Entry) {
+	kv := KV{
+		Key:       e.Key,
+		Value:     e.Value,
+		Type:      e.Type,
+		ExpiredAt: e.ExpiredAt,
+	}
+	buf, _ := GobEncode(kv)
+	pbEnt = &pb.Entry{
+		Index: e.Index,
+		Term:  e.Term,
+		Type:  pb.EntryNormal,
+		Data:  buf,
+	}
+	return
+}
+
+type MemEntry struct {
+	Index     uint64
+	Term      uint64
+	Value     []byte
+	Type      KVType
+	ExpiredAt int64
+}
+
+func (e *MemEntry) EncodeMemEntry() []byte {
+	buf := make([]byte, ExpiredAtSize+IndexSize+TermSize+KVTypeSize+len(e.Value))
+	binary.LittleEndian.PutUint64(buf[:], uint64(e.ExpiredAt))
+	binary.LittleEndian.PutUint64(buf[ExpiredAtSize:], e.Index)
+	binary.LittleEndian.PutUint64(buf[ExpiredAtSize+IndexSize:], e.Term)
+	copy(buf[ExpiredAtSize+IndexSize+TermSize:], []byte{byte(e.Type)})
+	copy(buf[ExpiredAtSize+IndexSize+TermSize+KVTypeSize:], e.Value)
+	return buf
+}
+
+func DecodeMemEntry(buf []byte) (e *MemEntry) {
+	e = &MemEntry{}
+	e.ExpiredAt = int64(binary.LittleEndian.Uint64(buf[:ExpiredAtSize]))
+	e.Index = binary.LittleEndian.Uint64(buf[ExpiredAtSize : ExpiredAtSize+IndexSize])
+	e.Term = binary.LittleEndian.Uint64(buf[ExpiredAtSize+IndexSize : ExpiredAtSize+IndexSize+TermSize])
+	e.Type = KVType(buf[ExpiredAtSize+IndexSize+TermSize])
+	e.Value = buf[ExpiredAtSize+IndexSize+TermSize+KVTypeSize:]
+	return
+}
+
 type walEntryHeader struct {
 	crc32     uint32
 	kSize     uint16
@@ -68,15 +119,6 @@ type walEntryHeader struct {
 	Index     uint64
 	Term      uint64
 	Type      KVType
-}
-
-type Entry struct {
-	Index     uint64
-	Term      uint64
-	Key       []byte
-	Value     []byte
-	Type      KVType
-	ExpiredAt int64
 }
 
 // EncodeWALEntry  will encode entry into a byte slice.
@@ -114,44 +156,6 @@ func decodeWALEntryHeader(buf []byte) (header walEntryHeader) {
 	header.Index = binary.LittleEndian.Uint64(buf[2*KVSize+ExpiredAtSize : 2*KVSize+ExpiredAtSize+IndexSize])
 	header.Term = binary.LittleEndian.Uint64(buf[2*KVSize+ExpiredAtSize+IndexSize : 2*KVSize+ExpiredAtSize+IndexSize+TermSize])
 	header.Type = KVType(buf[2*KVSize+ExpiredAtSize+IndexSize+TermSize])
-	return
-}
-
-func (e *Entry) EncodeMemEntry() []byte {
-	buf := make([]byte, ExpiredAtSize+IndexSize+TermSize+KVTypeSize+len(e.Value))
-	binary.LittleEndian.PutUint64(buf[:], uint64(e.ExpiredAt))
-	binary.LittleEndian.PutUint64(buf[ExpiredAtSize:], e.Index)
-	binary.LittleEndian.PutUint64(buf[ExpiredAtSize+IndexSize:], e.Term)
-	copy(buf[ExpiredAtSize+IndexSize+TermSize:], []byte{byte(e.Type)})
-	copy(buf[ExpiredAtSize+IndexSize+TermSize+KVTypeSize:], e.Value)
-	return buf
-}
-
-func DecodeMemEntry(buf []byte) (e *Entry) {
-	e = &Entry{}
-	e.ExpiredAt = int64(binary.LittleEndian.Uint64(buf[:ExpiredAtSize]))
-	e.Index = binary.LittleEndian.Uint64(buf[ExpiredAtSize : ExpiredAtSize+IndexSize])
-	e.Term = binary.LittleEndian.Uint64(buf[ExpiredAtSize+IndexSize : ExpiredAtSize+IndexSize+TermSize])
-	e.Type = KVType(buf[ExpiredAtSize+IndexSize+TermSize])
-	e.Value = buf[ExpiredAtSize+IndexSize+TermSize+KVTypeSize:]
-	return
-}
-
-// TransToPbEntry 序列化为pb entry作为raft节点之间日志同步时使用
-func (e *Entry) TransToPbEntry() (pbEnt *pb.Entry) {
-	kv := KV{
-		Key:       e.Key,
-		Value:     e.Value,
-		Type:      e.Type,
-		ExpiredAt: e.ExpiredAt,
-	}
-	buf, _ := GobEncode(kv)
-	pbEnt = &pb.Entry{
-		Index: e.Index,
-		Term:  e.Term,
-		Type:  pb.EntryNormal,
-		Data:  buf,
-	}
 	return
 }
 

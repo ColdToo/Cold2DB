@@ -49,12 +49,14 @@ type Skiplist struct {
 	head   *node
 	tail   *node
 	height uint32 // Current height. 1 <= height <= maxHeight. CAS.
-	// If set to true by tests, it easier to detect unusual race conditions.
-	testing  bool
-	IndexMap map[uint64]uint64 // store node cursor
+
+	// If set to true by tests, then extra delays are added to make it easier to
+	// detect unusual race conditions.
+	testing bool
 }
 
 func NewSkiplist(arena *Arena) *Skiplist {
+	// Allocate head and tail nodes.
 	head, err := newNode(arena, maxHeight)
 	if err != nil {
 		panic("arenaSize is not large enough to hold the head node")
@@ -65,6 +67,7 @@ func NewSkiplist(arena *Arena) *Skiplist {
 		panic("arenaSize is not large enough to hold the tail node")
 	}
 
+	// Link all head/tail levels together.
 	headOffset := arena.GetPointerOffset(unsafe.Pointer(head))
 	tailOffset := arena.GetPointerOffset(unsafe.Pointer(tail))
 	for i := 0; i < maxHeight; i++ {
@@ -73,13 +76,11 @@ func NewSkiplist(arena *Arena) *Skiplist {
 	}
 
 	skl := &Skiplist{
-		arena:    arena,
-		head:     head,
-		tail:     tail,
-		height:   1,
-		IndexMap: make(map[uint64]uint64),
+		arena:  arena,
+		head:   head,
+		tail:   tail,
+		height: 1,
 	}
-
 	return skl
 }
 
@@ -89,8 +90,7 @@ func (s *Skiplist) Arena() *Arena { return s.arena }
 
 func (s *Skiplist) Size() uint32 { return s.arena.Size() }
 
-// 初始化一个新的key
-func (s *Skiplist) newNode(key, val []byte, index uint64) (nd *node, height uint32, err error) {
+func (s *Skiplist) newNode(key, val []byte) (nd *node, height uint32, err error) {
 	height = s.randomHeight()
 	nd, err = newNode(s.arena, height)
 	if err != nil {
@@ -112,13 +112,7 @@ func (s *Skiplist) newNode(key, val []byte, index uint64) (nd *node, height uint
 		return
 	}
 
-	value, err := s.allocVal(val)
-	nd.value = append(nd.value, value)
-	s.IndexMap[index] = value
-	return
-}
-
-func (s *Skiplist) storeValueCursor(key, val []byte) (nd *node, height uint32, err error) {
+	nd.value, err = s.allocVal(val)
 	return
 }
 
@@ -132,7 +126,6 @@ func (s *Skiplist) randomHeight() uint32 {
 	return h
 }
 
-// 在arena中为key分配一段内存,并将返回key在arena中的offset
 func (s *Skiplist) allocKey(key []byte) (keyOffset uint32, keySize uint32, err error) {
 	keySize = uint32(len(key))
 	if keySize > math.MaxUint32 {
@@ -146,7 +139,6 @@ func (s *Skiplist) allocKey(key []byte) (keyOffset uint32, keySize uint32, err e
 	return
 }
 
-// 在arena中为val分配一段内存,并将返回val在arena中的offset
 func (s *Skiplist) allocVal(val []byte) (uint64, error) {
 	if len(val) > math.MaxUint32 {
 		panic("value is too large")
@@ -160,34 +152,6 @@ func (s *Skiplist) allocVal(val []byte) (uint64, error) {
 
 	copy(s.arena.GetBytes(valOffset, valSize), val)
 	return encodeValue(valOffset, valSize), nil
-}
-
-func (s *Skiplist) findSpliceForLevel(key []byte, level int, start *node) (prev, next *node, found bool) {
-	prev = start
-
-	for {
-		next = s.getNext(prev, level)
-		nextKey := next.getKey(s.arena)
-		if nextKey == nil {
-			// Tail node key, so done.
-			break
-		}
-
-		cmp := bytes.Compare(key, nextKey)
-		if cmp == 0 {
-			// Equality case.
-			found = true
-			break
-		}
-
-		if cmp < 0 {
-			// We are done for this level, since prev.key < key < next.key.
-			break
-		}
-		// Keep moving right on this level.
-		prev = next
-	}
-	return
 }
 
 func (s *Skiplist) getNext(nd *node, h int) *node {
@@ -229,8 +193,7 @@ type node struct {
 	// can be atomically loaded and stored:
 	//   value offset: uint32 (bits 0-31)
 	//   value size  : uint16 (bits 32-63)
-	//   一个key可以对应多个 index、term的值
-	value []uint64
+	value uint64
 
 	// Most nodes do not need to use the full height of the tower, since the
 	// probability of each successive level decreases exponentially. Because
@@ -278,4 +241,33 @@ func (n *node) casNextOffset(h int, old, val uint32) bool {
 
 func (n *node) casPrevOffset(h int, old, val uint32) bool {
 	return atomic.CompareAndSwapUint32(&n.tower[h].prevOffset, old, val)
+}
+
+func (s *Skiplist) findSpliceForLevel(key []byte, level int, start *node) (prev, next *node, found bool) {
+	prev = start
+
+	for {
+		next = s.getNext(prev, level)
+		nextKey := next.getKey(s.arena)
+
+		// 到达尾节点结束循环
+		if nextKey == nil {
+			break
+		}
+
+		cmp := bytes.Compare(key, nextKey)
+		// 找到key结束循环
+		if cmp == 0 {
+			found = true
+			break
+		}
+
+		// key<节点key，进入下一层，since prev.key < key < next.key.
+		if cmp < 0 {
+			break
+		}
+		// 找到下一个key
+		prev = next
+	}
+	return
 }

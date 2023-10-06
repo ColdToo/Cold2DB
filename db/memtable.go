@@ -238,22 +238,15 @@ func (mt *memtable) putBatch(entries []logfile.Entry) error {
 	}
 
 	// todo 写入WAL就返回还是写入Memtable再返回？
-	mt.putInMemtableBatch(entries)
 	return nil
 }
 
 func (mt *memtable) putInMemtable(entry logfile.Entry) {
-	memEntryBuf := entry.EncodeMemEntry()
-	err := mt.sklIter.Put(entry.Key, memEntryBuf, entry.Index)
+	memEntryBuf := entry.MemEntry.EncodeMemEntry()
+	err := mt.sklIter.Put(entry.Key, memEntryBuf)
 	if err != nil {
 		log.Errorf("", err)
 		return
-	}
-}
-
-func (mt *memtable) putInMemtableBatch(entries []logfile.Entry) {
-	for _, entry := range entries {
-		mt.putInMemtable(entry)
 	}
 }
 
@@ -264,9 +257,8 @@ func (mt *memtable) get(key []byte) (bool, []byte) {
 		return false, nil
 	}
 
-	values := mt.sklIter.Value()
-	//最后一条数据为最新的entry
-	mv := logfile.DecodeMemEntry(values[len(values)-1])
+	value := mt.sklIter.Value()
+	mv := logfile.DecodeMemEntry(value)
 
 	if mv.Type == logfile.TypeDelete {
 		return true, nil
@@ -275,6 +267,7 @@ func (mt *memtable) get(key []byte) (bool, []byte) {
 	if mv.ExpiredAt > 0 && mv.ExpiredAt <= time.Now().Unix() {
 		return true, nil
 	}
+
 	return false, mv.Value
 }
 

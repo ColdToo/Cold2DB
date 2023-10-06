@@ -20,13 +20,14 @@ package arenaskl
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"math/rand"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 const arenaSize = 1 << 20
@@ -96,10 +97,6 @@ func TestFull(t *testing.T) {
 
 	err := it.Set([]byte("someval"))
 	require.Nil(t, err)
-
-	// Delete does not perform any allocation.
-	err = it.Delete()
-	require.Nil(t, err)
 }
 
 // TestBasic tests single-threaded seeks and sets, adds, and deletes.
@@ -115,9 +112,9 @@ func TestBasic(t *testing.T) {
 	val4 := newValue(72)
 
 	// Try adding values.
-	it.Put([]byte("key1"), val1, 1)
-	it.Put([]byte("key3"), val3, 2)
-	it.Put([]byte("key2"), val2, 3)
+	it.Put([]byte("key1"), val1)
+	it.Put([]byte("key3"), val3)
+	it.Put([]byte("key2"), val2)
 
 	require.False(t, it.Seek([]byte("key")))
 
@@ -133,10 +130,6 @@ func TestBasic(t *testing.T) {
 	require.True(t, it.Seek([]byte("key2")))
 	require.Nil(t, it.Set(val4))
 	require.EqualValues(t, "00072", it.Value())
-
-	require.True(t, it.Seek([]byte("key3")))
-	require.Nil(t, it.Delete())
-	require.True(t, !it.Valid())
 }
 
 // TestConcurrentBasic tests concurrent writes followed by concurrent reads.
