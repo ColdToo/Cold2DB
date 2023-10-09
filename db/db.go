@@ -36,7 +36,7 @@ type Cold2DB struct {
 	snapShotter SnapShotter
 }
 
-func GetDB() (DB, error) {
+func GetDB() (Storage, error) {
 	if Cold2 != nil {
 		return Cold2, nil
 	} else {
@@ -110,8 +110,6 @@ func (db *Cold2DB) CompactionAndFlush() {
 
 }
 
-// raft write interface
-
 func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
 	flag, val := db.memManager.activeMem.Get(key)
 	if !flag {
@@ -125,10 +123,6 @@ func (db *Cold2DB) Scan(lowKey []byte, highKey []byte) (err error) {
 	return err
 }
 
-func (db *Cold2DB) PutBatch(entries []logfile.Entry) (err error) {
-	return err
-}
-
 func (db *Cold2DB) Put(entries []logfile.Entry) (err error) {
 	if len(entries) == 1 {
 		//todo 判断是否有activeMemTable,防止activeMemTable转移为Immtable时写入数据出错
@@ -136,18 +130,6 @@ func (db *Cold2DB) Put(entries []logfile.Entry) (err error) {
 	} else {
 		return db.memManager.activeMem.putBatch(entries)
 	}
-}
-
-func (db *Cold2DB) IsRestartNode() bool {
-	DirEntries, err := os.ReadDir(db.memManager.walDirPath)
-	if err != nil {
-		log.Errorf("open wal dir failed")
-	}
-
-	if len(DirEntries) > 0 {
-		return true
-	}
-	return false
 }
 
 func (db *Cold2DB) SaveHardState(st pb.HardState) error {
@@ -158,40 +140,14 @@ func (db *Cold2DB) Close() {
 
 }
 
-// raft read interface
+func (db *Cold2DB) SaveEntries(entries []pb.Entry) error {
+	return nil
+}
 
 func (db *Cold2DB) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
-	if lo < db.memManager.firstIndex {
+	if int(lo) < len(db.memManager.entries) {
 		return nil, errors.New("some entries is compacted")
 	}
-	//1、low和high都在active memtable
-	if _, ok := db.memManager.activeMem.skl.IndexMap[lo]; ok {
-		if _, ok := db.memManager.activeMem.skl.IndexMap[hi]; ok {
-			for i := lo; i < hi; i++ {
-				walEntry := db.memManager.getEntryByIndex(db.memManager.activeMem, i)
-				entries = append(entries, walEntry.TransToPbEntry())
-			}
-		}
-		return
-	}
-
-	//2、low在active memtable,hi在immtable
-	if _, ok := db.memManager.activeMem.skl.IndexMap[lo]; ok {
-		for i := lo; i < hi; i++ {
-			walEntry := db.memManager.getEntryByIndex(db.memManager.activeMem, i)
-			if walEntry == nil {
-				db.memManager.getEntriesByRange(i, hi)
-			}
-			entries = append(entries, walEntry.TransToPbEntry())
-		}
-		return
-	}
-
-	walEntries := db.memManager.getEntriesByRange(lo, hi)
-	for _, walE := range walEntries {
-		entries = append(entries, walE.TransToPbEntry())
-	}
-
 	return
 }
 

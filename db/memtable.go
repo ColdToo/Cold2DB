@@ -5,6 +5,7 @@ import (
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
+	"github.com/ColdToo/Cold2DB/pb"
 	"io"
 	"os"
 	"sort"
@@ -19,6 +20,8 @@ type memManager struct {
 	firstIndex uint64
 
 	appliedIndex uint64
+
+	entries []pb.Entry
 
 	activeMem *memtable
 

@@ -27,14 +27,15 @@ type Storage interface {
 	Get(key []byte) (val []byte, err error)
 	Put(entries []logfile.Entry) (err error)
 	Scan(lowKey []byte, highKey []byte) (err error)
+	Close()
 
 	SaveHardState(st pb.HardState) error
 	SaveEntries(entries []pb.Entry) error
+
 	GetHardState() (pb.HardState, pb.ConfState, error)
 	Entries(lo, hi uint64) ([]*pb.Entry, error)
 	Term(i uint64) (uint64, error)
 	AppliedIndex() uint64
 	FirstIndex() (uint64, error)
 	GetSnapshot() (pb.Snapshot, error)
-	Close()
 }
