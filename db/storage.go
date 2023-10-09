@@ -1,7 +1,8 @@
-package raft
+package db
 
 import (
 	"errors"
+	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
@@ -21,18 +22,19 @@ var ErrUnavailable = errors.New("requested entry at index is unavailable")
 // snapshot is temporarily unavailable.
 var ErrSnapshotTemporarilyUnavailable = errors.New("snapshot is temporarily unavailable")
 
+//go:generate mockgen -source=./db.go -destination=../mocks/db.go -package=mock
 type Storage interface {
+	Get(key []byte) (val []byte, err error)
+	Put(entries []logfile.Entry) (err error)
+	Scan(lowKey []byte, highKey []byte) (err error)
+
+	SaveHardState(st pb.HardState) error
+	SaveEntries(entries []pb.Entry) error
 	GetHardState() (pb.HardState, pb.ConfState, error)
-
-	// Entries 返回指定范围的Entries
 	Entries(lo, hi uint64) ([]*pb.Entry, error)
-
 	Term(i uint64) (uint64, error)
-
 	AppliedIndex() uint64
-
 	FirstIndex() (uint64, error)
-
-	// GetSnapshot  返回最新的快照
 	GetSnapshot() (pb.Snapshot, error)
+	Close()
 }

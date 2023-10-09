@@ -2,6 +2,7 @@ package raft
 
 import (
 	"errors"
+	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
@@ -39,10 +40,10 @@ type RaftLog struct {
 
 	entries []*pb.Entry
 
-	storage Storage
+	storage db.Storage
 }
 
-func newRaftLog(storage Storage) Log {
+func newRaftLog(storage db.Storage) Log {
 	firstIndex, _ := storage.FirstIndex()
 	appliedIndex := storage.AppliedIndex()
 	emptyEntS := make([]*pb.Entry, 0)

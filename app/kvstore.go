@@ -11,7 +11,7 @@ import (
 type KV = logfile.KV
 
 type KvStore struct {
-	db         db.DB
+	db         db.Storage
 	proposeC   chan<- []byte
 	monitorKV  map[uint64]chan struct{}
 	ReqTimeout time.Duration

@@ -15,16 +15,6 @@ import (
 
 var Cold2 *Cold2DB
 
-//go:generate mockgen -source=./db.go -destination=../mocks/db.go -package=mock
-type DB interface {
-	Get(key []byte) (val []byte, err error)
-	Put(entries []logfile.Entry) (err error)
-	Scan(lowKey []byte, highKey []byte) (err error)
-	IsRestartNode() bool
-	SaveHardState(st pb.HardState) error
-	Close()
-}
-
 type Cold2DB struct {
 	memManager *memManager
 

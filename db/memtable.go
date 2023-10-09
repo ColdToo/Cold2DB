@@ -163,34 +163,6 @@ func (m *memManager) openMemtable(memOpt MemOpt) (*memtable, error) {
 	return table, nil
 }
 
-func (m *memManager) getEntryByIndex(mem *memtable, index uint64) *logfile.Entry {
-	value, ok := mem.skl.IndexMap[index]
-	if !ok {
-		return nil
-	}
-	return logfile.DecodeMemEntry(mem.sklIter.GetValueByPosition(value))
-}
-
-func (m *memManager) getEntriesByRange(low, high uint64) (entries []*logfile.Entry) {
-	sort.Slice(m.immuMems, func(i, j int) bool {
-		return m.immuMems[i].CreatAt > m.immuMems[j].CreatAt
-	})
-
-	for _, imm := range m.immuMems {
-		for i := low; i <= high; i++ {
-			if value, ok := imm.skl.IndexMap[low]; ok {
-				ent := logfile.DecodeMemEntry(imm.sklIter.GetValueByPosition(value))
-				entries = append(entries, ent)
-			} else {
-				low = i
-				continue
-			}
-		}
-	}
-
-	return
-}
-
 type memtable struct {
 	CreatAt uint64
 	sync.RWMutex

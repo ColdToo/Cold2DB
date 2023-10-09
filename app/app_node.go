@@ -2,7 +2,6 @@ package main
 
 import (
 	"github.com/ColdToo/Cold2DB/config"
-	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -53,17 +52,13 @@ func StartAppNode(localId uint64, nodes []config.Node, proposeC chan []byte, con
 func (an *AppNode) startRaftNode(config *config.RaftConfig) {
 	opts := &raft.RaftOpts{
 		ID:            an.localId,
-		Storage:       an.kvStore.db.(*db.Cold2DB),
+		Storage:       an.kvStore.db,
 		ElectionTick:  config.ElectionTick,
 		HeartbeatTick: config.HeartbeatTick,
 		Peers:         an.peers,
 	}
 
 	an.raftNode = raft.StartRaftNode(opts)
-}
-
-func (an *AppNode) IsRestartNode() (flag bool) {
-	return an.kvStore.db.IsRestartNode()
 }
 
 func (an *AppNode) servePeerRaft() {
@@ -115,6 +110,7 @@ func (an *AppNode) serveRaftNode() {
 			an.raftNode.Tick()
 
 		case rd := <-an.raftNode.GetReadyC():
+
 			log.Infof("start handle ready %v", rd.HardState)
 			if len(rd.CommittedEntries) > 0 {
 				err := an.applyEntries(rd.CommittedEntries)
@@ -137,8 +133,6 @@ func (an *AppNode) serveRaftNode() {
 			//通知raftNode本轮ready已经处理完可以进行下一轮处理
 			an.raftNode.Advance()
 			log.Infof("handle ready success %v", rd.HardState)
-
-			//如果网络层发现致命错误需要停止服务
 
 		case err := <-an.transport.GetErrorC():
 			log.Panicf("transport get critical err", err)

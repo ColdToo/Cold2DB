@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/config"
+	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"math/rand"
@@ -22,7 +23,7 @@ const (
 type RaftOpts struct {
 	ID uint64
 
-	Storage Storage
+	Storage db.Storage
 
 	ElectionTick int
 
@@ -283,7 +284,7 @@ func (r *Raft) sendAppendEntries(to uint64) error {
 	preLogTerm, err := r.RaftLog.Term(preLogIndex)
 	if err != nil {
 		// 日志如果被压缩那么需要发送快照,说明此时需要的index已经小于applied index了
-		if err == ErrCompacted {
+		if err == db.ErrCompacted {
 			//todo 开始发送快照
 		}
 		return err
@@ -355,6 +356,25 @@ func (r *Raft) updateCommittedIndex() {
 // ------------------ follower behavior ------------------
 
 func (r *Raft) handleHeartbeat(m pb.Message) {
+	if m.Term < r.Term {
+		r.sendHeartbeatResponse(m.From, true)
+		return
+	}
+	if r.Role != Follower {
+		r.becomeFollower(m.Term, m.From)
+	}
+	r.resetTick()
+	// Reply false if log doesn’t contain an entry at prevLogIndex
+	// whose term matches prevLogTerm (§5.3)
+	term, err := r.RaftLog.Term(m.Index)
+	if err != nil || term != m.LogTerm {
+		r.sendHeartbeatResponse(m.From, true)
+		return
+	}
+	if m.Commit > r.RaftLog.CommittedIndex() {
+		r.RaftLog.SetCommittedIndex(min(m.Commit, r.RaftLog.LastIndex()))
+	}
+	r.sendHeartbeatResponse(m.From, false)
 	if r.LeaderID == m.From {
 		r.electionElapsed = 0
 		r.sendHeartbeatResponse(m.From, false)
