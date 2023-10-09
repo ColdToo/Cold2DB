@@ -22,6 +22,9 @@ var (
 	// ErrRecordExists record with this key already exists.
 	ErrRecordExists = errors.New("record with this key already exists")
 
+	// ErrRecordExists record with this key already exists.
+	ErrRecordNotExists = errors.New("record with this key not exists")
+
 	// ErrRecordUpdated record was updated by another caller.
 	ErrRecordUpdated = errors.New("record was updated by another caller")
 

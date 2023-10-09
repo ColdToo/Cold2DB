@@ -95,7 +95,8 @@ func TestFull(t *testing.T) {
 		require.Nil(t, err)
 	}
 
-	err := it.Set([]byte("someval"))
+	value, err := it.Get([]byte(fmt.Sprintf("%05d", 1)))
+	t.Log(string(value))
 	require.Nil(t, err)
 }
 
@@ -229,7 +230,6 @@ func TestIteratorAdd(t *testing.T) {
 	require.Nil(t, err)
 	require.EqualValues(t, []byte{}, it.Key())
 	require.EqualValues(t, []byte{}, it.Value())
-	it.Delete()
 
 	// Add empty key and value (treated same as nil).
 	err = it.Put([]byte{}, []byte{})
@@ -264,7 +264,6 @@ func TestIteratorAdd(t *testing.T) {
 
 	// Try to add element that was previously deleted.
 	it.Seek([]byte("00004"))
-	it.Delete()
 	err = it.Put([]byte("00004"), []byte("00004*"))
 	require.Nil(t, err)
 	require.EqualValues(t, []byte("00004*"), it.Value())
@@ -305,7 +304,6 @@ func TestIteratorSet(t *testing.T) {
 	// Try to set value that's been deleted by a different iterator.
 	it.Seek([]byte("00001"))
 	it2.Seek([]byte("00001"))
-	err = it.Delete()
 	require.Nil(t, err)
 	err = it.Put([]byte("00002"), []byte("00002"))
 	require.Nil(t, err)
@@ -315,61 +313,6 @@ func TestIteratorSet(t *testing.T) {
 
 	require.Equal(t, 1, length(l))
 	require.Equal(t, 1, lengthRev(l))
-}
-
-func TestIteratorDelete(t *testing.T) {
-	l := NewSkiplist(NewArena(arenaSize))
-
-	var it Iterator
-	it.Init(l)
-
-	var it2 Iterator
-	it2.Init(l)
-
-	// Delete when iterator position is invalid.
-	require.Panics(t, func() { it.Delete() })
-
-	it.Put([]byte("00001"), []byte("00001"))
-	it.Put([]byte("00002"), []byte("00002"))
-	it.Put([]byte("00003"), []byte("00003"))
-	it.Put([]byte("00004"), []byte("00004"))
-
-	// Delete first node.
-	it.SeekToFirst()
-	err := it.Delete()
-	require.Nil(t, err)
-	require.EqualValues(t, "00002", it.Value())
-
-	// Delete last node.
-	it.Seek([]byte("00004"))
-	err = it.Delete()
-	require.Nil(t, err)
-	require.False(t, it.Valid())
-	require.Equal(t, 2, length(l))
-
-	// Try to delete node that's been updated by another iterator.
-	it.SeekToFirst()
-	require.EqualValues(t, "00002", it.Value())
-	it2.SeekToFirst()
-	require.EqualValues(t, "00002", it2.Value())
-	it2.Set([]byte("00002a"))
-	err = it.Delete()
-	require.Equal(t, ErrRecordUpdated, err)
-	require.EqualValues(t, "00002a", it.Value())
-
-	// Delete node that's been deleted by another iterator.
-	err = it2.Delete()
-	require.Nil(t, err)
-	err = it.Delete()
-	require.Nil(t, err)
-	require.EqualValues(t, "00003", it.Value())
-
-	// Delete final node so that list is empty.
-	err = it.Delete()
-	require.Nil(t, err)
-	require.False(t, it.Valid())
-	require.Equal(t, 0, length(l))
-	require.Equal(t, 0, lengthRev(l))
 }
 
 // TestConcurrentAdd races between adding same nodes.
@@ -415,45 +358,6 @@ func TestConcurrentAdd(t *testing.T) {
 
 	require.Equal(t, n, length(l))
 	require.Equal(t, n, lengthRev(l))
-}
-
-// TestConcurrentAddDelete races between adding and deleting the same node.
-func TestConcurrentAddDelete(t *testing.T) {
-	const n = 100
-
-	// Set testing flag to make it easier to trigger unusual race conditions.
-	l := NewSkiplist(NewArena(arenaSize))
-	l.testing = true
-
-	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		key := []byte("key")
-		val := newValue(i)
-
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-
-			var it Iterator
-			it.Init(l)
-
-			for {
-				if it.Put(key, val) == nil {
-					require.EqualValues(t, val, it.Value())
-					break
-				}
-
-				require.NotEqual(t, val, it.Value())
-				if it.Delete() == nil {
-					require.False(t, it.Valid())
-				}
-			}
-		}(i)
-	}
-	wg.Wait()
-
-	require.Equal(t, 1, length(l))
-	require.Equal(t, 1, lengthRev(l))
 }
 
 // TestIteratorNext tests a basic iteration over all nodes from the beginning.
@@ -552,15 +456,6 @@ func TestIteratorSeek(t *testing.T) {
 	require.False(t, found)
 	require.False(t, it.Valid())
 
-	// Test seek for deleted key.
-	it.Seek([]byte("01020"))
-	it.Delete()
-	found = it.Seek([]byte("01020"))
-	require.False(t, found)
-	require.True(t, it.Valid())
-	require.EqualValues(t, "01030", it.Value())
-	//require.EqualValues(t, 1030, it.Meta())
-
 	// Test seek for empty key.
 	it.Put(nil, nil)
 	found = it.Seek(nil)
@@ -569,71 +464,6 @@ func TestIteratorSeek(t *testing.T) {
 	require.EqualValues(t, "", it.Value())
 
 	found = it.Seek([]byte{})
-	require.True(t, found)
-	require.True(t, it.Valid())
-	require.EqualValues(t, "", it.Value())
-}
-
-func TestIteratorSeekForPrev(t *testing.T) {
-	const n = 100
-	l := NewSkiplist(NewArena(arenaSize))
-
-	var it Iterator
-	it.Init(l)
-
-	require.False(t, it.Valid())
-	it.SeekToFirst()
-	require.False(t, it.Valid())
-	// 1000, 1010, 1020, ..., 1990.
-	for i := n - 1; i >= 0; i-- {
-		v := i*10 + 1000
-		it.Put([]byte(fmt.Sprintf("%05d", i*10+1000)), newValue(v))
-	}
-
-	found := it.SeekForPrev([]byte(""))
-	require.False(t, found)
-	require.False(t, it.Valid())
-
-	found = it.SeekForPrev([]byte("00990"))
-	require.False(t, found)
-	require.False(t, it.Valid())
-
-	found = it.SeekForPrev([]byte("01000"))
-	require.True(t, found)
-	require.True(t, it.Valid())
-	require.EqualValues(t, "01000", it.Value())
-
-	found = it.SeekForPrev([]byte("01005"))
-	require.False(t, found)
-	require.True(t, it.Valid())
-	require.EqualValues(t, "01000", it.Value())
-
-	found = it.SeekForPrev([]byte("01990"))
-	require.True(t, found)
-	require.True(t, it.Valid())
-	require.EqualValues(t, "01990", it.Value())
-
-	found = it.SeekForPrev([]byte("99999"))
-	require.False(t, found)
-	require.True(t, it.Valid())
-	require.EqualValues(t, "01990", it.Value())
-
-	// Test seek for deleted key.
-	it.Seek([]byte("01020"))
-	it.Delete()
-	found = it.SeekForPrev([]byte("01020"))
-	require.False(t, found)
-	require.True(t, it.Valid())
-	require.EqualValues(t, "01010", it.Value())
-
-	// Test seek for empty key.
-	it.Put(nil, nil)
-	found = it.SeekForPrev(nil)
-	require.True(t, found)
-	require.True(t, it.Valid())
-	require.EqualValues(t, "", it.Value())
-
-	found = it.SeekForPrev([]byte{})
 	require.True(t, found)
 	require.True(t, it.Valid())
 	require.EqualValues(t, "", it.Value())

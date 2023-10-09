@@ -123,7 +123,7 @@ func (db *Cold2DB) CompactionAndFlush() {
 // raft write interface
 
 func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
-	flag, val := db.memManager.activeMem.get(key)
+	flag, val := db.memManager.activeMem.Get(key)
 	if !flag {
 		return nil, errors.New("the key is not exist")
 	}

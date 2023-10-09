@@ -58,8 +58,6 @@ func (it *Iterator) Value() []byte {
 	return it.arena.GetBytes(valOffset, valSize)
 }
 
-// Next advances to the next position. If there are no following nodes, then
-// Valid() will be false after this call.
 func (it *Iterator) Next() {
 	next := it.list.getNext(it.nd, 0)
 	it.setNode(next, false)
@@ -70,6 +68,47 @@ func (it *Iterator) Prev() {
 	it.setNode(prev, true)
 }
 
+// SeekToFirst 找到头节点的下一个节点，若为尾节点返回nil
+func (it *Iterator) SeekToFirst() {
+	it.setNode(it.list.getNext(it.list.head, 0), false)
+}
+
+// SeekToLast 找到尾节点的上一个节点，若为头节点返回nil
+func (it *Iterator) SeekToLast() {
+	it.setNode(it.list.getPrev(it.list.tail, 0), true)
+}
+
+func (it *Iterator) setNode(nd *node, reverse bool) bool {
+	var value uint64
+
+	success := true
+	for nd != nil {
+		// Skip past deleted nodes.
+		value = atomic.LoadUint64(&nd.value)
+		if value != deletedVal {
+			break
+		}
+
+		success = false
+		if reverse {
+			nd = it.list.getPrev(nd, 0)
+		} else {
+			nd = it.list.getNext(nd, 0)
+		}
+	}
+
+	it.value = value
+	it.nd = nd
+	return success
+}
+
+func (it *Iterator) Put(key []byte, val []byte) error {
+	if it.Seek(key) {
+		return it.Set(val)
+	}
+	return it.put(key, val)
+}
+
 func (it *Iterator) Seek(key []byte) (found bool) {
 	var next *node
 	_, next, found = it.seekForBaseSplice(key)
@@ -77,25 +116,10 @@ func (it *Iterator) Seek(key []byte) (found bool) {
 	return found && present
 }
 
-func (it *Iterator) SeekForPrev(key []byte) (found bool) {
-	var prev, next *node
-	prev, next, found = it.seekForBaseSplice(key)
-
-	var present bool
-	if found {
-		present = it.setNode(next, true)
-	} else {
-		present = it.setNode(prev, true)
-	}
-
-	return found && present
-}
-
-func (it *Iterator) Put(key []byte, val []byte) error {
+func (it *Iterator) put(key []byte, val []byte) error {
 	var spl [maxHeight]splice
 	if it.seekForSplice(key, &spl) {
-		// Found a matching node, but handle case where it's been deleted.
-		return it.setValueIfDeleted(spl[0].next, val)
+		return ErrRecordExists
 	}
 
 	if it.list.testing {
@@ -190,7 +214,7 @@ func (it *Iterator) Put(key []byte, val []byte) error {
 					panic("how can another thread have inserted a node at a non-base level?")
 				}
 
-				return it.setValueIfDeleted(next, val)
+				return ErrRecordExists
 			}
 		}
 	}
@@ -206,41 +230,11 @@ func (it *Iterator) Set(val []byte) error {
 		return err
 	}
 
-	return it.trySetValue(newVal)
-}
-
-// SeekToFirst 找到头节点的下一个节点，若为尾节点返回nil
-func (it *Iterator) SeekToFirst() {
-	it.setNode(it.list.getNext(it.list.head, 0), false)
-}
-
-// SeekToLast 找到尾节点的上一个节点，若为头节点返回nil
-func (it *Iterator) SeekToLast() {
-	it.setNode(it.list.getPrev(it.list.tail, 0), true)
-}
-
-func (it *Iterator) setNode(nd *node, reverse bool) bool {
-	var value uint64
-
-	success := true
-	for nd != nil {
-		// Skip past deleted nodes.
-		value = atomic.LoadUint64(&nd.value)
-		if value != deletedVal {
-			break
-		}
-
-		success = false
-		if reverse {
-			nd = it.list.getPrev(nd, 0)
-		} else {
-			nd = it.list.getNext(nd, 0)
-		}
+	err = it.trySetValue(newVal)
+	for err == ErrRecordExists {
+		err = it.trySetValue(newVal)
 	}
-
-	it.value = value
-	it.nd = nd
-	return success
+	return nil
 }
 
 func (it *Iterator) trySetValue(new uint64) error {
@@ -258,34 +252,13 @@ func (it *Iterator) trySetValue(new uint64) error {
 	return nil
 }
 
-func (it *Iterator) setValueIfDeleted(nd *node, val []byte) error {
-	var newVal uint64
-	var err error
-
-	for {
-		old := atomic.LoadUint64(&nd.value)
-		if old != deletedVal {
-			it.value = old
-			it.nd = nd
-			return ErrRecordExists
-		}
-		if newVal == 0 {
-			newVal, err = it.list.allocVal(val)
-			if err != nil {
-				return err
-			}
-		}
-		if atomic.CompareAndSwapUint64(&nd.value, old, newVal) {
-			break
-		}
+func (it *Iterator) Get(key []byte) (value []byte, err error) {
+	if it.Seek(key) {
+		return it.Value(), nil
 	}
-
-	it.value = newVal
-	it.nd = nd
-	return err
+	return nil, ErrRecordNotExists
 }
 
-// init splice for insert entry
 func (it *Iterator) seekForSplice(key []byte, spl *[maxHeight]splice) (found bool) {
 	var prev, next *node
 	level := int(it.list.Height() - 1)

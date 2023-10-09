@@ -250,14 +250,15 @@ func (mt *memtable) putInMemtable(entry logfile.Entry) {
 	}
 }
 
-func (mt *memtable) get(key []byte) (bool, []byte) {
-	mt.Lock()
-	defer mt.Unlock()
+func (mt *memtable) Get(key []byte) (bool, []byte) {
 	if found := mt.sklIter.Seek(key); !found {
 		return false, nil
 	}
 
-	value := mt.sklIter.Value()
+	value, err := mt.sklIter.Get(key)
+	if err == arenaskl.ErrRecordNotExists {
+		return false, nil
+	}
 	mv := logfile.DecodeMemEntry(value)
 
 	if mv.Type == logfile.TypeDelete {
