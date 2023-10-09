@@ -206,15 +206,6 @@ func (db *Cold2DB) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
 }
 
 func (db *Cold2DB) Term(i uint64) (uint64, error) {
-	if i > db.memManager.firstIndex || i < db.memManager.appliedIndex {
-		return 0, errors.New("the specific index entry is compacted")
-	}
-	for _, imm := range db.memManager.immuMems {
-		if value, ok := imm.skl.IndexMap[i]; ok {
-			ent := logfile.DecodeMemEntry(imm.sklIter.GetValueByPosition(value))
-			return ent.Term, nil
-		}
-	}
 	return 0, errors.New("the specific index entry is compacted")
 }
 
@@ -222,8 +213,8 @@ func (db *Cold2DB) AppliedIndex() uint64 {
 	return db.memManager.appliedIndex
 }
 
-func (db *Cold2DB) FirstIndex() uint64 {
-	return db.memManager.firstIndex
+func (db *Cold2DB) FirstIndex() (uint64, error) {
+	return db.memManager.firstIndex, nil
 }
 
 func (db *Cold2DB) GetSnapshot() (pb.Snapshot, error) {

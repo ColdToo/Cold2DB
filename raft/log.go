@@ -17,8 +17,6 @@ type Log interface {
 	AppliedIndex() uint64
 	SetCommittedIndex(i uint64)
 	CommittedIndex() uint64
-	SetPreAppliedIndex(i uint64)
-	PreAppliedIndex() (i uint64)
 	RefreshFirstAndAppliedIndex()
 
 	NextApplyEnts() (ents []*pb.Entry)
@@ -33,11 +31,11 @@ type RaftLog struct {
 
 	applied uint64
 
-	preApplied uint64
-
 	committed uint64
 
 	last uint64
+
+	stabled uint64
 
 	entries []*pb.Entry
 
@@ -45,7 +43,7 @@ type RaftLog struct {
 }
 
 func newRaftLog(storage Storage) Log {
-	firstIndex := storage.FirstIndex()
+	firstIndex, _ := storage.FirstIndex()
 	appliedIndex := storage.AppliedIndex()
 	emptyEntS := make([]*pb.Entry, 0)
 	return &RaftLog{storage: storage, first: firstIndex, applied: appliedIndex, entries: emptyEntS}
@@ -66,7 +64,11 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 }
 
 func (l *RaftLog) LastIndex() uint64 {
-	return l.last
+	if len(l.entries) > 0 {
+		return l.entries[len(l.entries)-1].Index
+	}
+	index, _ := l.storage.FirstIndex()
+	return index
 }
 
 func (l *RaftLog) AppliedIndex() uint64 {
@@ -81,14 +83,6 @@ func (l *RaftLog) SetCommittedIndex(i uint64) {
 	l.committed = i
 }
 
-func (l *RaftLog) SetPreAppliedIndex(i uint64) {
-	l.preApplied = i
-}
-
-func (l *RaftLog) PreAppliedIndex() (i uint64) {
-	return l.preApplied
-}
-
 func (l *RaftLog) RefreshFirstAndAppliedIndex() {
 	// todo 使用锁来保证first
 	l.first = l.storage.FirstIndex()
@@ -100,7 +94,7 @@ func (l *RaftLog) NextApplyEnts() (ents []*pb.Entry) {
 }
 
 func (l *RaftLog) HasNextApplyEnts() bool {
-	return l.preApplied > l.applied
+	return true
 }
 
 func (l *RaftLog) AppendEntries(ents []pb.Entry) {

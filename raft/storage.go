@@ -31,7 +31,7 @@ type Storage interface {
 
 	AppliedIndex() uint64
 
-	FirstIndex() uint64
+	FirstIndex() (uint64, error)
 
 	// GetSnapshot  返回最新的快照
 	GetSnapshot() (pb.Snapshot, error)

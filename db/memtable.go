@@ -148,7 +148,7 @@ func (m *memManager) openMemtable(memOpt MemOpt) (*memtable, error) {
 			mvBuf := mv.EncodeMemEntry()
 
 			var err error
-			err = table.sklIter.Put(entry.Key, mvBuf, mv.Index)
+			err = table.sklIter.Put(entry.Key, mvBuf)
 			if err != nil {
 				log.Errorf("put value into skip list err.%+v", err)
 				return nil, err

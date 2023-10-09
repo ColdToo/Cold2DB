@@ -177,8 +177,6 @@ func (r *Raft) becomeLeader() {
 		v.Match = 0
 		v.Next = r.RaftLog.LastIndex() + 1 //因为不知道其他节点的目前日志的一个状态，默认同步
 	}
-
-	// todo 新leader需要清除其他follower节点的memory区域的entries,以及和其他节点同步wal memory段的applied群
 	entries := make([]pb.Entry, 1)
 	entries = append(entries, pb.Entry{
 		Type:  pb.EntryNormal,
@@ -230,20 +228,18 @@ func (r *Raft) bcastHeartbeat() {
 }
 
 func (r *Raft) sendHeartbeat(to uint64) {
-	//通过携带的committed信息，follower节点可以知道哪些entry已经被committed
 	msg := &pb.Message{
-		Type:   pb.MsgBeat,
-		To:     to,
-		From:   r.id,
-		Term:   r.Term,
+		Type: pb.MsgBeat,
+		To:   to,
+		From: r.id,
+		Term: r.Term,
+		//通过携带的committed信息，follower节点可以知道哪些entry已经被committed
 		Commit: r.RaftLog.CommittedIndex(),
 	}
 	r.msgs = append(r.msgs, msg)
 }
 
 func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
-	//通过follower的applied index,leader可以将部分满足要求的 committed entry apply 置为pre applied index
-	r.updatePreAppliedIndex(m.Last, m.Applied)
 }
 
 func (r *Raft) handlePropMsg(m *pb.Message) {
@@ -260,7 +256,6 @@ func (r *Raft) handlePropMsg(m *pb.Message) {
 	}
 
 	r.RaftLog.AppendEntries(ents)
-
 	r.bcastAppendEntries()
 	return
 }
@@ -329,47 +324,23 @@ func (r *Raft) handleAppendResponse(m *pb.Message) {
 	} else {
 
 	}
-
-	//todo 当大多数节点append某个日志后将该日志置为commited,根据follower节点返回的applied last将部分commited index转为preApplied index
-	r.updatePreAppliedIndex(m.Last, m.Applied)
 	r.updateCommittedIndex()
 }
 
-// 根据progress中大部分peer的next情况推进committed的进度
+// 根据progress中大部分peer的match情况更新committedIndex
 func (r *Raft) updateCommittedIndex() {
-	//                      commit
-	//  index 1   2   3   4   5   6   7   8
-	//  node1 1   1   1   1   1
-	//  node2 1   1   1   1   1   1
-	//  node3 1   1   1   1   1   1   1
-	//  node4 1   1   1   1   1   1   1   1
-
-	var count int
-	for _, peer := range r.Progress {
-		if peer.Next > r.RaftLog.CommittedIndex() {
-			count++
-		}
-	}
-	for _, peer := range r.Progress {
-		if peer.Next > r.RaftLog.CommittedIndex() {
-			count++
-		}
-	}
-	if count > len(r.Progress)/2 {
-		r.RaftLog.SetCommittedIndex()
-	}
-}
-
-func (r *Raft) updatePreAppliedIndex(applied uint64) {
 	commitUpdated := false
 	for i := r.RaftLog.CommittedIndex(); i <= r.RaftLog.LastIndex(); i += 1 {
+		if i <= r.RaftLog.CommittedIndex() {
+			continue
+		}
 		matchCnt := 0
 		for _, p := range r.Progress {
 			if p.Match >= i {
 				matchCnt += 1
 			}
 		}
-
+		// leader不能直接提交之前leader的日志只能间接提交
 		term, _ := r.RaftLog.Term(i)
 		if matchCnt > len(r.Progress)/2 && term == r.Term && r.RaftLog.CommittedIndex() != i {
 			r.RaftLog.SetCommittedIndex(i)
