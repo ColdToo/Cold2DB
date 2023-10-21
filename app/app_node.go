@@ -110,8 +110,9 @@ func (an *AppNode) serveRaftNode() {
 			an.raftNode.Tick()
 
 		case rd := <-an.raftNode.GetReadyC():
-
 			log.Infof("start handle ready %v", rd.HardState)
+			an
+
 			if len(rd.CommittedEntries) > 0 {
 				err := an.applyEntries(rd.CommittedEntries)
 				if err != nil {
@@ -149,7 +150,7 @@ func (an *AppNode) serveRaftNode() {
 	}
 }
 
-func (an *AppNode) applyEntries(ents []*pb.Entry) (err error) {
+func (an *AppNode) applyCommitedEntries(ents []*pb.Entry) (err error) {
 	entries := make([]*pb.Entry, 0)
 
 	//apply entries
@@ -210,6 +211,10 @@ func (an *AppNode) applyEntries(ents []*pb.Entry) (err error) {
 		delete(an.kvStore.monitorKV, id)
 	}
 	return nil
+}
+
+func (an *AppNode) saveEntries(ents []*pb.Entry) {
+	an.kvStore.db.
 }
 
 func (an *AppNode) saveHardState(state pb.HardState) error {

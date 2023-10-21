@@ -44,7 +44,9 @@ type Peer struct {
 type Ready struct {
 	HardState pb.HardState
 
-	CommittedEntries []*pb.Entry // 待apply的entry
+	Entries []*pb.Entry //需要持久化的entries
+
+	CommittedEntries []*pb.Entry // 待apply的entries
 
 	Messages []*pb.Message // 待发送给其他节点的message
 }

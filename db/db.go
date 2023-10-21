@@ -123,7 +123,7 @@ func (db *Cold2DB) Scan(lowKey []byte, highKey []byte) (err error) {
 	return err
 }
 
-func (db *Cold2DB) Put(entries []logfile.Entry) (err error) {
+func (db *Cold2DB) SaveCommitedEntries(entries []logfile.Entry) (err error) {
 	if len(entries) == 1 {
 		//todo 判断是否有activeMemTable,防止activeMemTable转移为Immtable时写入数据出错
 		return db.memManager.activeMem.put(entries[0])

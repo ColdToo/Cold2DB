@@ -2,7 +2,6 @@ package db
 
 import (
 	"errors"
-	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
@@ -25,12 +24,11 @@ var ErrSnapshotTemporarilyUnavailable = errors.New("snapshot is temporarily unav
 //go:generate mockgen -source=./db.go -destination=../mocks/db.go -package=mock
 type Storage interface {
 	Get(key []byte) (val []byte, err error)
-	Put(entries []logfile.Entry) (err error)
 	Scan(lowKey []byte, highKey []byte) (err error)
-	Close()
 
 	SaveHardState(st pb.HardState) error
 	SaveEntries(entries []pb.Entry) error
+	SaveCommitedEntries(entries []pb.Entry) error
 
 	GetHardState() (pb.HardState, pb.ConfState, error)
 	Entries(lo, hi uint64) ([]*pb.Entry, error)
@@ -38,4 +36,6 @@ type Storage interface {
 	AppliedIndex() uint64
 	FirstIndex() (uint64, error)
 	GetSnapshot() (pb.Snapshot, error)
+
+	Close()
 }

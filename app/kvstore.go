@@ -18,12 +18,12 @@ type KvStore struct {
 }
 
 func NewKVStore(proposeC chan<- []byte, requestTimeOut int) *KvStore {
-	cold2DB, err := db.GetDB()
+	storage, err := db.GetDB()
 	if err != nil {
 		log.Panicf("get db failed %s", err.Error())
 	}
 	s := &KvStore{
-		db:         cold2DB,
+		db:         storage,
 		proposeC:   proposeC,
 		monitorKV:  make(map[uint64]chan struct{}),
 		ReqTimeout: time.Duration(requestTimeOut) * time.Second,

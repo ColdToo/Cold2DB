@@ -16,7 +16,7 @@ const (
 	BlockSize = 4096
 )
 
-func OpenFile(name string, flag int, perm os.FileMode) (file *os.File, err error) {
+func OpenDirectFile(name string, flag int, perm os.FileMode) (file *os.File, err error) {
 	file, err = os.OpenFile(name, flag, perm)
 	if err != nil {
 		return
