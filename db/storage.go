@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
@@ -27,8 +28,8 @@ type Storage interface {
 	Scan(lowKey []byte, highKey []byte) (err error)
 
 	SaveHardState(st pb.HardState) error
-	SaveEntries(entries []pb.Entry) error
-	SaveCommitedEntries(entries []pb.Entry) error
+	SaveEntries(entries []*pb.Entry) error
+	SaveCommittedEntries(entries []*logfile.KV) error
 
 	GetHardState() (pb.HardState, pb.ConfState, error)
 	Entries(lo, hi uint64) ([]*pb.Entry, error)

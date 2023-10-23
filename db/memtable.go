@@ -42,7 +42,6 @@ func NewMemManger(memCfg config.MemConfig) (manager *memManager, err error) {
 		walFileId:  time.Now().Unix(),
 		walDirPath: memCfg.WalDirPath,
 		fsize:      int64(memCfg.MemtableSize),
-		ioType:     logfile.MMap,
 		memSize:    memCfg.MemtableSize,
 	}
 
@@ -63,7 +62,7 @@ func (m *memManager) newMemtable(memOpt MemOpt) (*memtable, error) {
 	sklIter.Init(skl)
 	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
 
-	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WALLog, memOpt.ioType)
+	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WALLog, memOpt.)
 	if err != nil {
 		return nil, err
 	}
@@ -183,46 +182,19 @@ type MemOpt struct {
 	walDirPath string
 	walFileId  int64
 	fsize      int64
-	ioType     logfile.IOType
 	memSize    uint32
-	bytesFlush uint32
 }
 
-// todo 写入WAL就返回还是写入Memtable再返回？
-func (mt *memtable) put(entry logfile.Entry) error {
-	buf, _ := entry.EncodeWALEntry()
-	if err := mt.wal.Write(buf); err != nil {
-		return err
-	}
-	if err := mt.syncWAL(); err != nil {
-		return err
-	}
-	mt.putInMemtable(entry)
+// todo put重写
+func (mt *memtable) put(kv logfile.KV) error {
 	return nil
 }
 
-func (mt *memtable) putBatch(entries []logfile.Entry) error {
-	for _, entry := range entries {
-		buf, _ := entry.EncodeWALEntry()
-		if err := mt.wal.Write(buf); err != nil {
-			return err
-		}
-	}
-	if err := mt.syncWAL(); err != nil {
-		return err
-	}
-
-	// todo 写入WAL就返回还是写入Memtable再返回？
+func (mt *memtable) putBatch(entries []logfile.KV) error {
 	return nil
 }
 
-func (mt *memtable) putInMemtable(entry logfile.Entry) {
-	memEntryBuf := entry.MemEntry.EncodeMemEntry()
-	err := mt.sklIter.Put(entry.Key, memEntryBuf)
-	if err != nil {
-		log.Errorf("", err)
-		return
-	}
+func (mt *memtable) putInMemtable(kv logfile.KV) {
 }
 
 func (mt *memtable) Get(key []byte) (bool, []byte) {
@@ -234,7 +206,7 @@ func (mt *memtable) Get(key []byte) (bool, []byte) {
 	if err == arenaskl.ErrRecordNotExists {
 		return false, nil
 	}
-	mv := logfile.DecodeMemEntry(value)
+	mv := logfile.DecodeV(value)
 
 	if mv.Type == logfile.TypeDelete {
 		return true, nil
@@ -245,12 +217,6 @@ func (mt *memtable) Get(key []byte) (bool, []byte) {
 	}
 
 	return false, mv.Value
-}
-
-func (mt *memtable) syncWAL() error {
-	mt.wal.RLock()
-	defer mt.wal.RUnlock()
-	return mt.wal.Sync()
 }
 
 func (mt *memtable) isFull(delta uint32) bool {
@@ -267,10 +233,4 @@ func (mt *memtable) isFull(delta uint32) bool {
 
 func (mt *memtable) walFileId() int64 {
 	return mt.wal.Fid
-}
-
-func (mt *memtable) deleteWal() error {
-	mt.wal.Lock()
-	defer mt.wal.Unlock()
-	return mt.wal.Delete()
 }

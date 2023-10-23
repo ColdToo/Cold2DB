@@ -13,12 +13,10 @@ import (
 	"sync"
 )
 
-var Cold2 *Cold2DB
+var Cold2 *Cold2KV
 
-type Cold2DB struct {
+type Cold2KV struct {
 	memManager *memManager
-
-	hardStateLog *hardStateLog
 
 	flushLock sync.RWMutex // guarantee flush and compaction exclusive.
 
@@ -36,7 +34,7 @@ type Cold2DB struct {
 	snapShotter SnapShotter
 }
 
-func GetDB() (Storage, error) {
+func GetStorage() (Storage, error) {
 	if Cold2 != nil {
 		return Cold2, nil
 	} else {
@@ -51,15 +49,10 @@ func InitDB(dbCfg *config.DBConfig) {
 		log.Panic("check db cfg failed")
 	}
 
-	Cold2 = new(Cold2DB)
+	Cold2 = new(Cold2KV)
 	Cold2.memManager, err = NewMemManger(dbCfg.MemConfig)
 	if err != nil {
 		log.Panic("init db memManger failed")
-	}
-
-	Cold2.hardStateLog, err = initHardStateLog(dbCfg.HardStateLogConfig)
-	if err != nil {
-		log.Panic("init db hardStateLog failed")
 	}
 
 	/*Cold2.indexer, err = index.NewIndexer(dbCfg.IndexConfig)
@@ -105,12 +98,7 @@ func dbCfgCheck(dbCfg *config.DBConfig) error {
 	return nil
 }
 
-// CompactionAndFlush 定期将immtable刷入vlog,更新内存索引以及压缩部分日志
-func (db *Cold2DB) CompactionAndFlush() {
-
-}
-
-func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
+func (db *Cold2KV) Get(key []byte) (val []byte, err error) {
 	flag, val := db.memManager.activeMem.Get(key)
 	if !flag {
 		return nil, errors.New("the key is not exist")
@@ -119,54 +107,55 @@ func (db *Cold2DB) Get(key []byte) (val []byte, err error) {
 	return
 }
 
-func (db *Cold2DB) Scan(lowKey []byte, highKey []byte) (err error) {
+func (db *Cold2KV) Scan(lowKey []byte, highKey []byte) (err error) {
 	return err
 }
 
-func (db *Cold2DB) SaveCommitedEntries(entries []logfile.Entry) (err error) {
-	if len(entries) == 1 {
-		//todo 判断是否有activeMemTable,防止activeMemTable转移为Immtable时写入数据出错
-		return db.memManager.activeMem.put(entries[0])
-	} else {
-		return db.memManager.activeMem.putBatch(entries)
-	}
-}
-
-func (db *Cold2DB) SaveHardState(st pb.HardState) error {
+func (db *Cold2KV) SaveCommittedEntries(entries []*logfile.KV) (err error) {
+	//进行一个save committed entries控制
 	return nil
 }
 
-func (db *Cold2DB) Close() {
-
-}
-
-func (db *Cold2DB) SaveEntries(entries []pb.Entry) error {
+func (db *Cold2KV) SaveHardState(st pb.HardState) error {
 	return nil
 }
 
-func (db *Cold2DB) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
+func (db *Cold2KV) SaveEntries(entries []*pb.Entry) error {
+	return nil
+}
+
+func (db *Cold2KV) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
 	if int(lo) < len(db.memManager.entries) {
 		return nil, errors.New("some entries is compacted")
 	}
 	return
 }
 
-func (db *Cold2DB) Term(i uint64) (uint64, error) {
+func (db *Cold2KV) Term(i uint64) (uint64, error) {
 	return 0, errors.New("the specific index entry is compacted")
 }
 
-func (db *Cold2DB) AppliedIndex() uint64 {
+func (db *Cold2KV) AppliedIndex() uint64 {
 	return db.memManager.appliedIndex
 }
 
-func (db *Cold2DB) FirstIndex() (uint64, error) {
+func (db *Cold2KV) FirstIndex() (uint64, error) {
 	return db.memManager.firstIndex, nil
 }
 
-func (db *Cold2DB) GetSnapshot() (pb.Snapshot, error) {
+func (db *Cold2KV) GetSnapshot() (pb.Snapshot, error) {
 	return pb.Snapshot{}, nil
 }
 
-func (db *Cold2DB) GetHardState() (pb.HardState, pb.ConfState, error) {
+func (db *Cold2KV) GetHardState() (pb.HardState, pb.ConfState, error) {
 	return pb.HardState{}, pb.ConfState{}, nil
+}
+
+// CompactionAndFlush 定期将immtable刷入vlog,更新内存索引以及压缩部分日志
+func (db *Cold2KV) CompactionAndFlush() {
+
+}
+
+func (db *Cold2KV) Close() {
+
 }

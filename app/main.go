@@ -20,5 +20,6 @@ func main() {
 
 	kvStore := NewKVStore(proposeC, raftConfig.RequestTimeout)
 	StartAppNode(localId, nodes, proposeC, confChangeC, kvHTTPStopC, kvStore, raftConfig, localIpAddr)
+	// 对外提高kv服务
 	ServeHttpKVAPI(kvStore, localIpAddr, confChangeC, kvHTTPStopC)
 }

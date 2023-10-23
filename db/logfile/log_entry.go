@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
-	"github.com/ColdToo/Cold2DB/pb"
 	"hash/crc32"
 
 	"github.com/ColdToo/Cold2DB/log"
@@ -35,11 +34,23 @@ const (
 )
 
 type KV struct {
+	Key []byte
+	V
+}
+
+type V struct {
 	Id        uint64
 	Type      KVType
 	ExpiredAt int64
-	Key       []byte
 	Value     []byte
+}
+
+func (v *V) encode() {
+
+}
+
+func DecodeV(v []byte) *V {
+	return nil
 }
 
 func GobEncode(KV any) ([]byte, error) {
@@ -61,54 +72,12 @@ func GobDecode(data []byte) (kv KV, err error) {
 }
 
 type Entry struct {
-	MemEntry
-	Key []byte
-}
-
-// TransToPbEntry 序列化为pb entry作为raft节点之间日志同步时使用
-func (e *Entry) TransToPbEntry() (pbEnt *pb.Entry) {
-	kv := KV{
-		Key:       e.Key,
-		Value:     e.Value,
-		Type:      e.Type,
-		ExpiredAt: e.ExpiredAt,
-	}
-	buf, _ := GobEncode(kv)
-	pbEnt = &pb.Entry{
-		Index: e.Index,
-		Term:  e.Term,
-		Type:  pb.EntryNormal,
-		Data:  buf,
-	}
-	return
-}
-
-type MemEntry struct {
+	Key       []byte
 	Index     uint64
 	Term      uint64
 	Value     []byte
 	Type      KVType
 	ExpiredAt int64
-}
-
-func (e *MemEntry) EncodeMemEntry() []byte {
-	buf := make([]byte, ExpiredAtSize+IndexSize+TermSize+KVTypeSize+len(e.Value))
-	binary.LittleEndian.PutUint64(buf[:], uint64(e.ExpiredAt))
-	binary.LittleEndian.PutUint64(buf[ExpiredAtSize:], e.Index)
-	binary.LittleEndian.PutUint64(buf[ExpiredAtSize+IndexSize:], e.Term)
-	copy(buf[ExpiredAtSize+IndexSize+TermSize:], []byte{byte(e.Type)})
-	copy(buf[ExpiredAtSize+IndexSize+TermSize+KVTypeSize:], e.Value)
-	return buf
-}
-
-func DecodeMemEntry(buf []byte) (e *MemEntry) {
-	e = &MemEntry{}
-	e.ExpiredAt = int64(binary.LittleEndian.Uint64(buf[:ExpiredAtSize]))
-	e.Index = binary.LittleEndian.Uint64(buf[ExpiredAtSize : ExpiredAtSize+IndexSize])
-	e.Term = binary.LittleEndian.Uint64(buf[ExpiredAtSize+IndexSize : ExpiredAtSize+IndexSize+TermSize])
-	e.Type = KVType(buf[ExpiredAtSize+IndexSize+TermSize])
-	e.Value = buf[ExpiredAtSize+IndexSize+TermSize+KVTypeSize:]
-	return
 }
 
 type walEntryHeader struct {
@@ -159,6 +128,7 @@ func decodeWALEntryHeader(buf []byte) (header walEntryHeader) {
 	return
 }
 
+/*
 type LogEntry struct {
 	Key       []byte
 	Value     []byte
@@ -206,3 +176,4 @@ func getEntryCrc(e *Entry, h []byte) uint32 {
 	crc = crc32.Update(crc, crc32.IEEETable, e.Value)
 	return crc
 }
+*/

@@ -52,7 +52,7 @@ func StartAppNode(localId uint64, nodes []config.Node, proposeC chan []byte, con
 func (an *AppNode) startRaftNode(config *config.RaftConfig) {
 	opts := &raft.RaftOpts{
 		ID:            an.localId,
-		Storage:       an.kvStore.db,
+		Storage:       an.kvStore.storage,
 		ElectionTick:  config.ElectionTick,
 		HeartbeatTick: config.HeartbeatTick,
 		Peers:         an.peers,
@@ -111,10 +111,17 @@ func (an *AppNode) serveRaftNode() {
 
 		case rd := <-an.raftNode.GetReadyC():
 			log.Infof("start handle ready %v", rd.HardState)
-			an
+
+			//todo 可以并行操作
+			if len(rd.UnstableEntries) > 0 {
+				err := an.saveEntries(rd.UnstableEntries)
+				if err != nil {
+					log.Errorf("save entries failed", err)
+				}
+			}
 
 			if len(rd.CommittedEntries) > 0 {
-				err := an.applyEntries(rd.CommittedEntries)
+				err := an.applyCommitedEntries(rd.CommittedEntries)
 				if err != nil {
 					log.Errorf("apply entries failed", err)
 				}
@@ -181,44 +188,36 @@ func (an *AppNode) applyCommitedEntries(ents []*pb.Entry) (err error) {
 	}
 
 	var kv KV
-	walEntries := make([]logfile.WalEntry, len(entries))
-	walEntriesId := make([]uint64, 0)
+	kvs := make([]*logfile.KV, len(entries))
+	kvIds := make([]uint64, 0)
 	for _, entry := range entries {
 		kv, err = logfile.GobDecode(entry.Data)
 		if err != nil {
 			return err
 		}
-		walEntry := logfile.WalEntry{
-			Index:     entry.Index,
-			Term:      entry.Term,
-			Key:       kv.Key,
-			Value:     kv.Value,
-			ExpiredAt: kv.ExpiredAt,
-			Type:      kv.Type,
-		}
-		walEntries = append(walEntries, walEntry)
-		walEntriesId = append(walEntriesId, kv.Id)
+		kvs = append(kvs, &kv)
+		kvIds = append(kvIds, kv.Id)
 	}
 
-	err = an.kvStore.db.Put(walEntries)
+	err = an.kvStore.storage.SaveCommittedEntries(kvs)
 	if err != nil {
 		log.Errorf("", err)
 		return
 	}
 
-	for _, id := range walEntriesId {
+	for _, id := range kvIds {
 		close(an.kvStore.monitorKV[id])
 		delete(an.kvStore.monitorKV, id)
 	}
 	return nil
 }
 
-func (an *AppNode) saveEntries(ents []*pb.Entry) {
-	an.kvStore.db.
+func (an *AppNode) saveEntries(ents []*pb.Entry) (err error) {
+	return an.kvStore.storage.SaveEntries(ents)
 }
 
 func (an *AppNode) saveHardState(state pb.HardState) error {
-	return an.kvStore.db.SaveHardState(state)
+	return an.kvStore.storage.SaveHardState(state)
 }
 
 // Process Rat网络层接口,网络层通过该接口与RaftNode交互
@@ -236,7 +235,7 @@ func (an *AppNode) ReportSnapshotStatus(id uint64, status raft.SnapshotStatus) {
 func (an *AppNode) stop() {
 	an.transport.Stop()
 	an.raftNode.Stop()
-	an.kvStore.db.Close()
+	an.kvStore.storage.Close()
 	close(an.proposeC)
 	close(an.confChangeC)
 	close(an.kvHTTPStopC)

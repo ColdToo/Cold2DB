@@ -44,7 +44,7 @@ type Peer struct {
 type Ready struct {
 	HardState pb.HardState
 
-	Entries []*pb.Entry //需要持久化的entries
+	UnstableEntries []*pb.Entry //需要持久化的entries
 
 	CommittedEntries []*pb.Entry // 待apply的entries
 
@@ -64,14 +64,6 @@ func newRaftNode(opt *RaftOpts) (*RaftNode, error) {
 }
 
 func StartRaftNode(c *RaftOpts) RaftLayer {
-	rn, err := newRaftNode(c)
-	if err != nil {
-		panic(err)
-	}
-	return rn
-}
-
-func RestartRaftNode(c *RaftOpts) RaftLayer {
 	rn, err := newRaftNode(c)
 	if err != nil {
 		panic(err)
@@ -112,10 +104,13 @@ func (rn *RaftNode) Tick() {
 	rn.Raft.tick()
 }
 
+// Advance 做下一轮ready的预处理
 func (rn *RaftNode) Advance() {
 	// 每当appNode处理完一次ready后需要更新raftlog的first index 和 applied index
 	rn.Raft.RaftLog.RefreshFirstAndAppliedIndex()
-	//需要将log中的entries进行裁剪
+	// 需要将log中的entries进行裁剪
+
+	// raft算法层可以进行下一轮ready
 	rn.AdvanceC <- struct{}{}
 }
 

@@ -11,19 +11,19 @@ import (
 type KV = logfile.KV
 
 type KvStore struct {
-	db         db.Storage
+	storage    db.Storage
 	proposeC   chan<- []byte
 	monitorKV  map[uint64]chan struct{}
 	ReqTimeout time.Duration
 }
 
 func NewKVStore(proposeC chan<- []byte, requestTimeOut int) *KvStore {
-	storage, err := db.GetDB()
+	storage, err := db.GetStorage()
 	if err != nil {
 		log.Panicf("get db failed %s", err.Error())
 	}
 	s := &KvStore{
-		db:         storage,
+		storage:    storage,
 		proposeC:   proposeC,
 		monitorKV:  make(map[uint64]chan struct{}),
 		ReqTimeout: time.Duration(requestTimeOut) * time.Second,
@@ -32,18 +32,21 @@ func NewKVStore(proposeC chan<- []byte, requestTimeOut int) *KvStore {
 }
 
 func (s *KvStore) Lookup(key []byte) ([]byte, error) {
-	return s.db.Get(key)
+	return s.storage.Get(key)
+}
+
+func (s *KvStore) Scan(lowKey, highKey []byte) ([][]byte, error) {
+	return nil, nil
 }
 
 func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
 	timeOutC := time.NewTimer(s.ReqTimeout)
 	uid := uint64(time.Now().UnixNano())
-	kv := &KV{
-		Id:        uid,
-		Key:       key,
-		Value:     val,
-		ExpiredAt: expiredAt,
-	}
+	kv := new(KV)
+	kv.Key = key
+	kv.Id = uid
+	kv.Value = val
+	kv.ExpiredAt = expiredAt
 	if delete {
 		kv.Type = logfile.TypeDelete
 	}
@@ -64,8 +67,4 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 
 func (s *KvStore) BatchPropose() {
 	return
-}
-
-func (s *KvStore) Scan(lowKey, highKey []byte) ([][]byte, error) {
-	return nil, nil
 }
