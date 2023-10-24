@@ -1,7 +1,8 @@
-package directio
+package iooperator
 
 import (
 	"fmt"
+	"github.com/ColdToo/Cold2DB/db/iooperator/directio"
 	"io/ioutil"
 	"log"
 	"os"
@@ -45,7 +46,7 @@ func DirectIO(testData []byte) {
 	fd.Close()
 
 	// 使用直接IO进行测试
-	fileDirectIO, err := OpenDirectFile(path, os.O_CREATE|os.O_WRONLY, 0666)
+	fileDirectIO, err := directio.OpenDirectFile(path, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Fatal("Failed to open file for direct IO:", err)
 	}
@@ -75,7 +76,8 @@ func BufferdIO(testData []byte) {
 func GetTestData() []byte {
 	// 创建测试数据
 	blockSize := 4096
-	blockCount := 1000
+	// block size越大差距越小,当block size为4096时 direct io写入速度更快
+	blockCount := 10
 	testData := make([]byte, blockSize*blockCount)
 	for i := 0; i < len(testData); i++ {
 		testData[i] = 1
@@ -83,7 +85,7 @@ func GetTestData() []byte {
 	return testData
 }
 
-func TestDirectIO(t *testing.T) {
+func TestDirectIOAndBufferdIOTime(t *testing.T) {
 	// 使用缓冲IO进行测试
 	testData := GetTestData()
 	startTime := time.Now()
@@ -91,13 +93,9 @@ func TestDirectIO(t *testing.T) {
 	DirectIO(testData)
 	// 输出执行时间
 	fmt.Println("Direct IO time:", directIOTime)
-}
 
-func TestBufferdIO(t *testing.T) {
-	// 使用缓冲IO进行测试
-	testData := GetTestData()
-	startTime := time.Now()
-	bufferdIOTime := time.Since(startTime)
+	startTime2 := time.Now()
+	bufferdIOTime := time.Since(startTime2)
 	BufferdIO(testData)
 	// 输出执行时间
 	fmt.Println("Buffered IO time:", bufferdIOTime)

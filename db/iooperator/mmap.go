@@ -1,5 +1,7 @@
 package iooperator
 
+/*
+
 import (
 	"github.com/ColdToo/Cold2DB/db/iooperator/mmap"
 	"io"
@@ -78,3 +80,4 @@ func (lm *MMapIoOperator) Delete() error {
 	}
 	return os.Remove(lm.fd.Name())
 }
+*/

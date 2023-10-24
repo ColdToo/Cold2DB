@@ -11,18 +11,6 @@ var ErrInvalidFsize = errors.New("fsize can`t be zero or negative")
 // FilePerm default permission of the newly created log file.
 const FilePerm = 0644
 
-type IoOperator interface {
-	Write(b []byte, offset int64) (int, error)
-
-	Read(b []byte, offset int64) (int, error)
-
-	Sync() error
-
-	Close() error
-
-	Delete() error
-}
-
 // open file and truncate it if necessary.
 func openFile(fName string, fsize int64) (*os.File, error) {
 	fd, err := os.OpenFile(fName, os.O_CREATE|os.O_RDWR, FilePerm)

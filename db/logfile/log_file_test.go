@@ -1,7 +1,9 @@
 package logfile
 
 import (
+	"fmt"
 	"github.com/stretchr/testify/assert"
+	"os"
 	"testing"
 	"time"
 )
@@ -380,3 +382,22 @@ func TestLogFile_Delete(t *testing.T) {
 		deleteLf(MMap)
 	})
 }*/
+
+func TestTruncate(t *testing.T) {
+	filePath := "path/to/file.txt"
+	offset := int64(100) // 指定的偏移量
+
+	file, err := os.OpenFile(filePath, os.O_RDWR, 0644)
+	if err != nil {
+		fmt.Println("Error opening file:", err)
+		return
+	}
+	defer file.Close()
+	err = file.Truncate(offset)
+	if err != nil {
+		fmt.Println("Error truncating file:", err)
+		return
+	}
+
+	fmt.Println("File truncated successfully.")
+}

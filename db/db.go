@@ -3,9 +3,9 @@ package db
 import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/config"
-	"github.com/ColdToo/Cold2DB/db/flock"
 	"github.com/ColdToo/Cold2DB/db/index"
 	"github.com/ColdToo/Cold2DB/db/logfile"
+	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/utils"
@@ -24,12 +24,14 @@ type Cold2KV struct {
 
 	flushChn chan *memtable
 
+	wal *wal.WAL
+
 	indexer index.Indexer
 
 	// Prevent concurrent db using.
 	// At least one FileLockGuard(cf/indexer/vlog dirs are all the same).
 	// And at most three FileLockGuards(cf/indexer/vlog dirs are all different).
-	dirLocks []*flock.FileLockGuard
+	//dirLocks []*flock.FileLockGuard
 
 	snapShotter SnapShotter
 }
@@ -72,18 +74,13 @@ func dbCfgCheck(dbCfg *config.DBConfig) error {
 			return err
 		}
 	}
-	if !utils.PathExist(dbCfg.MemConfig.WalDirPath) {
-		if err := os.MkdirAll(dbCfg.MemConfig.WalDirPath, os.ModePerm); err != nil {
-			return err
-		}
-	}
 	if !utils.PathExist(dbCfg.IndexConfig.IndexerDir) {
 		if err := os.MkdirAll(dbCfg.IndexConfig.IndexerDir, os.ModePerm); err != nil {
 			return err
 		}
 	}
-	if !utils.PathExist(dbCfg.HardStateLogConfig.HardStateLogDir) {
-		if err := os.MkdirAll(dbCfg.HardStateLogConfig.HardStateLogDir, os.ModePerm); err != nil {
+	if !utils.PathExist(dbCfg.WalConfig.WalDirPath) {
+		if err := os.MkdirAll(dbCfg.WalConfig.WalDirPath, os.ModePerm); err != nil {
 			return err
 		}
 	}
@@ -121,6 +118,19 @@ func (db *Cold2KV) SaveHardState(st pb.HardState) error {
 }
 
 func (db *Cold2KV) SaveEntries(entries []*pb.Entry) error {
+	//todo 异步写入wal还是同步写入wal?
+	ents := make([][]byte, len(entries))
+	count := 0
+	for _, ent := range entries {
+		bytes, err := ent.Marshal()
+		if err != nil {
+			return err
+		}
+		count += len(bytes)
+		ents = append(ents, bytes)
+	}
+	db.memManager.wal.Write(ents, int64(count))
+	db.memManager.entries = append(db.memManager.entries, entries...)
 	return nil
 }
 

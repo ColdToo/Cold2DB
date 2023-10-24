@@ -4,10 +4,10 @@ import (
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
 	"github.com/ColdToo/Cold2DB/db/logfile"
+	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"io"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,36 +21,36 @@ type memManager struct {
 
 	appliedIndex uint64
 
-	entries []pb.Entry
-
 	activeMem *memtable
 
 	immuMems []*memtable
 
 	flushChn chan *memtable
 
-	walDirPath string
+	//raft log entries
+	entries []*pb.Entry
+
+	wal *wal.WAL
 }
 
 func NewMemManger(memCfg config.MemConfig) (manager *memManager, err error) {
 	memManger := new(memManager)
-	memManger.walDirPath = memCfg.WalDirPath
 	memManger.flushChn = make(chan *memtable, memCfg.MemtableNums-1)
 	memManger.immuMems = make([]*memtable, memCfg.MemtableNums-1)
 
 	memOpt := MemOpt{
-		walFileId:  time.Now().Unix(),
-		walDirPath: memCfg.WalDirPath,
-		fsize:      int64(memCfg.MemtableSize),
-		memSize:    memCfg.MemtableSize,
+		fsize:   int64(memCfg.MemtableSize),
+		memSize: memCfg.MemtableSize,
 	}
+
+	manager.wal, err = wal.NewWal(memCfg.WalConfig)
 
 	memManger.activeMem, err = memManger.newMemtable(memOpt)
 	if err != nil {
 		return
 	}
 
-	go memManger.reopenImMemtable(memOpt)
+	go memManger.reopenImMemtable(memManger.wal)
 
 	return memManger, nil
 }
@@ -61,30 +61,12 @@ func (m *memManager) newMemtable(memOpt MemOpt) (*memtable, error) {
 	skl := arenaskl.NewSkiplist(arena)
 	sklIter.Init(skl)
 	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
-
-	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WALLog, memOpt.)
-	if err != nil {
-		return nil, err
-	}
-	table.wal = wal
-
 	return table, nil
 }
 
-func (m *memManager) reopenImMemtable(memOpt MemOpt) {
-	DirEntries, err := os.ReadDir(memOpt.walDirPath)
-	if err != nil {
-		log.Errorf("", err)
-		return
-	}
-
-	if len(DirEntries) <= 0 {
-		log.Info("没有wal文件,不用初始化immtable")
-		return
-	}
-
+func (m *memManager) reopenImMemtable(wal *wal.WAL) {
 	var fids []int64
-	for _, entry := range DirEntries {
+	for _, entry := range wal.OlderSegments {
 		if !strings.HasSuffix(entry.Name(), logfile.WalSuffixName) {
 			continue
 		}
@@ -126,12 +108,6 @@ func (m *memManager) openMemtable(memOpt MemOpt) (*memtable, error) {
 	sklIter.Init(skl)
 	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
 
-	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize*2, logfile.WALLog, memOpt.ioType)
-	if err != nil {
-		return nil, err
-	}
-	table.wal = wal
-
 	var offset int64 = 0
 	var entry *logfile.Entry
 	var size int64
@@ -171,7 +147,6 @@ type memtable struct {
 	//todo iterator里既有arena也有skiplist是否合理？
 	sklIter  *arenaskl.Iterator
 	skl      *arenaskl.Skiplist
-	wal      *logfile.LogFile
 	memOpt   MemOpt
 	maxIndex uint64
 	minIndex uint64
@@ -179,10 +154,8 @@ type memtable struct {
 
 // options held by memtable for opening new memtables.
 type MemOpt struct {
-	walDirPath string
-	walFileId  int64
-	fsize      int64
-	memSize    uint32
+	fsize   int64
+	memSize uint32
 }
 
 // todo put重写
@@ -229,8 +202,4 @@ func (mt *memtable) isFull(delta uint32) bool {
 
 	walSize := atomic.LoadInt64(&mt.wal.WriteAt)
 	return walSize >= int64(mt.memOpt.memSize)
-}
-
-func (mt *memtable) walFileId() int64 {
-	return mt.wal.Fid
 }

@@ -11,7 +11,7 @@ type DBConfig struct {
 
 	IndexConfig IndexConfig
 
-	HardStateLogConfig HardStateLogConfig
+	WalConfig WalConfig
 }
 
 type MemConfig struct {
@@ -28,8 +28,7 @@ type MemConfig struct {
 	// Default value is 100ms.
 	MemSpaceWaitTimeout time.Duration
 
-	// wal dir path, one memtable corresponds one wal
-	WalDirPath string
+	WalConfig WalConfig
 
 	// Persist index,IndexerDir dir path to store index meta data
 	IndexerDir string
@@ -42,9 +41,8 @@ type WalConfig struct {
 	// wal dir path, one memtable corresponds one wal
 	WalDirPath string
 
-	WalSync bool
-
-	WalMMap bool
+	// SegmentSize specifies the maximum size of each segment file in bytes.
+	SegmentSize int64
 }
 
 type ValueLogConfig struct {
@@ -54,10 +52,6 @@ type ValueLogConfig struct {
 
 	// ValueLogMmap similar to WalMMap, default value is false.
 	ValueLogMmap bool
-}
-
-type HardStateLogConfig struct {
-	HardStateLogDir string
 }
 
 type MemTableConfig struct {
