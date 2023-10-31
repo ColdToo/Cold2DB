@@ -2,20 +2,18 @@ package wal
 
 import (
 	"errors"
-	"fmt"
 	"github.com/ColdToo/Cold2DB/config"
-	"io"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
+	"github.com/ColdToo/Cold2DB/pb"
 	"sync"
 )
 
 const (
-	initialSegmentFileID = 1
-	SegSuffix            = ".SEG"
-	chunckHeaderSize     = 7
+	// ChunkHeaderSize
+	// Checksum Length  index
+	//    4       3       8
+	ChunkHeaderSize = 15
+	FileModePerm    = 0644
+	SegSuffix       = ".SEG"
 )
 
 var (
@@ -24,15 +22,14 @@ var (
 )
 
 type WAL struct {
-	activeSegment *segment
-	OlderSegments map[SegmentID]*segment
-	Config        config.WalConfig
-	mu            sync.RWMutex
-	renameIds     []SegmentID
-
-	pendingWrites     [][]byte
-	pendingSize       int64
-	pendingWritesLock sync.Mutex
+	HsSegment      *segment //保存需要持久化的raft状态
+	ActiveSegment  *segment
+	OlderSegments  map[SegmentID]*segment
+	Config         config.WalConfig
+	mu             sync.RWMutex
+	OrderIndexList OrderedLinkedList
+	RenameIds      []SegmentID
+	RaftHardState  pb.HardState //需要持久化的状态
 }
 
 type Reader struct {
@@ -44,88 +41,24 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 	wal := &WAL{
 		Config:        config,
 		OlderSegments: make(map[SegmentID]*segment),
-		pendingWrites: make([][]byte, 0),
 	}
 
-	// iterate the dir and open all segment files.
-	entries, err := os.ReadDir(config.WalDirPath)
+	acSegment, err := NewSegmentFile(config.WalDirPath)
 	if err != nil {
 		return nil, err
 	}
+	wal.ActiveSegment = acSegment
 
-	// get all segment file ids.
-	var segmentIDs []int
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		var id int
-		_, err := fmt.Sscanf(entry.Name(), "%d"+SegSuffix, &id)
-		if err != nil {
-			continue
-		}
-		segmentIDs = append(segmentIDs, id)
+	hsSegment, err := NewSegmentFile(config.WalDirPath)
+	if err != nil {
+		return nil, err
 	}
-
-	// empty directory, just initialize a new segment file.
-	if len(segmentIDs) == 0 {
-		segment, err := openSegmentFile(config.WalDirPath, initialSegmentFileID)
-		if err != nil {
-			return nil, err
-		}
-		wal.activeSegment = segment
-	} else {
-		// open the segment files in order, get the max one as the active segment file.
-		sort.Ints(segmentIDs)
-
-		for i, segId := range segmentIDs {
-			segment, err := openSegmentFile(config.WalDirPath, uint32(segId))
-			if err != nil {
-				return nil, err
-			}
-			if i == len(segmentIDs)-1 {
-				wal.activeSegment = segment
-			} else {
-				wal.OlderSegments[segment.id] = segment
-			}
-		}
-	}
+	wal.HsSegment = hsSegment
 
 	return wal, nil
 }
 
-func SegmentFileName(WaldirPath string, extName string, id SegmentID) string {
-	return filepath.Join(WaldirPath, fmt.Sprintf("%09d"+extName, id))
-}
-
-func (wal *WAL) OpenNewActiveSegment() error {
-	wal.mu.Lock()
-	defer wal.mu.Unlock()
-	// sync the active segment file.
-	if err := wal.activeSegment.Sync(); err != nil {
-		return err
-	}
-	// create a new segment file and set it as the active one.
-	segment, err := openSegmentFile(wal.Config.WalDirPath,
-		wal.activeSegment.id+1, wal.blockCache)
-	if err != nil {
-		return err
-	}
-	wal.OlderSegments[wal.activeSegment.id] = wal.activeSegment
-	wal.activeSegment = segment
-	return nil
-}
-
-// ActiveSegmentID returns the id of the active segment file.
-func (wal *WAL) ActiveSegmentID() SegmentID {
-	wal.mu.RLock()
-	defer wal.mu.RUnlock()
-
-	return wal.activeSegment.id
-}
-
-// IsEmpty returns whether the WAL is empty.
-// Only there is only one empty active segment file, which means the WAL is empty.
+/*
 func (wal *WAL) IsEmpty() bool {
 	wal.mu.RLock()
 	defer wal.mu.RUnlock()
@@ -406,11 +339,6 @@ func (wal *WAL) Delete() error {
 	wal.mu.Lock()
 	defer wal.mu.Unlock()
 
-	// purge the block cache.
-	if wal.blockCache != nil {
-		wal.blockCache.Purge()
-	}
-
 	// delete all segment files.
 	for _, segment := range wal.olderSegments {
 		if err := segment.Remove(); err != nil {
@@ -465,3 +393,5 @@ func (wal *WAL) isFull(delta int64) bool {
 func (wal *WAL) maxDataWriteSize(size int64) int64 {
 	return wal.chunkHeaderSize + size + (size/wal.blockSize+1)*wal.chunkHeaderSize
 }
+
+*/

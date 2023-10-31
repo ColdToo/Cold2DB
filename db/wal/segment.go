@@ -1,24 +1,12 @@
 package wal
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/ColdToo/Cold2DB/db/iooperator"
-	"github.com/valyala/bytebufferpool"
-	"hash/crc32"
+	"github.com/ColdToo/Cold2DB/db/iooperator/directio"
 	"io"
 	"os"
-	"sync"
-)
-
-type ChunkType = byte
-
-const (
-	ChunkTypeFull ChunkType = iota
-	ChunkTypeFirst
-	ChunkTypeMiddle
-	ChunkTypeLast
+	"path/filepath"
 )
 
 type SegmentID = uint32
@@ -28,91 +16,38 @@ var (
 	ErrInvalidCRC = errors.New("invalid crc, the data may be corrupted")
 )
 
-const (
-	// Checksum Length Type
-	//    4      2     1
-	chunkHeaderSize = 7
-
-	// 32 KB
-	blockSize = 32 * KB
-
-	fileModePerm = 0644
-
-	// uin32 + uint32 + int64 + uin32
-	// segmentId + BlockNumber + ChunkOffset + ChunkSize
-	maxLen = binary.MaxVarintLen32*3 + binary.MaxVarintLen64
-)
-
-// Segment represents a single segment file in WAL.
-// The segment file is append-only, and the data is written in blocks.
-// Each block is 32KB, and the data is written in chunks.
 type segment struct {
-	id                 SegmentID
-	fd                 *os.File
-	currentBlockNumber uint32
-	currentBlockSize   uint32
-	closed             bool
-	header             []byte
-	blockPool          sync.Pool
+	Fd        *os.File
+	blockPool *BlockPool
+	closed    bool
 }
 
-// segmentReader is used to iterate all the data from the segment file.
-// You can call Next to get the next chunk data,
-// and io.EOF will be returned when there is no data.
 type segmentReader struct {
 	segment     *segment
 	blockNumber uint32
 	chunkOffset int64
 }
 
-// block and chunk header, saved in pool.
-type blockAndHeader struct {
-	block  []byte
-	header []byte
-}
-
-// ChunkPosition represents the position of a chunk in a segment file.
-// Used to read the data from the segment file.
-type ChunkPosition struct {
-	SegmentId SegmentID
-	// BlockNumber The block number of the chunk in the segment file.
-	BlockNumber uint32
-	// ChunkOffset The start offset of the chunk in the block.
-	ChunkOffset int64
-	// ChunkSize How many bytes the chunk data takes up in the block.
-	ChunkSize uint32
-}
-
-// openSegmentFile a new segment file.
-func openSegmentFile(dirPath string, id uint32) (*segment, error) {
-	fd, err := iooperator.OpenDirectIOFile(
-		SegmentFileName(dirPath, SegSuffix, id),
-		os.O_CREATE|os.O_RDWR|os.O_APPEND,
-		fileModePerm, 10*blockSize)
+func NewSegmentFile(dirPath string) (*segment, error) {
+	fd, err := directio.OpenDirectIOFile(SegmentFileName(dirPath, SegSuffix, 0>>1), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, err
 	}
 
-	offset, err := fd.Seek(0, io.SeekStart)
+	_, err = fd.Seek(0, io.SeekStart)
 	if err != nil {
-		panic(fmt.Errorf("seek to the end of segment file %d%s failed: %v", id, ".SEG", err))
+		panic(fmt.Errorf("seek to the end of segment file %s failed: %v", ".SEG", err))
 	}
 
+	blockPool := NewBlockPool()
 	return &segment{
-		id:                 id,
-		fd:                 fd,
-		header:             make([]byte, chunkHeaderSize),
-		blockPool:          sync.Pool{New: newBlockAndHeader},
-		currentBlockNumber: uint32(offset / blockSize),
-		currentBlockSize:   uint32(offset % blockSize),
+		Fd:        fd,
+		blockPool: blockPool,
 	}, nil
 }
 
-func newBlockAndHeader() interface{} {
-	return &blockAndHeader{
-		block:  make([]byte, blockSize),
-		header: make([]byte, chunkHeaderSize),
-	}
+func SegmentFileName(WaldirPath string, extName string, index uint) string {
+	return filepath.Join(WaldirPath, fmt.Sprintf("%014d"+extName, index))
 }
 
 // NewReader creates a new segment reader.
@@ -130,10 +65,10 @@ func (seg *segment) NewReader() *segmentReader {
 func (seg *segment) Remove() error {
 	if !seg.closed {
 		seg.closed = true
-		_ = seg.fd.Close()
+		_ = seg.Fd.Close()
 	}
 
-	return os.Remove(seg.fd.Name())
+	return os.Remove(seg.Fd.Name())
 }
 
 // Close closes the segment file.
@@ -143,9 +78,10 @@ func (seg *segment) Close() error {
 	}
 
 	seg.closed = true
-	return seg.fd.Close()
+	return seg.Fd.Close()
 }
 
+/*
 // Size returns the size of the segment file.
 func (seg *segment) Size() int64 {
 	size := int64(seg.currentBlockNumber) * int64(blockSize)
@@ -520,3 +456,5 @@ func DecodeChunkPosition(buf []byte) *ChunkPosition {
 		ChunkSize:   uint32(chunkSize),
 	}
 }
+
+*/

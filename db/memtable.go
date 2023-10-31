@@ -1,18 +1,17 @@
 package db
 
 import (
+	"fmt"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
+	"github.com/ColdToo/Cold2DB/db/iooperator/directio"
 	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
-	"io"
-	"sort"
-	"strconv"
+	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -50,7 +49,14 @@ func NewMemManger(memCfg config.MemConfig) (manager *memManager, err error) {
 		return
 	}
 
-	go memManger.reopenImMemtable(memManger.wal)
+	files, err := os.ReadDir(manager.wal.Config.WalDirPath)
+	if err != nil {
+		log.Panicf("open wal dir failed", err)
+	}
+
+	if len(files) != 0 {
+		memManger.reopenImMemtableAndEntries(files)
+	}
 
 	return memManger, nil
 }
@@ -64,41 +70,46 @@ func (m *memManager) newMemtable(memOpt MemOpt) (*memtable, error) {
 	return table, nil
 }
 
-func (m *memManager) reopenImMemtable(wal *wal.WAL) {
-	var fids []int64
-	for _, entry := range wal.OlderSegments {
-		if !strings.HasSuffix(entry.Name(), logfile.WalSuffixName) {
-			continue
-		}
-		splitNames := strings.Split(entry.Name(), ".")
-		fid, _ := strconv.Atoi(splitNames[0])
-		fids = append(fids, int64(fid))
-	}
-	// 根据文件timestamp排序
-	sort.Slice(fids, func(i, j int) bool {
-		return fids[i] < fids[j]
-	})
-
-	immtableC := make(chan *memtable, len(DirEntries))
-	wg := sync.WaitGroup{}
-	for _, fid := range fids {
-		memOpt.walFileId = fid
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			table, err := m.openMemtable(memOpt)
+func (m *memManager) reopenImMemtableAndEntries(files []os.DirEntry) {
+	for _, file := range files {
+		if strings.Contains(file.Name(), ".SEG") {
+			//else
+			fd, err := directio.OpenDirectFile(file.Name(), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 			if err != nil {
-				log.Errorf("", err)
+				log.Panicf("can not ")
 			}
-			immtableC <- table
-		}()
+
+			var id int64
+			_, err = fmt.Sscanf(file.Name(), "%d.SEG", &id)
+			if err != nil {
+				log.Panicf("can not scan file")
+			}
+			m.wal.OrderIndexList.Insert(id, fd)
+		}
+
+		if strings.Contains(file.Name(), ".RAFT") {
+			fd, err := directio.OpenDirectFile(file.Name(), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+			if err != nil {
+				log.Panicf("can not ")
+			}
+			m.wal.HsSegment.Fd = fd
+			//todo 将数据序列化到hardstate中
+		}
 	}
-	wg.Wait()
-	close(immtableC)
-	for table := range immtableC {
-		m.immuMems = append(m.immuMems, table)
-	}
+	//通过applied index找到对应的最小segment file
+	//启动两个goroutine分别将segment file加载到Immemtble和enties中
+	go m.reopenEntries()
+	go m.reopenImMemtable()
 	return
+}
+
+func (m *memManager) reopenImMemtable() {
+	appliedIndex := m.wal.RaftHardState.Applied
+}
+
+func (m *memManager) reopenEntries() {
+	appliedIndex := m.wal.RaftHardState.Applied
+
 }
 
 func (m *memManager) openMemtable(memOpt MemOpt) (*memtable, error) {
@@ -107,36 +118,6 @@ func (m *memManager) openMemtable(memOpt MemOpt) (*memtable, error) {
 	skl := arenaskl.NewSkiplist(arena)
 	sklIter.Init(skl)
 	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
-
-	var offset int64 = 0
-	var entry *logfile.Entry
-	var size int64
-	for {
-		if entry, size, err = wal.ReadWALEntry(offset); err == nil {
-			offset += size
-			wal.WriteAt += size
-
-			mv := &logfile.Entry{
-				Index:     entry.Index,
-				Term:      entry.Term,
-				ExpiredAt: entry.ExpiredAt,
-				Value:     entry.Value,
-				Type:      entry.Type,
-			}
-			mvBuf := mv.EncodeMemEntry()
-
-			var err error
-			err = table.sklIter.Put(entry.Key, mvBuf)
-			if err != nil {
-				log.Errorf("put value into skip list err.%+v", err)
-				return nil, err
-			}
-		}
-
-		if err == io.EOF || err == logfile.ErrEndOfEntry {
-			break
-		}
-	}
 
 	return table, nil
 }
@@ -190,16 +171,4 @@ func (mt *memtable) Get(key []byte) (bool, []byte) {
 	}
 
 	return false, mv.Value
-}
-
-func (mt *memtable) isFull(delta uint32) bool {
-	if mt.skl.Size()+delta >= mt.memOpt.memSize {
-		return true
-	}
-	if mt.wal == nil {
-		return false
-	}
-
-	walSize := atomic.LoadInt64(&mt.wal.WriteAt)
-	return walSize >= int64(mt.memOpt.memSize)
 }

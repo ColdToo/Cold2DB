@@ -10,6 +10,17 @@ import (
 	"time"
 )
 
+func GetTestData() []byte {
+	// 创建测试数据
+	blockSize := 4098
+	blockCount := 1
+	testData := make([]byte, blockSize*blockCount)
+	for i := 0; i < len(testData); i++ {
+		testData[i] = 1
+	}
+	return testData
+}
+
 func BenchmarkDirectIO(b *testing.B) {
 	b.ResetTimer() // 重置计时器，排除初始化代码的影响
 
@@ -71,18 +82,6 @@ func BufferdIO(testData []byte) {
 
 	fileBufferedIO.Write(testData)
 	fileBufferedIO.Sync()
-}
-
-func GetTestData() []byte {
-	// 创建测试数据
-	blockSize := 4096
-	// block size越大差距越小,当block size为4096时 direct io写入速度更快
-	blockCount := 10
-	testData := make([]byte, blockSize*blockCount)
-	for i := 0; i < len(testData); i++ {
-		testData[i] = 1
-	}
-	return testData
 }
 
 func TestDirectIOAndBufferdIOTime(t *testing.T) {
