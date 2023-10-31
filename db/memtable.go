@@ -109,7 +109,6 @@ func (m *memManager) reopenImMemtable() {
 
 func (m *memManager) reopenEntries() {
 	appliedIndex := m.wal.RaftHardState.Applied
-
 }
 
 func (m *memManager) openMemtable(memOpt MemOpt) (*memtable, error) {
