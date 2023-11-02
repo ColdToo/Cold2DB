@@ -147,8 +147,6 @@ func (an *AppNode) serveRaftNode() {
 			an.stop()
 			return
 
-			//如果raft层发现致命错误需要停止服务
-
 		case err := <-an.raftNode.GetErrorC():
 			log.Panicf("raftNode get critical err", err)
 			an.stop()

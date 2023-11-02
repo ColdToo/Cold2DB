@@ -33,7 +33,8 @@ type RaftNode struct {
 	AdvanceC chan struct{}
 	ErrorC   chan error
 	done     chan struct{}
-	stop     chan struct{}
+
+	stop chan struct{}
 }
 
 type Peer struct {

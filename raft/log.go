@@ -3,6 +3,7 @@ package raft
 import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/db"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
@@ -15,6 +16,7 @@ import (
 type Log interface {
 	Term(i uint64) (uint64, error)
 	LastIndex() uint64
+	FirstIndex() uint64
 	AppliedIndex() uint64
 	SetCommittedIndex(i uint64)
 	CommittedIndex() uint64
@@ -24,7 +26,6 @@ type Log interface {
 	HasNextApplyEnts() bool
 	AppendEntries(ents []pb.Entry)
 	Entries(low, high uint64) (ents []*pb.Entry, err error)
-	ClearUnAppliedEntries()
 }
 
 type RaftLog struct {
@@ -38,20 +39,23 @@ type RaftLog struct {
 
 	stabled uint64
 
+	//第i条entries数组数据在raft日志中的索引为i + unstable.offset。
+	offset uint64
+
 	entries []*pb.Entry
 
 	storage db.Storage
 }
 
 func newRaftLog(storage db.Storage) Log {
-	firstIndex, _ := storage.FirstIndex()
+	firstIndex := storage.FirstIndex()
 	appliedIndex := storage.AppliedIndex()
 	emptyEntS := make([]*pb.Entry, 0)
 	return &RaftLog{storage: storage, first: firstIndex, applied: appliedIndex, entries: emptyEntS}
 }
 
-// Term 根据index返回term,如果raft log中没有那么就从mem table中获取,如果mem table也获取不到那么说明这条日志已经被compact了,此时需要传输快照
 func (l *RaftLog) Term(i uint64) (uint64, error) {
+	//如果i已经stable那么通过storage获取
 	if i > l.applied {
 		return l.entries[i-l.applied].Index, nil
 	} else {
@@ -61,15 +65,19 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 		}
 	}
 
-	return 0, ErrUnavailable
+	return 0, errors.New("is compacted")
 }
 
 func (l *RaftLog) LastIndex() uint64 {
 	if len(l.entries) > 0 {
 		return l.entries[len(l.entries)-1].Index
 	}
-	index, _ := l.storage.FirstIndex()
-	return index
+
+	return l.storage.LastIndex()
+}
+
+func (l *RaftLog) FirstIndex() uint64 {
+	return l.storage.FirstIndex()
 }
 
 func (l *RaftLog) AppliedIndex() uint64 {
@@ -98,14 +106,12 @@ func (l *RaftLog) HasNextApplyEnts() bool {
 	return true
 }
 
-func (l *RaftLog) AppendEntries(ents []pb.Entry) {
-	for _, e := range ents {
-		l.entries = append(l.entries, &e)
-	}
-	l.last = l.last + uint64(len(ents))
-}
-
 func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
+	err = l.mustCheckOutOfBounds(low, high)
+	if err != nil {
+		return
+	}
+
 	if low > high {
 		return nil, errors.New("low should not > high")
 	}
@@ -133,6 +139,40 @@ func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
 	return
 }
 
-func (l *RaftLog) ClearUnAppliedEntries() {
-	l.entries = nil
+func (l *RaftLog) mustCheckOutOfBounds(lo, hi uint64) error {
+	if lo > hi {
+		log.Panicf("invalid slice %d > %d", lo, hi)
+	}
+	fi := l.FirstIndex()
+	if lo < fi {
+		return errors.New("is compacted")
+	}
+
+	length := l.LastIndex() + 1 - fi
+	if lo < fi || hi > fi+length {
+		log.Panicf("slice[%d,%d) out of bound [%d,%d]", lo, hi, fi, l.LastIndex())
+	}
+	return nil
+}
+
+func (l *RaftLog) StableTo(i uint64) {
+	l.stabled = i
+}
+
+// AppendEntries leader append
+func (l *RaftLog) AppendEntries(ents []pb.Entry) {
+	for _, e := range ents {
+		l.entries = append(l.entries, &e)
+	}
+	l.last = l.last + uint64(len(ents))
+}
+
+// TruncateAndAppend follower append maybe conflict log so should truncate
+func (l *RaftLog) TruncateAndAppend() {
+	if l.stabled > l.committed {
+	} else {
+		l.storage.Append(l.entries[l.committed-l.stabled : l.committed])
+		l.entries = l.entries[l.committed-l.stabled : l.committed]
+		l.offset = l.committed
+	}
 }
