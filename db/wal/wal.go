@@ -4,6 +4,9 @@ import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/pb"
+	"io"
+	"os"
+	"sort"
 	"sync"
 )
 
@@ -24,6 +27,7 @@ var (
 type WAL struct {
 	HsSegment      *segment //保存需要持久化的raft状态
 	ActiveSegment  *segment
+	SegmentPipe    chan *segment
 	OlderSegments  map[SegmentID]*segment
 	Config         config.WalConfig
 	mu             sync.RWMutex
@@ -35,6 +39,19 @@ type WAL struct {
 type Reader struct {
 	segmentReaders []*segmentReader
 	currentReader  int
+}
+
+func (r *Reader) Next() ([]byte, *ChunkPosition, error) {
+	if r.currentReader >= len(r.segmentReaders) {
+		return nil, nil, io.EOF
+	}
+
+	data, position, err := r.segmentReaders[r.currentReader].Next()
+	if err == io.EOF {
+		r.currentReader++
+		return r.Next()
+	}
+	return data, position, err
 }
 
 func NewWal(config config.WalConfig) (*WAL, error) {
@@ -58,17 +75,6 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 	return wal, nil
 }
 
-/*
-func (wal *WAL) IsEmpty() bool {
-	wal.mu.RLock()
-	defer wal.mu.RUnlock()
-
-	return len(wal.OlderSegments) == 0 && wal.activeSegment.Size() == 0
-}
-
-// NewReaderWithMax returns a new reader for the WAL,
-// and the reader will only read the data from the segment file
-// whose id is less than or equal to the given segId.
 func (wal *WAL) NewReaderWithMax(segId SegmentID) *Reader {
 	wal.mu.RLock()
 	defer wal.mu.RUnlock()
@@ -81,8 +87,8 @@ func (wal *WAL) NewReaderWithMax(segId SegmentID) *Reader {
 			segmentReaders = append(segmentReaders, reader)
 		}
 	}
-	if segId == 0 || wal.activeSegment.id <= segId {
-		reader := wal.activeSegment.NewReader()
+	if segId == 0 || wal.ActiveSegment.id <= segId {
+		reader := wal.ActiveSegment.NewReader()
 		segmentReaders = append(segmentReaders, reader)
 	}
 
@@ -97,88 +103,10 @@ func (wal *WAL) NewReaderWithMax(segId SegmentID) *Reader {
 	}
 }
 
-// NewReaderWithStart returns a new reader for the WAL,
-// and the reader will only read the data from the segment file
-// whose position is greater than or equal to the given position.
-func (wal *WAL) NewReaderWithStart(startPos *ChunkPosition) (*Reader, error) {
-	if startPos == nil {
-		return nil, errors.New("start position is nil")
-	}
-	wal.mu.RLock()
-	defer wal.mu.RUnlock()
-
-	reader := wal.NewReader()
-	for {
-		// skip the segment readers whose id is less than the given position's segment id.
-		if reader.CurrentSegmentId() < startPos.SegmentId {
-			reader.SkipCurrentSegment()
-			continue
-		}
-		// skip the chunk whose position is less than the given position.
-		currentPos := reader.CurrentChunkPosition()
-		if currentPos.BlockNumber >= startPos.BlockNumber &&
-			currentPos.ChunkOffset >= startPos.ChunkOffset {
-			break
-		}
-		// call Next to find again.
-		if _, _, err := reader.Next(); err != nil {
-			if err == io.EOF {
-				break
-			}
-			return nil, err
-		}
-	}
-	return reader, nil
-}
-
-// NewReader returns a new reader for the WAL.
-// It will iterate all segment files and read all data from them.
 func (wal *WAL) NewReader() *Reader {
 	return wal.NewReaderWithMax(0)
 }
 
-// Next returns the next chunk data and its position in the WAL.
-// If there is no data, io.EOF will be returned.
-//
-// The position can be used to read the data from the segment file.
-func (r *Reader) Next() ([]byte, *ChunkPosition, error) {
-	if r.currentReader >= len(r.segmentReaders) {
-		return nil, nil, io.EOF
-	}
-
-	data, position, err := r.segmentReaders[r.currentReader].Next()
-	if err == io.EOF {
-		r.currentReader++
-		return r.Next()
-	}
-	return data, position, err
-}
-
-// SkipCurrentSegment skips the current segment file
-// when reading the WAL.
-//
-// It is now used by the Merge operation of rosedb, not a common usage for most users.
-func (r *Reader) SkipCurrentSegment() {
-	r.currentReader++
-}
-
-// CurrentSegmentId returns the id of the current segment file
-// when reading the WAL.
-func (r *Reader) CurrentSegmentId() SegmentID {
-	return r.segmentReaders[r.currentReader].segment.id
-}
-
-// CurrentChunkPosition returns the position of the current chunk data
-func (r *Reader) CurrentChunkPosition() *ChunkPosition {
-	reader := r.segmentReaders[r.currentReader]
-	return &ChunkPosition{
-		SegmentId:   reader.segment.id,
-		BlockNumber: reader.blockNumber,
-		ChunkOffset: reader.chunkOffset,
-	}
-}
-
-// ClearPendingWrites clear pendingWrite and reset pendingSize
 func (wal *WAL) ClearPendingWrites() {
 	wal.pendingWritesLock.Lock()
 	defer wal.pendingWritesLock.Unlock()
@@ -187,86 +115,27 @@ func (wal *WAL) ClearPendingWrites() {
 	wal.pendingWrites = wal.pendingWrites[:0]
 }
 
-// PendingWrites add data to wal.pendingWrites and wait for batch write.
-// If the data in pendingWrites exceeds the size of one segment,
-// it will return a 'ErrPendingSizeTooLarge' error and clear the pendingWrites.
-func (wal *WAL) PendingWrites(data []byte) error {
-	wal.pendingWritesLock.Lock()
-	defer wal.pendingWritesLock.Unlock()
-
-	size := wal.maxDataWriteSize(int64(len(data)))
-	wal.pendingSize += size
-	wal.pendingWrites = append(wal.pendingWrites, data)
-	return nil
-}
-
-// rotateActiveSegment create a new segment file and replace the activeSegment.
 func (wal *WAL) rotateActiveSegment() error {
-	if err := wal.activeSegment.Sync(); err != nil {
-		return err
-	}
-	wal.bytesWrite = 0
-	segment, err := openSegmentFile(wal.config.WalDirPath, wal.config.SegmentFileExt,
-		wal.activeSegment.id+1, wal.blockCache)
-	if err != nil {
-		return err
-	}
-	wal.olderSegments[wal.activeSegment.id] = wal.activeSegment
-	wal.activeSegment = segment
+	//从active pipeline获取已经创建好的pipeline
+	newSegment := <-wal.SegmentPipe
+	wal.OrderIndexList.Insert(wal.ActiveSegment.index, wal.ActiveSegment.Fd)
+	wal.ActiveSegment = newSegment
 	return nil
 }
 
-// WriteAll write wal.pendingWrites to WAL and then clear pendingWrites,
-// it will not sync the segment file based on wal.config, you should call Sync() manually.
-func (wal *WAL) WriteAll() ([]*ChunkPosition, error) {
-	if len(wal.pendingWrites) == 0 {
-		return make([]*wal.ChunkPosition, 0), nil
-	}
-
-	wal.mu.Lock()
-	defer func() {
-		wal.ClearPendingWrites()
-		wal.mu.Unlock()
-	}()
+func (wal *WAL) Write(entries []*pb.Entry) error {
+	//segment文件应该尽量均匀，若此次entries太大那么直接写入新的segment文件中
+	//计算出占segment中的总字节数,不能超过一个segment文件，若超过需要分割这部分entries
 
 	// if the active segment file is full, sync it and create a new one.
-	if wal.activeSegment.Size()+wal.pendingSize > wal.config.SegmentSize {
-		if err := wal.rotateActiveSegment(); err != nil {
-			return nil, err
-		}
-	}
-	// if the pending size is still larger than segment size, return error
-	if wal.pendingSize > wal.config.SegmentSize {
-		return nil, ErrPendingSizeTooLarge
-	}
-
-	// write all data to the active segment file.
-	positions, err := wal.activeSegment.writeAll(wal.pendingWrites)
-	if err != nil {
-		return nil, err
-	}
-
-	return positions, nil
-}
-
-func (wal *WAL) Write(ents [][]byte, byteCount int64) (*ChunkPosition, error) {
-	wal.mu.Lock()
-	defer wal.mu.Unlock()
-
-	//计算出占wal中的总字节数,不能超过一个segment文件
-	if byteCount+int64(len(ents)*chunkHeaderSize) > wal.Config.SegmentSize {
-		return nil, ErrValueTooLarge
-	}
-
-	// if the active segment file is full, sync it and create a new one.
-	if wal.isFull(int64(len(data))) {
+	if wal.ActiveSegmentIsFull(int64(len(data))) {
 		if err := wal.rotateActiveSegment(); err != nil {
 			return nil, err
 		}
 	}
 
 	// write the data to the active segment file.
-	position, err := wal.activeSegment.Write(data)
+	position, err := wal.ActiveSegment.Write(data)
 	if err != nil {
 		return nil, err
 	}
@@ -280,7 +149,7 @@ func (wal *WAL) Write(ents [][]byte, byteCount int64) (*ChunkPosition, error) {
 		needSync = wal.bytesWrite >= wal.config.BytesPerSync
 	}
 	if needSync {
-		if err := wal.activeSegment.Sync(); err != nil {
+		if err := wal.ActiveSegment.Sync(); err != nil {
 			return nil, err
 		}
 		wal.bytesWrite = 0
@@ -289,109 +158,49 @@ func (wal *WAL) Write(ents [][]byte, byteCount int64) (*ChunkPosition, error) {
 	return position, nil
 }
 
-// Read reads the data from the WAL according to the given position.
-func (wal *WAL) Read(pos *ChunkPosition) ([]byte, error) {
-	wal.mu.RLock()
-	defer wal.mu.RUnlock()
-
-	// find the segment file according to the position.
-	var segment *wal.segment
-	if pos.SegmentId == wal.activeSegment.id {
-		segment = wal.activeSegment
-	} else {
-		segment = wal.olderSegments[pos.SegmentId]
-	}
-
-	if segment == nil {
-		return nil, fmt.Errorf("segment file %d%s not found", pos.SegmentId, wal.config.SegmentFileExt)
-	}
-
-	// read the data from the segment file.
-	return segment.Read(pos.BlockNumber, pos.ChunkOffset)
+func (wal *WAL) Truncate(index int) error {
+	return nil
 }
 
-// Close closes the WAL.
+func (wal *WAL) ActiveSegmentIsFull(delta int64) bool {
+	//应尽可能使segment大小均匀，这样查找能提高查找某个entry的效率
+	actSegSize := wal.ActiveSegment.Size()
+	comSize := actSegSize + delta
+	if comSize > wal.Config.SegmentSize {
+		if actSegSize*2 > wal.Config.SegmentSize {
+			return false
+		}
+	}
+	return true
+}
+
 func (wal *WAL) Close() error {
 	wal.mu.Lock()
 	defer wal.mu.Unlock()
 
-	// purge the block cache.
-	if wal.blockCache != nil {
-		wal.blockCache.Purge()
-	}
-
-	// close all segment files.
-	for _, segment := range wal.olderSegments {
-		if err := segment.Close(); err != nil {
+	for wal.OrderIndexList.Head != nil {
+		err := wal.OrderIndexList.Head.Data.Value.Close()
+		if err != nil {
 			return err
 		}
-		wal.renameIds = append(wal.renameIds, segment.id)
+		wal.OrderIndexList.Head = wal.OrderIndexList.Head.Next
 	}
-	wal.olderSegments = nil
-
-	wal.renameIds = append(wal.renameIds, wal.activeSegment.id)
 	// close the active segment file.
-	return wal.activeSegment.Close()
+	return wal.ActiveSegment.Close()
 }
 
-// Delete deletes all segment files of the WAL.
 func (wal *WAL) Delete() error {
 	wal.mu.Lock()
 	defer wal.mu.Unlock()
 
-	// delete all segment files.
-	for _, segment := range wal.olderSegments {
-		if err := segment.Remove(); err != nil {
+	for wal.OrderIndexList.Head != nil {
+		err := os.Remove(wal.OrderIndexList.Head.Data.Value.Name())
+		if err != nil {
 			return err
 		}
+		wal.OrderIndexList.Head = wal.OrderIndexList.Head.Next
 	}
-	wal.olderSegments = nil
 
 	// delete the active segment file.
-	return wal.activeSegment.Remove()
+	return wal.ActiveSegment.Remove()
 }
-
-// Sync syncs the active segment file to stable storage like disk.
-func (wal *WAL) Sync() error {
-	wal.mu.Lock()
-	defer wal.mu.Unlock()
-
-	return wal.activeSegment.Sync()
-}
-
-// RenameFileExt renames all segment files' extension name.
-// It is now used by the Merge operation of loutsdb, not a common usage for most users.
-func (wal *WAL) RenameFileExt(ext string) error {
-	if !strings.HasPrefix(ext, ".") {
-		return fmt.Errorf("segment file extension must start with '.'")
-	}
-	wal.mu.Lock()
-	defer wal.mu.Unlock()
-
-	renameFile := func(id wal.SegmentID) error {
-		oldName := SegmentFileName(wal.config.WalDirPath, wal.config.SegmentFileExt, id)
-		newName := SegmentFileName(wal.config.WalDirPath, ext, id)
-		return os.Rename(oldName, newName)
-	}
-
-	for _, id := range wal.renameIds {
-		if err := renameFile(id); err != nil {
-			return err
-		}
-	}
-
-	wal.config.SegmentFileExt = ext
-	return nil
-}
-
-func (wal *WAL) isFull(delta int64) bool {
-	return wal.activeSegment.Size()+wal.maxDataWriteSize(delta) > wal.config.SegmentSize
-}
-
-// maxDataWriteSize calculate the possible maximum size.
-// the maximum size = max padding + (num_block + 1) * headerSize + dataSize
-func (wal *WAL) maxDataWriteSize(size int64) int64 {
-	return wal.chunkHeaderSize + size + (size/wal.blockSize+1)*wal.chunkHeaderSize
-}
-
-*/

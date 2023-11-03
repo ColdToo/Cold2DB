@@ -5,7 +5,6 @@ import (
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/index"
 	"github.com/ColdToo/Cold2DB/db/logfile"
-	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/utils"
@@ -24,14 +23,7 @@ type Cold2KV struct {
 
 	flushChn chan *memtable
 
-	wal *wal.WAL
-
 	indexer index.Indexer
-
-	// Prevent concurrent db using.
-	// At least one FileLockGuard(cf/indexer/vlog dirs are all the same).
-	// And at most three FileLockGuards(cf/indexer/vlog dirs are all different).
-	//dirLocks []*flock.FileLockGuard
 
 	snapShotter SnapShotter
 }
@@ -118,18 +110,11 @@ func (db *Cold2KV) SaveHardState(st pb.HardState) error {
 }
 
 func (db *Cold2KV) SaveEntries(entries []*pb.Entry) error {
-	//todo 异步写入wal还是同步写入wal?
-	ents := make([][]byte, len(entries))
-	count := 0
-	for _, ent := range entries {
-		bytes, err := ent.Marshal()
-		if err != nil {
-			return err
-		}
-		count += len(bytes)
-		ents = append(ents, bytes)
+	// entries 假设大小合适
+	err := db.memManager.wal.Write(entries)
+	if err != nil {
+		return err
 	}
-	db.memManager.wal.Write(ents, int64(count))
 	db.memManager.entries = append(db.memManager.entries, entries...)
 	return nil
 }

@@ -26,6 +26,7 @@ type memManager struct {
 
 	flushChn chan *memtable
 
+	memtablePipe chan *memtable
 	//raft log entries
 	entries []*pb.Entry
 
@@ -93,9 +94,10 @@ func (m *memManager) reopenImMemtableAndEntries(files []os.DirEntry) {
 				log.Panicf("can not ")
 			}
 			m.wal.HsSegment.Fd = fd
-			//todo 将数据序列化到hardstate中
+			//todo 将HsSegment中的数据序列化到hardstate中
 		}
 	}
+
 	//通过applied index找到对应的最小segment file
 	//启动两个goroutine分别将segment file加载到Immemtble和enties中
 	go m.reopenEntries()
@@ -103,22 +105,14 @@ func (m *memManager) reopenImMemtableAndEntries(files []os.DirEntry) {
 	return
 }
 
+// 从头开始遍历遍历到applied index就停止memtable的刷新
 func (m *memManager) reopenImMemtable() {
 	appliedIndex := m.wal.RaftHardState.Applied
 }
 
+// 从包含applied index的segment file开始遍历,从applied index开始加载到entries中
 func (m *memManager) reopenEntries() {
 	appliedIndex := m.wal.RaftHardState.Applied
-}
-
-func (m *memManager) openMemtable(memOpt MemOpt) (*memtable, error) {
-	var sklIter = new(arenaskl.Iterator)
-	arena := arenaskl.NewArena(memOpt.memSize + uint32(arenaskl.MaxNodeSize))
-	skl := arenaskl.NewSkiplist(arena)
-	sklIter.Init(skl)
-	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
-
-	return table, nil
 }
 
 type memtable struct {
@@ -132,22 +126,14 @@ type memtable struct {
 	minIndex uint64
 }
 
-// options held by memtable for opening new memtables.
 type MemOpt struct {
 	fsize   int64
 	memSize uint32
 }
 
 // todo put重写
-func (mt *memtable) put(kv logfile.KV) error {
+func (mt *memtable) put(kv []logfile.KV) error {
 	return nil
-}
-
-func (mt *memtable) putBatch(entries []logfile.KV) error {
-	return nil
-}
-
-func (mt *memtable) putInMemtable(kv logfile.KV) {
 }
 
 func (mt *memtable) Get(key []byte) (bool, []byte) {
