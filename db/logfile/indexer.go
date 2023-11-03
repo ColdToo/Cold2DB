@@ -1,8 +1,9 @@
-package index
+package logfile
 
 import (
 	"encoding/binary"
 	"errors"
+	"github.com/ColdToo/Cold2DB/config"
 )
 
 var (
@@ -25,12 +26,6 @@ type IndexerType int8
 const (
 	// persist index
 	BptreeBoltDB IndexerType = iota
-
-	// inmemory index
-
-	ArenaSkipList
-
-	Bptree
 )
 
 type IndexerNode struct {
@@ -62,17 +57,14 @@ type Indexer interface {
 	Close() (err error)
 }
 
-// NewIndexer create a new Indexer by the given options, return an error, if any.
-/*func NewIndexer(indexCfg db.IndexConfig) (Indexer, error) {
+func NewIndexer(indexCfg config.IndexConfig) (Indexer, error) {
 	switch IndexerType(indexCfg.IndexerType) {
 	case BptreeBoltDB:
-	case ArenaSkipList:
-	case Bptree:
 	default:
 		panic("unknown indexer type")
 	}
 	return nil, nil
-}*/
+}
 
 // IndexerIter .
 type IndexerIter interface {

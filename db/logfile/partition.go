@@ -2,9 +2,8 @@ package logfile
 
 import (
 	"errors"
-	"github.com/ColdToo/Cold2DB/db/iooperator"
+	"os"
 	"strconv"
-	"sync"
 	"sync/atomic"
 )
 
@@ -23,48 +22,25 @@ var (
 const (
 	PathSeparator = "/"
 
-	WalSuffixName = ".wal"
-
-	VLogSuffixName = ".vlog"
-
-	RaftHardStateSuffixName = ".raft"
-)
-
-// FileType represents different types of log file: wal and value log.
-type FileType int8
-
-const (
-	// WALLog write ahead log.
-	WALLog FileType = iota
-
-	// ValueLog value log.
-	ValueLog
-
-	// HardStateLog persist raft status
-	HardStateLog
-)
-
-// IOType represents different types of file io
-type IOType int8
-
-const (
-	// BufferedIO standard file io.
-	BufferedIO IOType = iota
-	// MMap Memory Map.
-	MMap
-	// DirectIO bypass system page cache
-	DirectIO
+	SSTSuffixName = ".SST"
 )
 
 // LogFile is an abstraction of a disk file, entry`s read and write will go through it.
 type LogFile struct {
-	sync.RWMutex
-	Fid        int64 //timestamp
-	WriteAt    int64
-	IoOperator iooperator.IoOperator
+	activeSST *SST
+	older     []*SST
+	index     Indexer
 }
 
-func OpenLogFile(dirPath string, fid int64, fsize int64, ftype FileType, ioType IOType) (lf *LogFile, err error) {
+type Partition struct {
+	SST
+}
+
+type SST struct {
+	fd os.File
+}
+
+func OpenLogFile(dirPath string) (lf *LogFile, err error) {
 	lf = &LogFile{Fid: fid}
 	fileName, err := lf.getLogFileName(dirPath, fid, ftype)
 	if err != nil {

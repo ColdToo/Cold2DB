@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"bytes"
 	"errors"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -25,7 +26,7 @@ var (
 )
 
 type WAL struct {
-	HsSegment      *segment //保存需要持久化的raft状态
+	RaftSegment    *segment //保存需要持久化的raft状态
 	ActiveSegment  *segment
 	SegmentPipe    chan *segment
 	OlderSegments  map[SegmentID]*segment
@@ -41,7 +42,7 @@ type Reader struct {
 	currentReader  int
 }
 
-func (r *Reader) Next() ([]byte, *ChunkPosition, error) {
+func (r *Reader) Next() ([]byte, error) {
 	if r.currentReader >= len(r.segmentReaders) {
 		return nil, nil, io.EOF
 	}
@@ -66,11 +67,11 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 	}
 	wal.ActiveSegment = acSegment
 
-	hsSegment, err := NewSegmentFile(config.WalDirPath)
+	raftSegment, err := NewSegmentFile(config.WalDirPath)
 	if err != nil {
 		return nil, err
 	}
-	wal.HsSegment = hsSegment
+	wal.RaftSegment = raftSegment
 
 	return wal, nil
 }
@@ -107,12 +108,35 @@ func (wal *WAL) NewReader() *Reader {
 	return wal.NewReaderWithMax(0)
 }
 
-func (wal *WAL) ClearPendingWrites() {
-	wal.pendingWritesLock.Lock()
-	defer wal.pendingWritesLock.Unlock()
+func (wal *WAL) Write(entries []*pb.Entry) error {
+	//segment文件应该尽量均匀，若此次entries太大那么直接写入新的segment文件中
 
-	wal.pendingSize = 0
-	wal.pendingWrites = wal.pendingWrites[:0]
+	// if the active segment file is full, sync it and create a new one.
+	if wal.activeSegmentIsFull(int64(len(data))) {
+		if err := wal.rotateActiveSegment(); err != nil {
+			return nil, err
+		}
+	}
+
+	// write the data to the active segment file.
+	err := wal.ActiveSegment.Write(data)
+	if err != nil {
+		return err
+	}
+
+	return
+}
+
+func (wal *WAL) activeSegmentIsFull(delta int64) bool {
+	//应尽可能使segment大小均匀，这样查找能提高查找某个entry的效率
+	actSegSize := wal.ActiveSegment.Size()
+	comSize := actSegSize + delta
+	if comSize > wal.Config.SegmentSize {
+		if actSegSize*2 > wal.Config.SegmentSize {
+			return false
+		}
+	}
+	return true
 }
 
 func (wal *WAL) rotateActiveSegment() error {
@@ -123,55 +147,18 @@ func (wal *WAL) rotateActiveSegment() error {
 	return nil
 }
 
-func (wal *WAL) Write(entries []*pb.Entry) error {
-	//segment文件应该尽量均匀，若此次entries太大那么直接写入新的segment文件中
-	//计算出占segment中的总字节数,不能超过一个segment文件，若超过需要分割这部分entries
-
-	// if the active segment file is full, sync it and create a new one.
-	if wal.ActiveSegmentIsFull(int64(len(data))) {
-		if err := wal.rotateActiveSegment(); err != nil {
-			return nil, err
-		}
-	}
-
-	// write the data to the active segment file.
-	position, err := wal.ActiveSegment.Write(data)
+func (wal *WAL) PersistRaftStatus(state pb.HardState) {
+	wal.RaftHardState = state
+	marshal, err := wal.RaftHardState.Marshal()
 	if err != nil {
-		return nil, err
+		return
 	}
-
-	// update the bytesWrite field.
-	wal.bytesWrite += position.ChunkSize
-
-	// sync the active segment file if needed.
-	var needSync = wal.config.Sync
-	if !needSync && wal.config.BytesPerSync > 0 {
-		needSync = wal.bytesWrite >= wal.config.BytesPerSync
-	}
-	if needSync {
-		if err := wal.ActiveSegment.Sync(); err != nil {
-			return nil, err
-		}
-		wal.bytesWrite = 0
-	}
-
-	return position, nil
+	bytes.NewBuffer()
+	wal.RaftSegment.
 }
 
 func (wal *WAL) Truncate(index int) error {
 	return nil
-}
-
-func (wal *WAL) ActiveSegmentIsFull(delta int64) bool {
-	//应尽可能使segment大小均匀，这样查找能提高查找某个entry的效率
-	actSegSize := wal.ActiveSegment.Size()
-	comSize := actSegSize + delta
-	if comSize > wal.Config.SegmentSize {
-		if actSegSize*2 > wal.Config.SegmentSize {
-			return false
-		}
-	}
-	return true
 }
 
 func (wal *WAL) Close() error {

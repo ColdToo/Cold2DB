@@ -45,33 +45,26 @@ func NewMemManger(memCfg config.MemConfig) (manager *memManager, err error) {
 
 	manager.wal, err = wal.NewWal(memCfg.WalConfig)
 
-	memManger.activeMem, err = memManger.newMemtable(memOpt)
+	memManger.activeMem, err = newMemtable(memOpt)
 	if err != nil {
 		return
 	}
 
-	files, err := os.ReadDir(manager.wal.Config.WalDirPath)
-	if err != nil {
-		log.Panicf("open wal dir failed", err)
-	}
-
-	if len(files) != 0 {
-		memManger.reopenImMemtableAndEntries(files)
-	}
+	memManger.restoreFromWAL()
 
 	return memManger, nil
 }
 
-func (m *memManager) newMemtable(memOpt MemOpt) (*memtable, error) {
-	var sklIter = new(arenaskl.Iterator)
-	arena := arenaskl.NewArena(memOpt.memSize + uint32(arenaskl.MaxNodeSize))
-	skl := arenaskl.NewSkiplist(arena)
-	sklIter.Init(skl)
-	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
-	return table, nil
-}
+func (m *memManager) restoreFromWAL() {
+	files, err := os.ReadDir(m.wal.Config.WalDirPath)
+	if err != nil {
+		log.Panicf("open wal dir failed", err)
+	}
 
-func (m *memManager) reopenImMemtableAndEntries(files []os.DirEntry) {
+	if len(files) == 0 {
+		return
+	}
+
 	for _, file := range files {
 		if strings.Contains(file.Name(), ".SEG") {
 			//else
@@ -93,7 +86,7 @@ func (m *memManager) reopenImMemtableAndEntries(files []os.DirEntry) {
 			if err != nil {
 				log.Panicf("can not ")
 			}
-			m.wal.HsSegment.Fd = fd
+			m.wal.RaftSegment.Fd = fd
 			//todo 将HsSegment中的数据序列化到hardstate中
 		}
 	}
@@ -115,10 +108,14 @@ func (m *memManager) reopenEntries() {
 	appliedIndex := m.wal.RaftHardState.Applied
 }
 
+type MemOpt struct {
+	fsize   int64
+	memSize uint32
+}
+
 type memtable struct {
 	CreatAt uint64
 	sync.RWMutex
-	//todo iterator里既有arena也有skiplist是否合理？
 	sklIter  *arenaskl.Iterator
 	skl      *arenaskl.Skiplist
 	memOpt   MemOpt
@@ -126,9 +123,13 @@ type memtable struct {
 	minIndex uint64
 }
 
-type MemOpt struct {
-	fsize   int64
-	memSize uint32
+func newMemtable(memOpt MemOpt) (*memtable, error) {
+	var sklIter = new(arenaskl.Iterator)
+	arena := arenaskl.NewArena(memOpt.memSize + uint32(arenaskl.MaxNodeSize))
+	skl := arenaskl.NewSkiplist(arena)
+	sklIter.Init(skl)
+	table := &memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
+	return table, nil
 }
 
 // todo put重写
@@ -156,4 +157,8 @@ func (mt *memtable) Get(key []byte) (bool, []byte) {
 	}
 
 	return false, mv.Value
+}
+
+func (mt *memtable) All() []logfile.KV {
+	return nil
 }

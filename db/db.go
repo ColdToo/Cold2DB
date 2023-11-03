@@ -21,9 +21,9 @@ type Cold2KV struct {
 
 	mu sync.RWMutex
 
-	flushChn chan *memtable
+	flushChn chan *memtable //memManger的flushChn
 
-	indexer index.Indexer
+	log  logfile.LogFile
 
 	snapShotter SnapShotter
 }
@@ -101,16 +101,16 @@ func (db *Cold2KV) Scan(lowKey []byte, highKey []byte) (err error) {
 }
 
 func (db *Cold2KV) SaveCommittedEntries(entries []*logfile.KV) (err error) {
-	//进行一个save committed entries控制
+	db.memManager.
 	return nil
 }
 
 func (db *Cold2KV) SaveHardState(st pb.HardState) error {
+	db.memManager.wal.PersistRaftStatus(st)
 	return nil
 }
 
 func (db *Cold2KV) SaveEntries(entries []*pb.Entry) error {
-	// entries 假设大小合适
 	err := db.memManager.wal.Write(entries)
 	if err != nil {
 		return err
@@ -153,7 +153,12 @@ func (db *Cold2KV) GetHardState() (pb.HardState, pb.ConfState, error) {
 
 // CompactionAndFlush 定期将immtable刷入vlog,更新内存索引以及压缩部分日志
 func (db *Cold2KV) CompactionAndFlush() {
+	//当有可以刷新的memtable时，将其刷入vlog，如何设计通知memManger已经刷新某个memtable
+	imtable := <-db.flushChn
+	for _, kv := range imtable.All(){
 
+	}
+	//indexer通知某块索引页中大量key的fid不同需要针对该fid进行compaction
 }
 
 func (db *Cold2KV) Close() {
