@@ -127,6 +127,7 @@ func (db *Cold2KV) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
 }
 
 func (db *Cold2KV) Term(i uint64) (uint64, error) {
+	//如果i已经applied返回compact错误，若没有则返回对应term
 	return 0, errors.New("the specific index entry is compacted")
 }
 
@@ -134,8 +135,12 @@ func (db *Cold2KV) AppliedIndex() uint64 {
 	return db.memManager.appliedIndex
 }
 
-func (db *Cold2KV) FirstIndex() (uint64, error) {
-	return db.memManager.firstIndex, nil
+func (db *Cold2KV) FirstIndex() uint64 {
+	return db.memManager.firstIndex
+}
+
+func (db *Cold2KV) LastIndex() uint64 {
+	return db.memManager.firstIndex
 }
 
 func (db *Cold2KV) GetSnapshot() (pb.Snapshot, error) {

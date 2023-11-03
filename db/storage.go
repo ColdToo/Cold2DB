@@ -35,7 +35,8 @@ type Storage interface {
 	Entries(lo, hi uint64) ([]*pb.Entry, error)
 	Term(i uint64) (uint64, error)
 	AppliedIndex() uint64
-	FirstIndex() (uint64, error)
+	LastIndex() uint64
+	FirstIndex() uint64
 	GetSnapshot() (pb.Snapshot, error)
 
 	Close()
