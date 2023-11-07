@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/config"
-	"github.com/ColdToo/Cold2DB/db/iooperator/directio"
 	"github.com/ColdToo/Cold2DB/db/valuelog"
 	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
@@ -102,46 +101,42 @@ func (db *Cold2KV) restoreMemoryFromWAL() {
 	if err != nil {
 		log.Panicf("open wal dir failed", err)
 	}
-
 	if len(files) == 0 {
 		return
 	}
 
+	var id int64
 	for _, file := range files {
-		if strings.Contains(file.Name(), ".SEG") {
-			fd, err := directio.OpenDirectFile(file.Name(), os.O_CREATE|os.O_RDWR, 0644)
-			if err != nil {
-				log.Panicf("can not ")
-			}
-
-			var id int64
+		if strings.HasSuffix(file.Name(), wal.SegSuffix) {
 			_, err = fmt.Sscanf(file.Name(), "%d.SEG", &id)
 			if err != nil {
 				log.Panicf("can not scan file")
 			}
+			segmentFile, err := wal.OpenSegmentFile(db.wal.Config.WalDirPath, wal.SegSuffix, id)
+			if err != nil {
+				log.Panicf("open segment file failed")
+			}
 			//根据segment文件名中的index对segment进行排序
-			db.wal.OrderSegmentList.Insert(id, fd)
+			db.wal.OrderSegmentList.Insert(segmentFile)
 		}
 
-		if strings.Contains(file.Name(), ".RAFT") {
-			fd, err := directio.OpenDirectFile(file.Name(), os.O_CREATE|os.O_RDWR, 0644)
+		if strings.HasSuffix(file.Name(), wal.RaftSuffix) {
+			raftSegmentFile, err := wal.OpenRaftSegmentFile(db.wal.Config.WalDirPath, file.Name())
 			if err != nil {
-				log.Panicf("can not ")
+				return
 			}
-			db.wal.RaftStateSegment.Fd = fd
-			//todo 将HsSegment中的数据序列化到hardstate中
+			db.wal.RaftStateSegment = raftSegmentFile
 		}
 	}
 
+	db.wal.OrderSegmentList.Find(int64(db.wal.RaftStateSegment.RaftState.Applied))
 	//通过applied index找到对应的最小segment file
 	//启动两个goroutine分别将segment file加载到Immemtble和enties中
-	go m.reopenEntries()
-	go m.reopenImMemtable()
 	return
 }
 
 func (db *Cold2KV) Get(key []byte) (val []byte, err error) {
-	flag, val := db.memManager.activeMem.Get(key)
+	flag, val := db.activeMem.Get(key)
 	if !flag {
 		return nil, errors.New("the key is not exist")
 	}
@@ -154,28 +149,30 @@ func (db *Cold2KV) Scan(lowKey []byte, highKey []byte) (err error) {
 }
 
 func (db *Cold2KV) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
-	if int(lo) < len(db.memManager.entries) {
+	if int(lo) < len(db.entries) {
 		return nil, errors.New("some entries is compacted")
 	}
 	return
 }
 
 func (db *Cold2KV) SaveCommittedEntries(entries []*valuelog.KV) (err error) {
-	db.memManager.
 	return nil
 }
 
 func (db *Cold2KV) SaveHardState(st pb.HardState) error {
-	db.memManager.wal.PersistRaftStatus(st)
-	return nil
-}
-
-func (db *Cold2KV) SaveEntries(entries []*pb.Entry) error {
-	err := db.memManager.wal.Write(entries)
+	stBytes, err := st.Marshal()
 	if err != nil {
 		return err
 	}
-	db.memManager.entries = append(db.memManager.entries, entries...)
+	return db.wal.RaftStateSegment.WriteAndFlush(stBytes)
+}
+
+func (db *Cold2KV) SaveEntries(entries []*pb.Entry) error {
+	err := db.wal.Write(entries)
+	if err != nil {
+		return err
+	}
+	db.entries = append(db.entries, entries...)
 	return nil
 }
 
@@ -185,15 +182,15 @@ func (db *Cold2KV) Term(i uint64) (uint64, error) {
 }
 
 func (db *Cold2KV) AppliedIndex() uint64 {
-	return db.memManager.appliedIndex
+	return 0
 }
 
 func (db *Cold2KV) FirstIndex() uint64 {
-	return db.memManager.firstIndex
+	return 0
 }
 
 func (db *Cold2KV) LastIndex() uint64 {
-	return db.memManager.firstIndex
+	return 0
 }
 
 func (db *Cold2KV) GetSnapshot() (pb.Snapshot, error) {

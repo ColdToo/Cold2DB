@@ -1,14 +1,10 @@
 package wal
 
 import (
-	"bytes"
 	"errors"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/pb"
-	"io"
 	"os"
-	"sort"
-	"sync"
 )
 
 const (
@@ -18,6 +14,7 @@ const (
 	ChunkHeaderSize = 15
 	FileModePerm    = 0644
 	SegSuffix       = ".SEG"
+	RaftSuffix      = ".RAFT"
 )
 
 var (
@@ -26,31 +23,17 @@ var (
 )
 
 type WAL struct {
-	Config         config.WalConfig
-	ActiveSegment  *segment
-	OlderSegments  map[SegmentID]*segment
-	SegmentPipe    chan *segment
-	OrderSegmentList OrderedSegmentList
-	RaftStateSegment    *segment //保存需要持久化的raft状态
-	RaftHardState  pb.HardState //需要持久化的状态
+	Config           config.WalConfig
+	ActiveSegment    *segment
+	OlderSegments    map[SegmentID]*segment
+	SegmentPipe      chan *segment
+	OrderSegmentList *OrderedSegmentList
+	RaftStateSegment *raftSegment //保存需要持久化的raft状态
 }
 
 type Reader struct {
 	segmentReaders []*segmentReader
 	currentReader  int
-}
-
-func (r *Reader) Next() ([]byte, error) {
-	if r.currentReader >= len(r.segmentReaders) {
-		return nil, nil, io.EOF
-	}
-
-	data, position, err := r.segmentReaders[r.currentReader].Next()
-	if err == io.EOF {
-		r.currentReader++
-		return r.Next()
-	}
-	return data, position, err
 }
 
 func NewWal(config config.WalConfig) (*WAL, error) {
@@ -65,39 +48,9 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 	}
 	wal.ActiveSegment = acSegment
 
+	wal.OrderSegmentList = NewOrderedSegmentList()
+
 	return wal, nil
-}
-
-func (wal *WAL) NewReaderWithMax(segId SegmentID) *Reader {
-	wal.mu.RLock()
-	defer wal.mu.RUnlock()
-
-	// get all segment readers.
-	var segmentReaders []*wal.segmentReader
-	for _, segment := range wal.olderSegments {
-		if segId == 0 || segment.id <= segId {
-			reader := segment.NewReader()
-			segmentReaders = append(segmentReaders, reader)
-		}
-	}
-	if segId == 0 || wal.ActiveSegment.id <= segId {
-		reader := wal.ActiveSegment.NewReader()
-		segmentReaders = append(segmentReaders, reader)
-	}
-
-	// sort the segment readers by segment id.
-	sort.Slice(segmentReaders, func(i, j int) bool {
-		return segmentReaders[i].segment.id < segmentReaders[j].segment.id
-	})
-
-	return &Reader{
-		segmentReaders: segmentReaders,
-		currentReader:  0,
-	}
-}
-
-func (wal *WAL) NewReader() *Reader {
-	return wal.NewReaderWithMax(0)
 }
 
 func (wal *WAL) Write(entries []*pb.Entry) error {
@@ -139,18 +92,9 @@ func (wal *WAL) rotateActiveSegment() error {
 	return nil
 }
 
-func (wal *WAL) PersistRaftStatus(state pb.HardState) {
-	wal.RaftHardState = state
-	marshal, err := wal.RaftHardState.Marshal()
-	if err != nil {
-		return
-	}
-	bytes.NewBuffer()
-	wal.RaftSegment.
-}
-
-func (wal *WAL) Truncate(index int) error {
-	return nil
+func (wal *WAL) Truncate(index int64) error {
+	//truncate掉index之后的所有segment包括当前的active segment
+	wal.OrderSegmentList.Find(index)
 }
 
 func (wal *WAL) Close() error {
