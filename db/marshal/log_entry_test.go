@@ -1,4 +1,4 @@
-package valuelog
+package marshal
 
 import (
 	"github.com/stretchr/testify/assert"

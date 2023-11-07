@@ -2,7 +2,7 @@ package db
 
 import (
 	"errors"
-	"github.com/ColdToo/Cold2DB/db/valuelog"
+	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
@@ -29,7 +29,7 @@ type Storage interface {
 
 	SaveHardState(st pb.HardState) error
 	SaveEntries(entries []*pb.Entry) error
-	SaveCommittedEntries(entries []*valuelog.KV) error
+	SaveCommittedEntries(entries []*marshal.KV) error
 
 	GetHardState() (pb.HardState, pb.ConfState, error)
 	Entries(lo, hi uint64) ([]*pb.Entry, error)

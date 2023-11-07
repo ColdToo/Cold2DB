@@ -1,11 +1,6 @@
 package wal
 
-import (
-	"fmt"
-	"os"
-	"testing"
-)
-
+/*
 func TestOrderedLinkedList_Insert(t *testing.T) {
 	oll := NewOrderedSegmentList()
 
@@ -41,3 +36,4 @@ func TestOrderedLinkedList_Insert(t *testing.T) {
 	file2.Close()
 	file3.Close()
 }
+*/

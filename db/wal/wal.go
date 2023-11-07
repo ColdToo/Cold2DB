@@ -3,18 +3,15 @@ package wal
 import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/config"
+	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/pb"
 	"os"
 )
 
 const (
-	// ChunkHeaderSize
-	// Checksum Length  index
-	//    4       3       8
-	ChunkHeaderSize = 15
-	FileModePerm    = 0644
-	SegSuffix       = ".SEG"
-	RaftSuffix      = ".RAFT"
+	FileModePerm = 0644
+	SegSuffix    = ".SEG"
+	RaftSuffix   = ".RAFT"
 )
 
 var (
@@ -55,24 +52,25 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 
 func (wal *WAL) Write(entries []*pb.Entry) error {
 	//segment文件应该尽量均匀，若此次entries太大那么直接写入新的segment文件中
+	data := make([]byte, 0)
+	bytesCount := 0
+	for _, e := range entries {
+		wEntBytes, n := marshal.EncodeWALEntry(e)
+		data = append(data, wEntBytes...)
+		bytesCount += n
+	}
 
 	// if the active segment file is full, sync it and create a new one.
-	if wal.activeSegmentIsFull(int64(len(data))) {
+	if wal.activeSegmentIsFull(bytesCount) {
 		if err := wal.rotateActiveSegment(); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	// write the data to the active segment file.
-	err := wal.ActiveSegment.Write(data)
-	if err != nil {
-		return err
-	}
-
-	return
+	return wal.ActiveSegment.Write(data, bytesCount)
 }
 
-func (wal *WAL) activeSegmentIsFull(delta int64) bool {
+func (wal *WAL) activeSegmentIsFull(delta int) bool {
 	//应尽可能使segment大小均匀，这样查找能提高查找某个entry的效率
 	actSegSize := wal.ActiveSegment.Size()
 	comSize := actSegSize + delta
@@ -87,7 +85,7 @@ func (wal *WAL) activeSegmentIsFull(delta int64) bool {
 func (wal *WAL) rotateActiveSegment() error {
 	//从active pipeline获取已经创建好的pipeline
 	newSegment := <-wal.SegmentPipe
-	wal.OrderIndexList.Insert(wal.ActiveSegment.index, wal.ActiveSegment.Fd)
+	wal.OrderSegmentList.Insert(wal.ActiveSegment)
 	wal.ActiveSegment = newSegment
 	return nil
 }
@@ -95,33 +93,28 @@ func (wal *WAL) rotateActiveSegment() error {
 func (wal *WAL) Truncate(index int64) error {
 	//truncate掉index之后的所有segment包括当前的active segment
 	wal.OrderSegmentList.Find(index)
+	return nil
 }
 
 func (wal *WAL) Close() error {
-	wal.mu.Lock()
-	defer wal.mu.Unlock()
-
-	for wal.OrderIndexList.Head != nil {
-		err := wal.OrderIndexList.Head.Data.Value.Close()
+	for wal.OrderSegmentList.Head != nil {
+		err := wal.OrderSegmentList.Head.Seg.Close()
 		if err != nil {
 			return err
 		}
-		wal.OrderIndexList.Head = wal.OrderIndexList.Head.Next
+		wal.OrderSegmentList.Head = wal.OrderSegmentList.Head.Next
 	}
 	// close the active segment file.
 	return wal.ActiveSegment.Close()
 }
 
 func (wal *WAL) Delete() error {
-	wal.mu.Lock()
-	defer wal.mu.Unlock()
-
-	for wal.OrderIndexList.Head != nil {
-		err := os.Remove(wal.OrderIndexList.Head.Data.Value.Name())
+	for wal.OrderSegmentList.Head != nil {
+		err := os.Remove(wal.OrderSegmentList.Head.Seg.Fd.Name())
 		if err != nil {
 			return err
 		}
-		wal.OrderIndexList.Head = wal.OrderIndexList.Head.Next
+		wal.OrderSegmentList.Head = wal.OrderSegmentList.Head.Next
 	}
 
 	// delete the active segment file.

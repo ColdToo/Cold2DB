@@ -68,16 +68,18 @@ func SegmentFileName(WaldirPath string, index int64) string {
 	return filepath.Join(WaldirPath, fmt.Sprintf("%014d"+SegSuffix, index))
 }
 
-func (seg *segment) Write(data []byte) (err error) {
+func (seg *segment) Write(data []byte, bytesCount int) (err error) {
 	//如果当前block能够写入
-	if len(data)+seg.currBlockRemainSize < seg.currBlockSize {
+	if bytesCount+seg.currBlockRemainSize < seg.currBlockSize {
 		seg.currBlock = append(seg.currBlock, data...)
-		seg.currBlockRemainSize = seg.currBlockRemainSize - len(data)
+		seg.currBlockRemainSize = seg.currBlockRemainSize - bytesCount
 		seg.Flush()
 	} else {
 		seg.blockPool.PutBlock(seg.currBlock)
 		//分配新的block
-		seg.currBlock, nums = seg.blockPool.AlignedBlock(len(data))
+		newBlock, nums := seg.blockPool.AlignedBlock(len(data))
+		seg.blockNums += nums
+		seg.currBlock = newBlock
 		seg.currBlock = append(seg.currBlock, data...)
 		seg.currBlockRemainSize = 0
 		seg.Flush()
@@ -102,8 +104,8 @@ func (seg *segment) Flush() error {
 	//增加blockNums计数
 }
 
-func (seg *segment) Size() int64 {
-	return int64(seg.blockNums * Block4096)
+func (seg *segment) Size() int {
+	return seg.blockNums * Block4096
 }
 
 func (seg *segment) Remove() error {

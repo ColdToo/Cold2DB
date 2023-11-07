@@ -2,7 +2,7 @@ package db
 
 import (
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
-	"github.com/ColdToo/Cold2DB/db/valuelog"
+	"github.com/ColdToo/Cold2DB/db/marshal"
 	"sync"
 	"time"
 )
@@ -31,7 +31,7 @@ func newMemtable(memOpt MemOpt) (*Memtable, error) {
 	return table, nil
 }
 
-func (mt *Memtable) put(kv []valuelog.KV) error {
+func (mt *Memtable) put(kv []marshal.KV) error {
 	//判断是否超出当前memtable大小，获取新memtable并将memtable放入刷盘管道中
 	return nil
 }
@@ -45,9 +45,9 @@ func (mt *Memtable) Get(key []byte) (bool, []byte) {
 	if err == arenaskl.ErrRecordNotExists {
 		return false, nil
 	}
-	mv := valuelog.DecodeV(value)
+	mv := marshal.DecodeV(value)
 
-	if mv.Type == valuelog.TypeDelete {
+	if mv.Type == marshal.TypeDelete {
 		return true, nil
 	}
 
@@ -58,6 +58,6 @@ func (mt *Memtable) Get(key []byte) (bool, []byte) {
 	return false, mv.Value
 }
 
-func (mt *Memtable) All() []valuelog.KV {
+func (mt *Memtable) All() []marshal.KV {
 	return nil
 }

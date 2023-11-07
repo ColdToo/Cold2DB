@@ -41,7 +41,7 @@ type WalConfig struct {
 	// wal dir path, one memtable corresponds one wal
 	WalDirPath string
 
-	SegmentSize int64 //specifies the maximum size of each segment file in bytes. SegmentSize int64
+	SegmentSize int //specifies the maximum size of each segment file in bytes. SegmentSize int64
 }
 
 type ValueLogConfig struct {

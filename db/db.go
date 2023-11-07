@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/config"
+	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/db/valuelog"
 	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
@@ -112,7 +113,7 @@ func (db *Cold2KV) restoreMemoryFromWAL() {
 			if err != nil {
 				log.Panicf("can not scan file")
 			}
-			segmentFile, err := wal.OpenSegmentFile(db.wal.Config.WalDirPath, wal.SegSuffix, id)
+			segmentFile, err := wal.OpenSegmentFile(db.wal.Config.WalDirPath, id)
 			if err != nil {
 				log.Panicf("open segment file failed")
 			}
@@ -155,7 +156,7 @@ func (db *Cold2KV) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
 	return
 }
 
-func (db *Cold2KV) SaveCommittedEntries(entries []*valuelog.KV) (err error) {
+func (db *Cold2KV) SaveCommittedEntries(entries []*marshal.KV) (err error) {
 	return nil
 }
 

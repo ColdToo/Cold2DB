@@ -1,24 +1,25 @@
-package valuelog
+package marshal
 
 import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
+	"github.com/ColdToo/Cold2DB/pb"
 	"hash/crc32"
 
 	"github.com/ColdToo/Cold2DB/log"
 )
 
-// HeaderSize max entry header size.
-// crc32   kSize	vSize
-//
-//	4    +   2   +   2       = 8
 const (
-	HeaderSize = 33
-	Crc32Size  = 4
-	KeySize    = 2
-	ValSize    = 2
-	KVSize     = 4
+	// ChunkHeaderSize
+	// Checksum Length  index
+	//    4       4       8
+	ChunkHeaderSize = 15
+	Crc32Size       = 4
+	EntrySize       = 4
+	KeySize         = 2
+	ValSize         = 2
+	KVSize          = 4
 
 	IndexSize     = 8
 	TermSize      = 8
@@ -36,21 +37,6 @@ const (
 type KV struct {
 	Key []byte
 	V
-}
-
-type V struct {
-	Id        uint64
-	Type      KVType
-	ExpiredAt int64
-	Value     []byte
-}
-
-func (v *V) encode() {
-
-}
-
-func DecodeV(v []byte) *V {
-	return nil
 }
 
 func GobEncode(KV any) ([]byte, error) {
@@ -71,60 +57,55 @@ func GobDecode(data []byte) (kv KV, err error) {
 	return
 }
 
-type Entry struct {
-	Key       []byte
-	Index     uint64
-	Term      uint64
-	Value     []byte
+type V struct {
+	Id        uint64
 	Type      KVType
 	ExpiredAt int64
+	Value     []byte
+}
+
+func (v *V) encode() {
+
+}
+
+func DecodeV(v []byte) *V {
+	return nil
 }
 
 type walEntryHeader struct {
-	crc32     uint32
-	kSize     uint16
-	vSize     uint16
-	ExpiredAt int64
-	Index     uint64
-	Term      uint64
-	Type      KVType
+	crc32     int32
+	entrySize int32
+	index     int64
 }
 
 // EncodeWALEntry  will encode entry into a byte slice.
-// +-------+----------+------------+-----------+---------+---------+---------+-------+---------+
-// |  crc  | key size | value size | expiredAt |  index  |   term  |   type  |  key  |  value  |
-// +-------+----------+------------+-----------+---------+---------+---------+-------+---------+
-// |-------------------------HEADER------------------------------------------|------BODY-------|
-//
-// |--------------------------crc check--------------------------------------------------------|
-func (e *Entry) EncodeWALEntry() ([]byte, int) {
-	var size = HeaderSize + len(e.Key) + len(e.Value)
+// +-------+-----------+--------+-----------+
+// |  crc  | entry size|  index |   entry
+// +-------+-----------+--------+-----------+
+// |----------HEADER------------|---BODY----+
+
+func EncodeWALEntry(e *pb.Entry) ([]byte, int) {
+	eBytes, _ := e.Marshal()
+	eBytesSize := len(eBytes)
+	var size = ChunkHeaderSize + eBytesSize
 	buf := make([]byte, size)
-	//encode header
-	binary.LittleEndian.PutUint16(buf[KVSize:], uint16(len(e.Key)))
-	binary.LittleEndian.PutUint16(buf[KVSize+KeySize:], uint16(len(e.Value)))
-	binary.LittleEndian.PutUint64(buf[2*KVSize:], uint64(e.ExpiredAt))
-	binary.LittleEndian.PutUint64(buf[2*KVSize+ExpiredAtSize:], e.Index)
-	binary.LittleEndian.PutUint64(buf[2*KVSize+ExpiredAtSize+IndexSize:], e.Term)
-	buf[2*KVSize+ExpiredAtSize+IndexSize+TermSize] = byte(e.Type)
-	//encode value
-	copy(buf[2*KVSize+ExpiredAtSize+IndexSize+TermSize+KVTypeSize:], e.Key)
-	copy(buf[2*KVSize+ExpiredAtSize+IndexSize+TermSize+KVTypeSize+len(e.Key):], e.Value)
+	binary.LittleEndian.PutUint32(buf[EntrySize:], uint32(eBytesSize))
+	binary.LittleEndian.PutUint64(buf[EntrySize+IndexSize:], e.Index)
+	copy(buf[Crc32Size+EntrySize+IndexSize:], e.Data)
 
 	// crc32
-	crc := crc32.ChecksumIEEE(buf[4:])
+	crc := crc32.ChecksumIEEE(buf[Crc32Size+EntrySize+IndexSize:])
 	binary.LittleEndian.PutUint32(buf[:4], crc)
 	return buf, size
 }
 
 func decodeWALEntryHeader(buf []byte) (header walEntryHeader) {
-	header.crc32 = binary.LittleEndian.Uint32(buf[:4])
-	header.kSize = binary.LittleEndian.Uint16(buf[KVSize : KVSize+KeySize])
-	header.vSize = binary.LittleEndian.Uint16(buf[KVSize+KeySize : KVSize+KeySize+ValSize])
-	header.ExpiredAt = int64(binary.LittleEndian.Uint64(buf[2*KVSize : 2*KVSize+ExpiredAtSize]))
-	header.Index = binary.LittleEndian.Uint64(buf[2*KVSize+ExpiredAtSize : 2*KVSize+ExpiredAtSize+IndexSize])
-	header.Term = binary.LittleEndian.Uint64(buf[2*KVSize+ExpiredAtSize+IndexSize : 2*KVSize+ExpiredAtSize+IndexSize+TermSize])
-	header.Type = KVType(buf[2*KVSize+ExpiredAtSize+IndexSize+TermSize])
+	crc32 := binary.LittleEndian.Uint32(buf[:Crc32Size])
+	entrySize := binary.LittleEndian.Uint16(buf[Crc32Size : Crc32Size+EntrySize])
+	index := binary.LittleEndian.Uint16(buf[Crc32Size+EntrySize : Crc32Size+EntrySize+IndexSize])
+	header.crc32 = int32(crc32)
+	header.entrySize = int32(entrySize)
+	header.index = int64(index)
 	return
 }
 
