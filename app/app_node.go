@@ -2,7 +2,6 @@ package main
 
 import (
 	"github.com/ColdToo/Cold2DB/config"
-	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
@@ -186,10 +185,10 @@ func (an *AppNode) applyCommitedEntries(ents []*pb.Entry) (err error) {
 	}
 
 	var kv KV
-	kvs := make([]*logfile.KV, len(entries))
+	kvs := make([]*valuefile.KV, len(entries))
 	kvIds := make([]uint64, 0)
 	for _, entry := range entries {
-		kv, err = logfile.GobDecode(entry.Data)
+		kv, err = valuefile.GobDecode(entry.Data)
 		if err != nil {
 			return err
 		}

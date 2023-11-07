@@ -1,4 +1,4 @@
-package logfile
+package valuelog
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 )
 
 func TestOpenLogFile(t *testing.T) {
-	path := "/Users/hlhf/GolandProjects/Cold2DB/db/logfile/dbtest/walfile"
+	path := "/Users/hlhf/GolandProjects/Cold2DB/db/valuelog/dbtest/walfile"
 	fid := time.Now().Unix()
 	fsize := int64(1024)
 	ftype := WALLog

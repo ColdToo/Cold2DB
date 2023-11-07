@@ -1,4 +1,4 @@
-package logfile
+package valuelog
 
 import (
 	"github.com/stretchr/testify/assert"

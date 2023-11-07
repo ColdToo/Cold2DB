@@ -7,7 +7,7 @@ import (
 )
 
 func TestOrderedLinkedList_Insert(t *testing.T) {
-	oll := NewOrderedLinkedList()
+	oll := NewOrderedSegmentList()
 
 	// Open files for demonstration purposes
 	file1, _ := os.CreateTemp("", "1")

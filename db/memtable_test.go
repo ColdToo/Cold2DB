@@ -3,7 +3,6 @@ package db
 import (
 	"fmt"
 	"github.com/ColdToo/Cold2DB/config"
-	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/stretchr/testify/assert"
 	"path/filepath"
@@ -43,7 +42,7 @@ func TestCold2DB_ReOpenMemtable(t *testing.T) {
 	memOpt := MemOpt{
 		walDirPath: MockTestPath(),
 		fsize:      2048,
-		ioType:     logfile.MMap,
+		ioType:     valuefile.MMap,
 		memSize:    2048,
 	}
 
@@ -57,19 +56,19 @@ func MockWALFile(path string) MemOpt {
 		walDirPath: path,
 		walFileId:  time.Now().UnixNano(),
 		fsize:      2048,
-		ioType:     logfile.MMap,
+		ioType:     valuefile.MMap,
 		memSize:    2048,
 	}
 
-	wal, err := logfile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize, logfile.WALLog, memOpt.ioType)
+	wal, err := valuefile.OpenLogFile(memOpt.walDirPath, memOpt.walFileId, memOpt.fsize, valuefile.WALLog, memOpt.ioType)
 	if err != nil {
 		fmt.Println(err)
 	}
-	entry := &logfile.Entry{
+	entry := &valuefile.Entry{
 		ExpiredAt: 1234567890,
 		Index:     1,
 		Term:      2,
-		Type:      logfile.TypeDelete,
+		Type:      valuefile.TypeDelete,
 		Key:       []byte("key"),
 		Value:     []byte("value"),
 	}

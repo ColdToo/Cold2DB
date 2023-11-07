@@ -2,30 +2,34 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"github.com/ColdToo/Cold2DB/config"
-	"github.com/ColdToo/Cold2DB/db/index"
-	"github.com/ColdToo/Cold2DB/db/logfile"
+	"github.com/ColdToo/Cold2DB/db/iooperator/directio"
+	"github.com/ColdToo/Cold2DB/db/valuelog"
+	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/utils"
 	"os"
-	"sync"
+	"strings"
 )
 
 var Cold2 *Cold2KV
 
 type Cold2KV struct {
-	memManager *memManager
+	activeMem *Memtable
 
-	flushLock sync.RWMutex // guarantee flush and compaction exclusive.
+	immuMems []*Memtable
 
-	mu sync.RWMutex
+	flushChn chan *Memtable
 
-	flushChn chan *memtable //memManger的flushChn
+	memtablePipe chan *Memtable
+	//raft log entries
+	entries []*pb.Entry
 
-	log  logfile.LogFile
+	wal *wal.WAL
 
-	snapShotter SnapShotter
+	valueLog *valuelog.ValueLog
 }
 
 func GetStorage() (Storage, error) {
@@ -37,27 +41,33 @@ func GetStorage() (Storage, error) {
 }
 
 func InitDB(dbCfg *config.DBConfig) {
-	var err error
-	err = dbCfgCheck(dbCfg)
+	err := dbCfgCheck(dbCfg)
 	if err != nil {
 		log.Panic("check db cfg failed")
 	}
 
 	Cold2 = new(Cold2KV)
-	Cold2.memManager, err = NewMemManger(dbCfg.MemConfig)
+	tableFlushC := make(chan *Memtable, dbCfg.MemConfig.MemtableNums-1)
+	Cold2.flushChn = tableFlushC
+	Cold2.immuMems = make([]*Memtable, dbCfg.MemConfig.MemtableNums-1)
+
+	memOpt := MemOpt{
+		fsize:   int64(dbCfg.MemConfig.MemtableSize),
+		memSize: dbCfg.MemConfig.MemtableSize,
+	}
+	Cold2.activeMem, err = newMemtable(memOpt)
 	if err != nil {
-		log.Panic("init db memManger failed")
+		return
 	}
 
-	/*Cold2.indexer, err = index.NewIndexer(dbCfg.IndexConfig)
-	if err != nil {
-		return err
-	}
+	Cold2.wal, err = wal.NewWal(dbCfg.WalConfig)
 
-	Cold2.vlog, err = initValueLog(dbCfg.ValueLogConfig)
+	Cold2.restoreMemoryFromWAL()
+
+	Cold2.valueLog, err = valuelog.OpenValueLog(dbCfg.ValueLogConfig)
 	if err != nil {
-		return err
-	}*/
+		log.Panic("open Value log failed")
+	}
 }
 
 func dbCfgCheck(dbCfg *config.DBConfig) error {
@@ -87,6 +97,49 @@ func dbCfgCheck(dbCfg *config.DBConfig) error {
 	return nil
 }
 
+func (db *Cold2KV) restoreMemoryFromWAL() {
+	files, err := os.ReadDir(db.wal.Config.WalDirPath)
+	if err != nil {
+		log.Panicf("open wal dir failed", err)
+	}
+
+	if len(files) == 0 {
+		return
+	}
+
+	for _, file := range files {
+		if strings.Contains(file.Name(), ".SEG") {
+			fd, err := directio.OpenDirectFile(file.Name(), os.O_CREATE|os.O_RDWR, 0644)
+			if err != nil {
+				log.Panicf("can not ")
+			}
+
+			var id int64
+			_, err = fmt.Sscanf(file.Name(), "%d.SEG", &id)
+			if err != nil {
+				log.Panicf("can not scan file")
+			}
+			//根据segment文件名中的index对segment进行排序
+			db.wal.OrderSegmentList.Insert(id, fd)
+		}
+
+		if strings.Contains(file.Name(), ".RAFT") {
+			fd, err := directio.OpenDirectFile(file.Name(), os.O_CREATE|os.O_RDWR, 0644)
+			if err != nil {
+				log.Panicf("can not ")
+			}
+			db.wal.RaftStateSegment.Fd = fd
+			//todo 将HsSegment中的数据序列化到hardstate中
+		}
+	}
+
+	//通过applied index找到对应的最小segment file
+	//启动两个goroutine分别将segment file加载到Immemtble和enties中
+	go m.reopenEntries()
+	go m.reopenImMemtable()
+	return
+}
+
 func (db *Cold2KV) Get(key []byte) (val []byte, err error) {
 	flag, val := db.memManager.activeMem.Get(key)
 	if !flag {
@@ -100,7 +153,14 @@ func (db *Cold2KV) Scan(lowKey []byte, highKey []byte) (err error) {
 	return err
 }
 
-func (db *Cold2KV) SaveCommittedEntries(entries []*logfile.KV) (err error) {
+func (db *Cold2KV) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
+	if int(lo) < len(db.memManager.entries) {
+		return nil, errors.New("some entries is compacted")
+	}
+	return
+}
+
+func (db *Cold2KV) SaveCommittedEntries(entries []*valuelog.KV) (err error) {
 	db.memManager.
 	return nil
 }
@@ -117,13 +177,6 @@ func (db *Cold2KV) SaveEntries(entries []*pb.Entry) error {
 	}
 	db.memManager.entries = append(db.memManager.entries, entries...)
 	return nil
-}
-
-func (db *Cold2KV) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
-	if int(lo) < len(db.memManager.entries) {
-		return nil, errors.New("some entries is compacted")
-	}
-	return
 }
 
 func (db *Cold2KV) Term(i uint64) (uint64, error) {
@@ -149,16 +202,6 @@ func (db *Cold2KV) GetSnapshot() (pb.Snapshot, error) {
 
 func (db *Cold2KV) GetHardState() (pb.HardState, pb.ConfState, error) {
 	return pb.HardState{}, pb.ConfState{}, nil
-}
-
-// CompactionAndFlush 定期将immtable刷入vlog,更新内存索引以及压缩部分日志
-func (db *Cold2KV) CompactionAndFlush() {
-	//当有可以刷新的memtable时，将其刷入vlog，如何设计通知memManger已经刷新某个memtable
-	imtable := <-db.flushChn
-	for _, kv := range imtable.All(){
-
-	}
-	//indexer通知某块索引页中大量key的fid不同需要针对该fid进行compaction
 }
 
 func (db *Cold2KV) Close() {

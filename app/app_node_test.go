@@ -4,7 +4,6 @@ import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db"
-	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
 	mock "github.com/ColdToo/Cold2DB/mocks"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -138,11 +137,11 @@ func TestAppNode_ApplyEntries(t *testing.T) {
 		Id:        1,
 		Key:       []byte("key"),
 		Value:     []byte("value"),
-		Type:      logfile.TypeDelete,
+		Type:      valuefile.TypeDelete,
 		ExpiredAt: 1234567890,
 	}
 
-	encoded, err := logfile.GobEncode(k)
+	encoded, err := valuefile.GobEncode(k)
 	assert.NoError(t, err)
 
 	entry := &pb.Entry{

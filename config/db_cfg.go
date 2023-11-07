@@ -48,9 +48,6 @@ type ValueLogConfig struct {
 	ValueLogDir string
 
 	ValueLogFileSize int64
-
-	// ValueLogMmap similar to WalMMap, default value is false.
-	ValueLogMmap bool
 }
 
 type MemTableConfig struct {

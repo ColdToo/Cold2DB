@@ -17,7 +17,7 @@ var (
 )
 
 type segment struct {
-	index               int64
+	index               int64 //该segment文件中的最小index
 	Fd                  *os.File
 	blockPool           *BlockPool
 	closed              bool
@@ -25,12 +25,6 @@ type segment struct {
 	currBlock           []byte
 	currBlockSize       int
 	currBlockRemainSize int
-}
-
-type segmentReader struct {
-	segment     *segment
-	blockNumber uint32
-	chunkOffset int64
 }
 
 func NewSegmentFile(dirPath string) (*segment, error) {
@@ -51,16 +45,26 @@ func NewSegmentFile(dirPath string) (*segment, error) {
 	}, nil
 }
 
-func SegmentFileName(WaldirPath string, extName string, index uint) string {
-	return filepath.Join(WaldirPath, fmt.Sprintf("%014d"+extName, index))
+func OpenSegmentFile(index string) (*segment, error) {
+	fd, err := directio.OpenDirectIOFile(SegmentFileName(WaldirPath, SegSuffix, 0>>1), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = fd.Seek(0, io.SeekStart)
+	if err != nil {
+		panic(fmt.Errorf("seek to the end of segment file %s failed: %v", ".SEG", err))
+	}
+
+	blockPool := NewBlockPool()
+	return &segment{
+		Fd:        fd,
+		blockPool: blockPool,
+	}, nil
 }
 
-func (seg *segment) NewReader() *segmentReader {
-	return &segmentReader{
-		segment:     seg,
-		blockNumber: 0,
-		chunkOffset: 0,
-	}
+func SegmentFileName(WaldirPath string, extName string, index uint) string {
+	return filepath.Join(WaldirPath, fmt.Sprintf("%014d"+extName, index))
 }
 
 // Remove removes the segment file.
@@ -119,4 +123,69 @@ func (seg *segment) Flush() error {
 	return nil
 
 	//增加blockNums计数
+}
+
+type segmentReader struct {
+	segment     *segment
+	blockNumber uint32
+	chunkOffset int64
+}
+
+func (seg *segment) NewReader() *segmentReader {
+	return &segmentReader{
+		segment:     seg,
+		blockNumber: 0,
+		chunkOffset: 0,
+	}
+}
+
+type Node struct {
+	Seg  *segment
+	Next *Node
+}
+
+type OrderedSegmentList struct {
+	Head *Node
+}
+
+func NewOrderedSegmentList() *OrderedSegmentList {
+	return &OrderedSegmentList{}
+}
+
+func (oll *OrderedSegmentList) Insert(seg *segment) {
+	newNode := &Node{Seg: seg}
+
+	if oll.Head == nil || oll.Head.Seg.index >= seg.index {
+		newNode.Next = oll.Head
+		oll.Head = newNode
+		return
+	}
+
+	current := oll.Head
+	for current.Next != nil && current.Next.Seg.index < seg.index {
+		current = current.Next
+	}
+
+	newNode.Next = current.Next
+	current.Next = newNode
+}
+
+func (oll *OrderedSegmentList) Find(index int64) *segment {
+	current := oll.Head
+	var prev *Node
+
+	for current != nil && current.Seg.index < index {
+		prev = current
+		current = current.Next
+	}
+
+	if current != nil && current.Seg.index == index {
+		return current.Seg
+	}
+
+	if prev != nil {
+		return prev.Seg
+	}
+
+	return nil
 }

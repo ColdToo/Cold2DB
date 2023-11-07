@@ -26,14 +26,12 @@ var (
 )
 
 type WAL struct {
-	RaftSegment    *segment //保存需要持久化的raft状态
-	ActiveSegment  *segment
-	SegmentPipe    chan *segment
-	OlderSegments  map[SegmentID]*segment
 	Config         config.WalConfig
-	mu             sync.RWMutex
-	OrderIndexList OrderedLinkedList
-	RenameIds      []SegmentID
+	ActiveSegment  *segment
+	OlderSegments  map[SegmentID]*segment
+	SegmentPipe    chan *segment
+	OrderSegmentList OrderedSegmentList
+	RaftStateSegment    *segment //保存需要持久化的raft状态
 	RaftHardState  pb.HardState //需要持久化的状态
 }
 
@@ -66,12 +64,6 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 		return nil, err
 	}
 	wal.ActiveSegment = acSegment
-
-	raftSegment, err := NewSegmentFile(config.WalDirPath)
-	if err != nil {
-		return nil, err
-	}
-	wal.RaftSegment = raftSegment
 
 	return wal, nil
 }

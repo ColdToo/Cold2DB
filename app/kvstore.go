@@ -3,12 +3,11 @@ package main
 import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/db"
-	"github.com/ColdToo/Cold2DB/db/logfile"
 	"github.com/ColdToo/Cold2DB/log"
 	"time"
 )
 
-type KV = logfile.KV
+type KV = valuefile.KV
 
 type KvStore struct {
 	storage    db.Storage
@@ -48,9 +47,9 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	kv.Value = val
 	kv.ExpiredAt = expiredAt
 	if delete {
-		kv.Type = logfile.TypeDelete
+		kv.Type = valuefile.TypeDelete
 	}
-	buf, _ := logfile.GobEncode(kv)
+	buf, _ := valuefile.GobEncode(kv)
 	s.proposeC <- buf
 
 	sig := make(chan struct{})
