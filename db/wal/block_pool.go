@@ -26,6 +26,12 @@ func NewBlockPool() (bp *BlockPool) {
 	return bp
 }
 
+func NewRaftBlockPool() (bp *BlockPool) {
+	bp = new(BlockPool)
+	bp.Block4 = alignedBlock(num4)
+	return bp
+}
+
 // AlignedBlock 优先分配block4和block8，若均不能满足再分配自定义的block
 func (b *BlockPool) AlignedBlock(n int) ([]byte, int) {
 	if n < Block4 {
@@ -42,29 +48,22 @@ func (b *BlockPool) AlignedBlock(n int) ([]byte, int) {
 		nums++
 	}
 
-	block := make([]byte, Block4096*nums)
-	if isAligned(block) {
-		return block, nums
-	} else {
-		block = make([]byte, Block4096*nums+AlignSize)
-	}
-
-	a := alignment(block, AlignSize)
-	offset := 0
-	if a != 0 {
-		offset = AlignSize - a
-	}
-	//按照4096对齐
-	block = block[offset : offset+Block4096]
-
-	if !isAligned(block) {
-		log.Fatal("Failed to align block")
-	}
-	return block, nums
+	return alignedBlock(nums), nums
 }
 
-func (b *BlockPool) PutBlock(block []byte) {
-
+func (b *BlockPool) recycleBlock(block []byte) {
+	blockType := len(block)
+	for i := 0; i < blockType; i++ {
+		block[i] = 0
+	}
+	switch blockType {
+	case Block4:
+		b.Block4 = block
+	case Block8:
+		b.Block8 = block
+	default:
+		log.Panic("block type error")
+	}
 }
 
 func alignedBlock(blockNums int) []byte {

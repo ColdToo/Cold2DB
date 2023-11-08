@@ -25,12 +25,7 @@ type WAL struct {
 	OlderSegments    map[SegmentID]*segment
 	SegmentPipe      chan *segment
 	OrderSegmentList *OrderedSegmentList
-	RaftStateSegment *raftSegment //保存需要持久化的raft状态
-}
-
-type Reader struct {
-	segmentReaders []*segmentReader
-	currentReader  int
+	StateSegment     *stateSegment //保存需要持久化的raft状态
 }
 
 func NewWal(config config.WalConfig) (*WAL, error) {

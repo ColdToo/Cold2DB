@@ -15,16 +15,16 @@ const (
 	// Checksum Length  index
 	//    4       4       8
 	ChunkHeaderSize = 15
-	Crc32Size       = 4
-	EntrySize       = 4
-	KeySize         = 2
-	ValSize         = 2
-	KVSize          = 4
 
-	IndexSize     = 8
-	TermSize      = 8
-	ExpiredAtSize = 8
-	KVTypeSize    = 1
+	// RaftChunkHeaderSize
+	// Checksum Length
+	//    4       2
+	RaftChunkHeaderSize = 6
+
+	Crc32Size = 4
+	EntrySize = 4
+	StateSize = 2
+	IndexSize = 8
 )
 
 // KVType type of Entry.
@@ -72,7 +72,7 @@ func DecodeV(v []byte) *V {
 	return nil
 }
 
-type walEntryHeader struct {
+type WalEntryHeader struct {
 	crc32     int32
 	entrySize int32
 	index     int64
@@ -99,13 +99,47 @@ func EncodeWALEntry(e *pb.Entry) ([]byte, int) {
 	return buf, size
 }
 
-func decodeWALEntryHeader(buf []byte) (header walEntryHeader) {
+func DecodeWALEntryHeader(buf []byte) (header WalEntryHeader) {
 	crc32 := binary.LittleEndian.Uint32(buf[:Crc32Size])
 	entrySize := binary.LittleEndian.Uint16(buf[Crc32Size : Crc32Size+EntrySize])
 	index := binary.LittleEndian.Uint16(buf[Crc32Size+EntrySize : Crc32Size+EntrySize+IndexSize])
 	header.crc32 = int32(crc32)
 	header.entrySize = int32(entrySize)
 	header.index = int64(index)
+	return
+}
+
+type RaftStateHeader struct {
+	HeaderSize int8
+	crc32      int32
+	StateSize  int32
+}
+
+// EncodeRaftState  will encode state into a byte slice.
+// +-------+-----------+-----------+
+// |  crc  | state size|   state   |
+// +-------+-----------+-----------+
+// |----------HEADER---|---BODY----+
+func EncodeRaftState(st pb.HardState) ([]byte, int) {
+	stBytes, _ := st.Marshal()
+	stBytesSize := len(stBytes)
+	var size = RaftChunkHeaderSize + stBytesSize
+	buf := make([]byte, size)
+	binary.LittleEndian.PutUint32(buf[Crc32Size:], uint32(stBytesSize))
+	copy(buf[Crc32Size+StateSize:], stBytes)
+
+	// crc32
+	crc := crc32.ChecksumIEEE(buf[Crc32Size+StateSize:])
+	binary.LittleEndian.PutUint32(buf[:4], crc)
+	return buf, size
+}
+
+func DecodeRaftStateHeader(buf []byte) (header RaftStateHeader) {
+	crc32 := binary.LittleEndian.Uint32(buf[:Crc32Size])
+	stateSize := binary.LittleEndian.Uint16(buf[Crc32Size : Crc32Size+StateSize])
+	header.crc32 = int32(crc32)
+	header.StateSize = int32(stateSize)
+	header.HeaderSize = RaftChunkHeaderSize
 	return
 }
 

@@ -1,5 +1,10 @@
 package wal
 
+import (
+	"github.com/stretchr/testify/assert"
+	"testing"
+)
+
 /*
 func TestOrderedLinkedList_Insert(t *testing.T) {
 	oll := NewOrderedSegmentList()
@@ -35,5 +40,52 @@ func TestOrderedLinkedList_Insert(t *testing.T) {
 	file1.Close()
 	file2.Close()
 	file3.Close()
+}
+*/
+
+func TestOpenRaftSegmentFile(t *testing.T) {
+	walDirPath := "/Users/hlhf/GolandProjects/Cold2DB/utils/"
+	fileName := "test.seg"
+
+	rSeg, err := OpenRaftSegmentFile(walDirPath, fileName)
+	assert.Nil(t, err)
+	assert.NotNil(t, rSeg)
+	assert.NotNil(t, rSeg.Fd)
+	assert.NotNil(t, rSeg.blockPool)
+	assert.NotNil(t, rSeg.currBlock)
+	assert.Equal(t, len(rSeg.currBlock), rSeg.currBlockSize)
+	assert.Equal(t, 0, rSeg.currBlockRemainSize)
+}
+
+/*
+func TestRaftSegment_Persist(t *testing.T) {
+	// Create a temporary file for testing
+	tempFile, err := os.CreateTemp("", "test.seg")
+	if err != nil {
+		t.Fatalf("CreateTemp failed: %v", err)
+	}
+	defer os.Remove(tempFile.Name())
+
+	// Prepare the test data
+	data := []byte("test data")
+
+	// Call the function being tested
+	err = (&raftSegment{
+		Fd:        tempFile,
+		blockPool: NewBlockPool(),
+	}).Persist(data)
+	if err != nil {
+		t.Fatalf("Persist failed: %v", err)
+	}
+
+	// Check if the data was persisted correctly
+	tempFile.Seek(0, io.SeekStart)
+	_, err = tempFile.Read(rSeg.currBlock)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if !bytes.Equal(rSeg.currBlock, data) {
+		t.Errorf("Persist did not write the correct data")
+	}
 }
 */

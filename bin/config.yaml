@@ -1,7 +1,7 @@
 zapConf:
   level: info
   format: console
-  prefix: "[Cold2DB]"
+  prefix: "[C2KV]"
   director: log
   show-line: true
   encode-level: LowercaseColorLevelEncoder

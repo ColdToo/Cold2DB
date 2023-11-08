@@ -122,15 +122,15 @@ func (db *Cold2KV) restoreMemoryFromWAL() {
 		}
 
 		if strings.HasSuffix(file.Name(), wal.RaftSuffix) {
-			raftSegmentFile, err := wal.OpenRaftSegmentFile(db.wal.Config.WalDirPath, file.Name())
+			raftSegmentFile, err := wal.OpenStateSegmentFile(db.wal.Config.WalDirPath, file.Name())
 			if err != nil {
 				return
 			}
-			db.wal.RaftStateSegment = raftSegmentFile
+			db.wal.StateSegment = raftSegmentFile
 		}
 	}
 
-	db.wal.OrderSegmentList.Find(int64(db.wal.RaftStateSegment.RaftState.Applied))
+	db.wal.OrderSegmentList.Find(int64(db.wal.StateSegment.RaftState.Applied))
 	//通过applied index找到对应的最小segment file
 	//启动两个goroutine分别将segment file加载到Immemtble和enties中
 	return
@@ -161,11 +161,9 @@ func (db *Cold2KV) SaveCommittedEntries(entries []*marshal.KV) (err error) {
 }
 
 func (db *Cold2KV) SaveHardState(st pb.HardState) error {
-	stBytes, err := st.Marshal()
-	if err != nil {
-		return err
-	}
-	return db.wal.RaftStateSegment.WriteAndFlush(stBytes)
+	db.wal.StateSegment.RaftState = st
+	enStateBytes, _ := marshal.EncodeRaftState(st)
+	return db.wal.StateSegment.Persist(enStateBytes)
 }
 
 func (db *Cold2KV) SaveEntries(entries []*pb.Entry) error {

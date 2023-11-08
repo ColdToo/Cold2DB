@@ -1,7 +1,6 @@
 package wal
 
 import (
-	"fmt"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
@@ -33,12 +32,10 @@ func TestAlignedBlockAligned4(t *testing.T) {
 
 func TestBlockPool_PutBlock(t *testing.T) {
 	blockPool := NewBlockPool()
-	block3, _ := blockPool.AlignedBlock(Block4096*8 + 1)
-	assert.Equal(t, isAligned(block3), true)
-	MockData(block3)
-	fmt.Println(len(block3), cap(block3))
-	fmt.Printf("%p", &block3)
-	block3 = block3[:0]
-	fmt.Printf("%p", &block3)
-	fmt.Println(len(block3), cap(block3))
+	block, _ := blockPool.AlignedBlock(1)
+	assert.Equal(t, isAligned(block), true)
+	MockData(block)
+	blockPool.recycleBlock(block)
+	newBlock, _ := blockPool.AlignedBlock(1)
+	assert.Equal(t, &newBlock[0], &block[0])
 }
