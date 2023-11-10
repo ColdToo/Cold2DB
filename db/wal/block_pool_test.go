@@ -30,7 +30,7 @@ func TestAlignedBlockAligned4(t *testing.T) {
 	assert.Equal(t, 9, count3)
 }
 
-func TestBlockPool_PutBlock(t *testing.T) {
+func TestBlockPool_RecycleBlock(t *testing.T) {
 	blockPool := NewBlockPool()
 	block, _ := blockPool.AlignedBlock(1)
 	assert.Equal(t, isAligned(block), true)

@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/db/iooperator/directio"
@@ -12,6 +13,8 @@ import (
 )
 
 type SegmentID = uint32
+
+const DefaultIndex = 0
 
 var (
 	ErrClosed     = errors.New("the segment file is closed")
@@ -42,10 +45,10 @@ func NewSegmentFile(dirPath string) (*segment, error) {
 		panic(fmt.Errorf("seek to the end of segment file %s failed: %v", ".SEG", err))
 	}
 
-	blockPool := NewBlockPool()
 	return &segment{
+		Index:     DefaultIndex,
 		Fd:        fd,
-		blockPool: blockPool,
+		blockPool: NewBlockPool(),
 	}, nil
 }
 
@@ -61,6 +64,7 @@ func OpenSegmentFile(walDirPath string, index int64) (*segment, error) {
 	}
 
 	blockPool := NewBlockPool()
+	//获取第一个segment file的第一个header中的index
 	return &segment{
 		Fd:        fd,
 		blockPool: blockPool,
@@ -132,17 +136,22 @@ func (seg *segment) Remove() error {
 
 type segmentReader struct {
 	segment *segment
+	buffer  bytes.Reader
 }
 
 func NewReader(seg *segment) *segmentReader {
+	make([]byte)
+	seg.Fd.Write()
 	return &segmentReader{
-		segment:     seg,
-		blockNumber: 0,
-		chunkOffset: 0,
+		segment: seg,
 	}
 }
 
-func (sr *segmentReader) Read(p []byte) (n int, err error) {
+func (sr *segmentReader) ReadHeader(p []byte) (eHeader marshal.WalEntryHeader, err error) {
+
+}
+
+func (sr *segmentReader) ReadEntry(p []byte) (n int, err error) {
 
 }
 

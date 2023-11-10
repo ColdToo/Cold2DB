@@ -26,12 +26,6 @@ func NewBlockPool() (bp *BlockPool) {
 	return bp
 }
 
-func NewRaftBlockPool() (bp *BlockPool) {
-	bp = new(BlockPool)
-	bp.Block4 = alignedBlock(num4)
-	return bp
-}
-
 // AlignedBlock 优先分配block4和block8，若均不能满足再分配自定义的block
 func (b *BlockPool) AlignedBlock(n int) ([]byte, int) {
 	if n < Block4 {

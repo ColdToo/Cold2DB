@@ -59,6 +59,7 @@ func GobDecode(data []byte) (kv KV, err error) {
 
 type V struct {
 	Id        uint64
+	Index     int64
 	Type      KVType
 	ExpiredAt int64
 	Value     []byte
