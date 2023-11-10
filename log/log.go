@@ -15,10 +15,6 @@ import (
 var log *zap.Logger
 var sugaredLog *zap.SugaredLogger
 
-const (
-	None = ""
-)
-
 func InitLog(config *config.ZapConfig) {
 	if ok := utils.PathExist(config.Director); !ok {
 		_ = os.Mkdir(config.Director, os.ModePerm)

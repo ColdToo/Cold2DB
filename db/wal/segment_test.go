@@ -1,10 +1,5 @@
 package wal
 
-import (
-	"github.com/stretchr/testify/assert"
-	"testing"
-)
-
 /*
 func TestOrderedLinkedList_Insert(t *testing.T) {
 	oll := NewOrderedSegmentList()
@@ -42,20 +37,6 @@ func TestOrderedLinkedList_Insert(t *testing.T) {
 	file3.Close()
 }
 */
-
-func TestOpenRaftSegmentFile(t *testing.T) {
-	walDirPath := "/Users/hlhf/GolandProjects/Cold2DB/utils/"
-	fileName := "test.seg"
-
-	rSeg, err := OpenRaftSegmentFile(walDirPath, fileName)
-	assert.Nil(t, err)
-	assert.NotNil(t, rSeg)
-	assert.NotNil(t, rSeg.Fd)
-	assert.NotNil(t, rSeg.blockPool)
-	assert.NotNil(t, rSeg.currBlock)
-	assert.Equal(t, len(rSeg.currBlock), rSeg.currBlockSize)
-	assert.Equal(t, 0, rSeg.currBlockRemainSize)
-}
 
 /*
 func TestRaftSegment_Persist(t *testing.T) {

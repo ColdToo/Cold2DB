@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/ColdToo/Cold2DB/db/iooperator/directio"
 	"github.com/ColdToo/Cold2DB/db/marshal"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"io"
 	"os"
@@ -31,10 +32,18 @@ type segment struct {
 	BlocksOffset     int //当前Blocks的偏移量
 	BlocksRemainSize int
 
+	cursor *segmentCursor
+
 	closed bool
 }
 
-func NewSegmentFile(dirPath string) (*segment, error) {
+type segmentCursor struct {
+	blockNums        int //记录当前segment的blocks数量,也可以作为segment的偏移量使用
+	BlocksOffset     int //当前Blocks的偏移量
+	BlocksRemainSize int
+}
+
+func NewActSegmentFile(dirPath string) (*segment, error) {
 	fd, err := directio.OpenDirectIOFile(SegmentFileName(dirPath, 0>>1), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
@@ -45,14 +54,19 @@ func NewSegmentFile(dirPath string) (*segment, error) {
 		panic(fmt.Errorf("seek to the end of segment file %s failed: %v", ".SEG", err))
 	}
 
+	blockPool := NewBlockPool()
 	return &segment{
-		Index:     DefaultIndex,
-		Fd:        fd,
-		blockPool: NewBlockPool(),
+		Index:            DefaultIndex,
+		Fd:               fd,
+		Blocks:           blockPool.getBlock4(),
+		BlocksRemainSize: Block4,
+		blockNums:        num4,
+		BlocksOffset:     0,
+		blockPool:        NewBlockPool(),
 	}, nil
 }
 
-func OpenSegmentFile(walDirPath string, index int64) (*segment, error) {
+func OpenOldSegmentFile(walDirPath string, index int64) (*segment, error) {
 	fd, err := directio.OpenDirectIOFile(SegmentFileName(walDirPath, index), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
@@ -64,15 +78,16 @@ func OpenSegmentFile(walDirPath string, index int64) (*segment, error) {
 	}
 
 	blockPool := NewBlockPool()
-	//获取第一个segment file的第一个header中的index
+
 	return &segment{
+		Index:     index,
 		Fd:        fd,
 		blockPool: blockPool,
 	}, nil
 }
 
-func SegmentFileName(WaldirPath string, index int64) string {
-	return filepath.Join(WaldirPath, fmt.Sprintf("%014d"+SegSuffix, index))
+func SegmentFileName(walDirPath string, index int64) string {
+	return filepath.Join(walDirPath, fmt.Sprintf("%014d"+SegSuffix, index))
 }
 
 func (seg *segment) Write(data []byte, bytesCount int) (err error) {
@@ -134,92 +149,62 @@ func (seg *segment) Remove() error {
 	return os.Remove(seg.Fd.Name())
 }
 
+// restore memory and truncate wal will use reader
 type segmentReader struct {
-	segment *segment
-	buffer  bytes.Reader
+	persistIndex int64
+	appliedIndex int64
+	segment      *segment
+	buffer       *bytes.Reader
 }
 
-func NewReader(seg *segment) *segmentReader {
-	make([]byte)
-	seg.Fd.Write()
+func NewSegmentReader(seg *segment, persistIndex, appliedIndex int64) *segmentReader {
+	block, _ := seg.blockPool.AlignedBlock(seg.blockNums * Block4096)
+	seg.Fd.Write(block)
 	return &segmentReader{
-		segment: seg,
+		segment:      seg,
+		persistIndex: persistIndex,
+		appliedIndex: appliedIndex,
+		buffer:       bytes.NewReader(block),
 	}
 }
 
-func (sr *segmentReader) ReadHeader(p []byte) (eHeader marshal.WalEntryHeader, err error) {
-
+func (sr *segmentReader) ReadHeader() (eHeader marshal.WalEntryHeader, err error) {
+	return
 }
 
-func (sr *segmentReader) ReadEntry(p []byte) (n int, err error) {
-
-}
-
-func (sr *segmentReader) Next(p []byte) (n int, err error) {
-
-}
-
-// Node 由segment组成的有序单链表
-type Node struct {
-	Seg  *segment
-	Next *Node
-}
-
-type OrderedSegmentList struct {
-	Head *Node
-}
-
-func NewOrderedSegmentList() *OrderedSegmentList {
-	return &OrderedSegmentList{}
-}
-
-func (oll *OrderedSegmentList) Insert(seg *segment) {
-	newNode := &Node{Seg: seg}
-
-	if oll.Head == nil || oll.Head.Seg.index >= seg.index {
-		newNode.Next = oll.Head
-		oll.Head = newNode
-		return
+func (sr *segmentReader) ReadEntries() (kvs []*pb.Entry, err error) {
+	header, err := sr.ReadHeader()
+	if err != nil {
+		log.Panicf("read header", err)
 	}
+	b := make([]byte, header.EntrySize)
+	sr.buffer.Seek(int64(header.EntrySize), io.SeekCurrent)
+	ent := pb.Entry{}
+	ent.Unmarshal(b)
 
-	current := oll.Head
-	for current.Next != nil && current.Next.Seg.index < seg.index {
-		current = current.Next
-	}
-
-	newNode.Next = current.Next
-	current.Next = newNode
+	return
 }
 
-func (oll *OrderedSegmentList) Find(index int64) *segment {
-	current := oll.Head
-	var prev *Node
+func (sr *segmentReader) ReadKVs(chan marshal.KV, chan error) {
 
-	for current != nil && current.Seg.index < index {
-		prev = current
-		current = current.Next
-	}
+}
 
-	if current != nil && current.Seg.index == index {
-		return current.Seg
-	}
-
-	if prev != nil {
-		return prev.Seg
-	}
-
-	return nil
+func (sr *segmentReader) next(p []byte) {
+	return
 }
 
 // 需要持久化的状态 persist index apply index
+// immtable刷入硬盘后需要立即将persist index修改
 type stateSegment struct {
 	Fd              *os.File
 	blockPool       *BlockPool
 	RaftState       pb.HardState //需要持久化的状态
-	closed          bool
+	PersistIndex    int64
+	AppliedIndex    int64
 	Blocks          []byte
 	BlockSize       int
 	BlockRemainSize int
+	closed          bool
 }
 
 func OpenStateSegmentFile(walDirPath, fileName string) (rSeg *stateSegment, err error) {
@@ -280,4 +265,56 @@ func (seg *stateSegment) Close() error {
 
 	seg.closed = true
 	return seg.Fd.Close()
+}
+
+// OrderedSegmentList 由segment组成的有序单链表
+type OrderedSegmentList struct {
+	Head *Node
+}
+
+type Node struct {
+	Seg  *segment
+	Next *Node
+}
+
+func NewOrderedSegmentList() *OrderedSegmentList {
+	return &OrderedSegmentList{}
+}
+
+func (oll *OrderedSegmentList) Insert(seg *segment) {
+	newNode := &Node{Seg: seg}
+
+	if oll.Head == nil || oll.Head.Seg.Index >= seg.Index {
+		newNode.Next = oll.Head
+		oll.Head = newNode
+		return
+	}
+
+	current := oll.Head
+	for current.Next != nil && current.Next.Seg.Index < seg.Index {
+		current = current.Next
+	}
+
+	newNode.Next = current.Next
+	current.Next = newNode
+}
+
+func (oll *OrderedSegmentList) Find(index int64) *segment {
+	current := oll.Head
+	var prev *Node
+
+	for current != nil && current.Seg.Index < index {
+		prev = current
+		current = current.Next
+	}
+
+	if current != nil && current.Seg.Index == index {
+		return current.Seg
+	}
+
+	if prev != nil {
+		return prev.Seg
+	}
+
+	return nil
 }

@@ -12,11 +12,48 @@ import (
 	"github.com/ColdToo/Cold2DB/utils"
 	"os"
 	"strings"
+	"time"
 )
 
-var Cold2 *Cold2KV
+// ErrCompacted is returned by Storage.Entries/Compact when a requested
+// index is unavailable because it predates the last snapshot.
+var ErrCompacted = errors.New("requested index is unavailable due to compaction")
 
-type Cold2KV struct {
+// ErrSnapOutOfDate is returned by Storage.CreateSnapshot when a requested
+// index is older than the existing snapshot.
+var ErrSnapOutOfDate = errors.New("requested index is older than the existing snapshot")
+
+// ErrUnavailable is returned by Storage interface when the requested log entries
+// are unavailable.
+var ErrUnavailable = errors.New("requested entry at index is unavailable")
+
+// ErrSnapshotTemporarilyUnavailable is returned by the Storage interface when the required
+// snapshot is temporarily unavailable.
+var ErrSnapshotTemporarilyUnavailable = errors.New("snapshot is temporarily unavailable")
+
+//go:generate mockgen -source=./db.go -destination=../mocks/db.go -package=mock
+type Storage interface {
+	Get(key []byte) (val []byte, err error)
+	Scan(lowKey []byte, highKey []byte) (err error)
+
+	SaveHardState(st pb.HardState) error
+	SaveEntries(entries []*pb.Entry) error
+	SaveCommittedEntries(entries []*marshal.KV) error
+
+	GetHardState() (pb.HardState, pb.ConfState, error)
+	Entries(lo, hi uint64) ([]*pb.Entry, error)
+	Term(i uint64) (uint64, error)
+	AppliedIndex() uint64
+	LastIndex() uint64
+	FirstIndex() uint64
+	GetSnapshot() (pb.Snapshot, error)
+
+	Close()
+}
+
+var C2 *C2KV
+
+type C2KV struct {
 	activeMem *Memtable
 
 	immuMems []*Memtable
@@ -33,8 +70,8 @@ type Cold2KV struct {
 }
 
 func GetStorage() (Storage, error) {
-	if Cold2 != nil {
-		return Cold2, nil
+	if C2 != nil {
+		return C2, nil
 	} else {
 		return nil, errors.New("db is no init complete")
 	}
@@ -46,25 +83,24 @@ func InitDB(dbCfg *config.DBConfig) {
 		log.Panic("check db cfg failed")
 	}
 
-	Cold2 = new(Cold2KV)
+	C2 = new(C2KV)
 	tableFlushC := make(chan *Memtable, dbCfg.MemConfig.MemtableNums-1)
-	Cold2.flushChn = tableFlushC
-	Cold2.immuMems = make([]*Memtable, dbCfg.MemConfig.MemtableNums-1)
+	C2.flushChn = tableFlushC
+	C2.immuMems = make([]*Memtable, dbCfg.MemConfig.MemtableNums-1)
 
 	memOpt := MemOpt{
-		fsize:   int64(dbCfg.MemConfig.MemtableSize),
 		memSize: dbCfg.MemConfig.MemtableSize,
 	}
-	Cold2.activeMem, err = newMemtable(memOpt)
+	C2.activeMem, err = newMemtable(memOpt)
 	if err != nil {
 		return
 	}
 
-	Cold2.wal, err = wal.NewWal(dbCfg.WalConfig)
+	C2.wal, err = wal.NewWal(dbCfg.WalConfig)
 
-	Cold2.restoreMemoryFromWAL()
+	C2.restoreMemoryFromWAL()
 
-	Cold2.valueLog, err = valuelog.OpenValueLog(dbCfg.ValueLogConfig)
+	C2.valueLog, err = valuelog.OpenValueLog(dbCfg.ValueLogConfig)
 	if err != nil {
 		log.Panic("open Value log failed")
 	}
@@ -97,7 +133,7 @@ func dbCfgCheck(dbCfg *config.DBConfig) error {
 	return nil
 }
 
-func (db *Cold2KV) restoreMemoryFromWAL() {
+func (db *C2KV) restoreMemoryFromWAL() {
 	files, err := os.ReadDir(db.wal.Config.WalDirPath)
 	if err != nil {
 		log.Panicf("open wal dir failed", err)
@@ -113,7 +149,7 @@ func (db *Cold2KV) restoreMemoryFromWAL() {
 			if err != nil {
 				log.Panicf("can not scan file")
 			}
-			segmentFile, err := wal.OpenSegmentFile(db.wal.Config.WalDirPath, id)
+			segmentFile, err := wal.OpenOldSegmentFile(db.wal.Config.WalDirPath, id)
 			if err != nil {
 				log.Panicf("open segment file failed")
 			}
@@ -130,13 +166,93 @@ func (db *Cold2KV) restoreMemoryFromWAL() {
 		}
 	}
 
-	db.wal.OrderSegmentList.Find(int64(db.wal.StateSegment.RaftState.Applied))
-	//通过applied index找到对应的最小segment file
-	//启动两个goroutine分别将segment file加载到Immemtble和enties中
+	//创建一个新的state segment file
+	if db.wal.StateSegment == nil {
+		wal.OpenStateSegmentFile(db.wal.Config.WalDirPath, time.Now().String())
+	}
+
+	// 启动两个goroutine分别将old segment file加载到Immemtble和enties中
+
+	go db.restoreMemEntries()
+
+	go db.restoreImMemTable()
+
 	return
 }
 
-func (db *Cold2KV) Get(key []byte) (val []byte, err error) {
+func (db *C2KV) restoreImMemTable() {
+	persistIndex := db.wal.StateSegment.PersistIndex
+	appliedIndex := db.wal.StateSegment.AppliedIndex
+	Node := db.wal.OrderSegmentList.Head
+
+	kvC := make(chan marshal.KV, 1000)
+	signalC := make(chan error)
+	memTable := <-db.memtablePipe
+
+	//先定位要读取的segment
+	for Node != nil {
+		if persistIndex >= Node.Seg.Index && persistIndex <= Node.Next.Seg.Index {
+			break
+		}
+		Node = Node.Next
+	}
+
+	for Node != nil {
+		Seg := Node.Seg
+		reader := wal.NewSegmentReader(Seg, persistIndex, appliedIndex)
+
+		go reader.ReadKVs(kvC, signalC)
+
+		select {
+		case kv := <-kvC:
+			err := memTable.put(kv)
+			if err.Error() == "memtable is full" {
+				db.immuMems = append(db.immuMems, memTable)
+				//获取一个新的memtable写入，并将该memtable加入immtable中
+				memTable = <-db.memtablePipe
+				memTable.put(kv)
+			} else {
+
+			}
+		case err := <-signalC:
+			if err != nil {
+				log.Panicf("read segment failed")
+			} else if err.Error() == "segment is null" {
+				Node = Node.Next
+				continue
+			}
+		}
+	}
+	return
+}
+
+func (db *C2KV) restoreMemEntries() {
+	appliedIndex := db.wal.StateSegment.AppliedIndex
+	Node := db.wal.OrderSegmentList.Head
+
+	//先定位要读取的segment
+	for Node != nil {
+		if appliedIndex >= Node.Seg.Index && appliedIndex <= Node.Next.Seg.Index {
+			break
+		}
+		Node = Node.Next
+	}
+
+	for Node != nil {
+		Seg := Node.Seg
+		reader := wal.NewSegmentReader(Seg, 0, appliedIndex)
+		kvs, err := reader.ReadEntries()
+		if err != nil {
+			log.Panic("read header failed")
+		}
+		db.entries = append(db.entries, kvs...)
+		Node = Node.Next
+	}
+	return
+
+}
+
+func (db *C2KV) Get(key []byte) (val []byte, err error) {
 	flag, val := db.activeMem.Get(key)
 	if !flag {
 		return nil, errors.New("the key is not exist")
@@ -145,28 +261,28 @@ func (db *Cold2KV) Get(key []byte) (val []byte, err error) {
 	return
 }
 
-func (db *Cold2KV) Scan(lowKey []byte, highKey []byte) (err error) {
+func (db *C2KV) Scan(lowKey []byte, highKey []byte) (err error) {
 	return err
 }
 
-func (db *Cold2KV) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
+func (db *C2KV) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
 	if int(lo) < len(db.entries) {
 		return nil, errors.New("some entries is compacted")
 	}
 	return
 }
 
-func (db *Cold2KV) SaveCommittedEntries(entries []*marshal.KV) (err error) {
+func (db *C2KV) SaveCommittedEntries(entries []*marshal.KV) (err error) {
 	return nil
 }
 
-func (db *Cold2KV) SaveHardState(st pb.HardState) error {
+func (db *C2KV) SaveHardState(st pb.HardState) error {
 	db.wal.StateSegment.RaftState = st
 	enStateBytes, _ := marshal.EncodeRaftState(st)
 	return db.wal.StateSegment.Persist(enStateBytes)
 }
 
-func (db *Cold2KV) SaveEntries(entries []*pb.Entry) error {
+func (db *C2KV) SaveEntries(entries []*pb.Entry) error {
 	err := db.wal.Write(entries)
 	if err != nil {
 		return err
@@ -175,31 +291,31 @@ func (db *Cold2KV) SaveEntries(entries []*pb.Entry) error {
 	return nil
 }
 
-func (db *Cold2KV) Term(i uint64) (uint64, error) {
+func (db *C2KV) Term(i uint64) (uint64, error) {
 	//如果i已经applied返回compact错误，若没有则返回对应term
 	return 0, errors.New("the specific index entry is compacted")
 }
 
-func (db *Cold2KV) AppliedIndex() uint64 {
+func (db *C2KV) AppliedIndex() uint64 {
 	return 0
 }
 
-func (db *Cold2KV) FirstIndex() uint64 {
+func (db *C2KV) FirstIndex() uint64 {
 	return 0
 }
 
-func (db *Cold2KV) LastIndex() uint64 {
+func (db *C2KV) LastIndex() uint64 {
 	return 0
 }
 
-func (db *Cold2KV) GetSnapshot() (pb.Snapshot, error) {
+func (db *C2KV) GetSnapshot() (pb.Snapshot, error) {
 	return pb.Snapshot{}, nil
 }
 
-func (db *Cold2KV) GetHardState() (pb.HardState, pb.ConfState, error) {
+func (db *C2KV) GetHardState() (pb.HardState, pb.ConfState, error) {
 	return pb.HardState{}, pb.ConfState{}, nil
 }
 
-func (db *Cold2KV) Close() {
+func (db *C2KV) Close() {
 
 }

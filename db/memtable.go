@@ -8,7 +8,6 @@ import (
 )
 
 type MemOpt struct {
-	fsize   int64
 	memSize uint32
 }
 
@@ -31,7 +30,13 @@ func newMemtable(memOpt MemOpt) (*Memtable, error) {
 	return table, nil
 }
 
-func (mt *Memtable) put(kv []marshal.KV) error {
+func (mt *Memtable) put(kv marshal.KV) error {
+	//判断是否超出当前memtable大小，获取新memtable并将memtable放入刷盘管道中
+	mt.sklIter.Put()
+	return nil
+}
+
+func (mt *Memtable) Put(kv []marshal.KV) error {
 	//判断是否超出当前memtable大小，获取新memtable并将memtable放入刷盘管道中
 	return nil
 }

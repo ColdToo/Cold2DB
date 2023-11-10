@@ -34,7 +34,7 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 		OlderSegments: make(map[SegmentID]*segment),
 	}
 
-	acSegment, err := NewSegmentFile(config.WalDirPath)
+	acSegment, err := NewActSegmentFile(config.WalDirPath)
 	if err != nil {
 		return nil, err
 	}

@@ -60,6 +60,10 @@ func (b *BlockPool) recycleBlock(block []byte) {
 	}
 }
 
+func (b *BlockPool) getBlock4() []byte {
+	return b.Block4
+}
+
 func alignedBlock(blockNums int) []byte {
 	block := make([]byte, Block4096*blockNums)
 	if isAligned(block) {

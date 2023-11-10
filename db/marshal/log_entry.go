@@ -74,9 +74,9 @@ func DecodeV(v []byte) *V {
 }
 
 type WalEntryHeader struct {
-	crc32     int32
-	entrySize int32
-	index     int64
+	Crc32     int32
+	EntrySize int32
+	Index     int64
 }
 
 // EncodeWALEntry  will encode entry into a byte slice.
@@ -104,9 +104,9 @@ func DecodeWALEntryHeader(buf []byte) (header WalEntryHeader) {
 	crc32 := binary.LittleEndian.Uint32(buf[:Crc32Size])
 	entrySize := binary.LittleEndian.Uint16(buf[Crc32Size : Crc32Size+EntrySize])
 	index := binary.LittleEndian.Uint16(buf[Crc32Size+EntrySize : Crc32Size+EntrySize+IndexSize])
-	header.crc32 = int32(crc32)
-	header.entrySize = int32(entrySize)
-	header.index = int64(index)
+	header.Crc32 = int32(crc32)
+	header.EntrySize = int32(entrySize)
+	header.Index = int64(index)
 	return
 }
 
