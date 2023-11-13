@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/ColdToo/Cold2DB/db/iooperator/directio"
 	"github.com/ColdToo/Cold2DB/db/marshal"
-	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"io"
 	"os"
@@ -31,16 +30,7 @@ type segment struct {
 	blockNums        int //记录当前segment的blocks数量,也可以作为segment的偏移量使用
 	BlocksOffset     int //当前Blocks的偏移量
 	BlocksRemainSize int
-
-	cursor *segmentCursor
-
-	closed bool
-}
-
-type segmentCursor struct {
-	blockNums        int //记录当前segment的blocks数量,也可以作为segment的偏移量使用
-	BlocksOffset     int //当前Blocks的偏移量
-	BlocksRemainSize int
+	closed           bool
 }
 
 func NewActSegmentFile(dirPath string) (*segment, error) {
@@ -72,17 +62,18 @@ func OpenOldSegmentFile(walDirPath string, index int64) (*segment, error) {
 		return nil, err
 	}
 
-	_, err = fd.Seek(0, io.SeekStart)
-	if err != nil {
-		panic(fmt.Errorf("seek to the end of segment file %s failed: %v", ".SEG", err))
+	fileInfo, _ := fd.Stat()
+	fSize := fileInfo.Size() / Block4096
+	blockNums := fSize / Block4096
+	remain := fSize % Block4096
+	if remain > 0 {
+		blockNums++
 	}
-
-	blockPool := NewBlockPool()
 
 	return &segment{
 		Index:     index,
 		Fd:        fd,
-		blockPool: blockPool,
+		blockNums: int(blockNums),
 	}, nil
 }
 
@@ -155,42 +146,82 @@ type segmentReader struct {
 	appliedIndex int64
 	segment      *segment
 	buffer       *bytes.Reader
+
+	blocksNums      int //缓冲区大小4096*blocksNums
+	curBlocksOffset int //当前已经读到第几个block了
 }
 
 func NewSegmentReader(seg *segment, persistIndex, appliedIndex int64) *segmentReader {
-	block, _ := seg.blockPool.AlignedBlock(seg.blockNums * Block4096)
-	seg.Fd.Write(block)
+	blocks := alignedBlock(seg.blockNums)
+	seg.Fd.Write(blocks)
+	buffer := bytes.NewReader(blocks)
 	return &segmentReader{
 		segment:      seg,
 		persistIndex: persistIndex,
 		appliedIndex: appliedIndex,
-		buffer:       bytes.NewReader(block),
+		buffer:       buffer,
+		blocksNums:   seg.blockNums,
 	}
 }
 
-func (sr *segmentReader) ReadHeader() (eHeader marshal.WalEntryHeader, err error) {
-	return
-}
+func (sr *segmentReader) ReadHeaderAndNext() (eHeader marshal.WalEntryHeader, err error) {
+	buf := make([]byte, marshal.ChunkHeaderSize)
+	sr.buffer.Read(buf)
+	eHeader = marshal.DecodeWALEntryHeader(buf)
 
-func (sr *segmentReader) ReadEntries() (kvs []*pb.Entry, err error) {
-	header, err := sr.ReadHeader()
-	if err != nil {
-		log.Panicf("read header", err)
+	//如果header为空
+	if eHeader.IsEmpty() {
+		//当前是否是最后一个block？
+		if sr.curBlocksOffset == sr.blocksNums {
+			return eHeader, errors.New("EOF")
+		}
+		//移动到下一个blocks开始读取
+		sr.curBlocksOffset++
+		sr.buffer.Seek(int64(sr.curBlocksOffset*Block4096), io.SeekStart)
+		eHeader = marshal.DecodeWALEntryHeader(buf)
+		if eHeader.IsEmpty() {
+			panic("this branch should not happen")
+		}
+		sr.buffer.Seek(int64(eHeader.EntrySize+marshal.ChunkHeaderSize), io.SeekCurrent)
+		return
 	}
-	b := make([]byte, header.EntrySize)
-	sr.buffer.Seek(int64(header.EntrySize), io.SeekCurrent)
-	ent := pb.Entry{}
-	ent.Unmarshal(b)
 
+	sr.buffer.Seek(int64(eHeader.EntrySize+marshal.ChunkHeaderSize), io.SeekCurrent)
 	return
 }
 
-func (sr *segmentReader) ReadKVs(chan marshal.KV, chan error) {
-
+func (sr *segmentReader) ReadEntries() (ents []*pb.Entry, err error) {
+	for {
+		header, err := sr.ReadHeaderAndNext()
+		if err.Error() == "EOF" {
+			break
+		}
+		b := make([]byte, header.EntrySize)
+		sr.buffer.Seek(int64(header.EntrySize), io.SeekCurrent)
+		sr.buffer.Read(b)
+		ent := new(pb.Entry)
+		ent.Unmarshal(b)
+		ents = append(ents, ent)
+	}
+	return
 }
 
-func (sr *segmentReader) next(p []byte) {
-	return
+func (sr *segmentReader) ReadKVs(kvC chan *marshal.KV, errC chan error) {
+	for {
+		header, err := sr.ReadHeaderAndNext()
+		if err.Error() == "EOF" {
+			errC <- err
+			break
+		}
+		b := make([]byte, header.EntrySize)
+		sr.buffer.Seek(int64(header.EntrySize), io.SeekCurrent)
+		sr.buffer.Read(b)
+
+		ent := new(pb.Entry)
+		ent.Unmarshal(b)
+		kv := marshal.GobDecode(ent.Data)
+		kvC <- &kv
+	}
 }
 
 // 需要持久化的状态 persist index apply index

@@ -49,17 +49,17 @@ func GobEncode(KV any) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func GobDecode(data []byte) (kv KV, err error) {
-	err = gob.NewDecoder(bytes.NewBuffer(data)).Decode(&kv)
+func GobDecode(data []byte) (kv KV) {
+	err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&kv)
 	if err != nil {
-		log.Errorf("decode err:", err)
+		log.Panicf("decode err:", err)
 	}
 	return
 }
 
 type V struct {
 	Id        uint64
-	Index     int64
+	Index     uint64
 	Type      KVType
 	ExpiredAt int64
 	Value     []byte
@@ -74,9 +74,13 @@ func DecodeV(v []byte) *V {
 }
 
 type WalEntryHeader struct {
-	Crc32     int32
-	EntrySize int32
+	Crc32     int
+	EntrySize int
 	Index     int64
+}
+
+func (h WalEntryHeader) IsEmpty() bool {
+	return h.Crc32 == 0 && h.EntrySize == 0 && h.Index == 0
 }
 
 // EncodeWALEntry  will encode entry into a byte slice.
@@ -104,8 +108,8 @@ func DecodeWALEntryHeader(buf []byte) (header WalEntryHeader) {
 	crc32 := binary.LittleEndian.Uint32(buf[:Crc32Size])
 	entrySize := binary.LittleEndian.Uint16(buf[Crc32Size : Crc32Size+EntrySize])
 	index := binary.LittleEndian.Uint16(buf[Crc32Size+EntrySize : Crc32Size+EntrySize+IndexSize])
-	header.Crc32 = int32(crc32)
-	header.EntrySize = int32(entrySize)
+	header.Crc32 = int(crc32)
+	header.EntrySize = int(entrySize)
 	header.Index = int64(index)
 	return
 }

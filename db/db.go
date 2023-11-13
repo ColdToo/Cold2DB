@@ -185,7 +185,7 @@ func (db *C2KV) restoreImMemTable() {
 	appliedIndex := db.wal.StateSegment.AppliedIndex
 	Node := db.wal.OrderSegmentList.Head
 
-	kvC := make(chan marshal.KV, 1000)
+	kvC := make(chan *marshal.KV, 1000)
 	signalC := make(chan error)
 	memTable := <-db.memtablePipe
 
@@ -212,12 +212,12 @@ func (db *C2KV) restoreImMemTable() {
 				memTable = <-db.memtablePipe
 				memTable.put(kv)
 			} else {
-
+				log.Panicf("read segment failed")
 			}
 		case err := <-signalC:
 			if err != nil {
 				log.Panicf("read segment failed")
-			} else if err.Error() == "segment is null" {
+			} else if err.Error() == "EOF" {
 				Node = Node.Next
 				continue
 			}
