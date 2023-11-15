@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
-	"github.com/ColdToo/Cold2DB/db/valuelog"
 	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -66,7 +65,7 @@ type C2KV struct {
 
 	wal *wal.WAL
 
-	valueLog *valuelog.ValueLog
+	valueLog *ValueLog
 }
 
 func GetStorage() (Storage, error) {
@@ -77,7 +76,7 @@ func GetStorage() (Storage, error) {
 	}
 }
 
-func InitDB(dbCfg *config.DBConfig) {
+func OpenDB(dbCfg *config.DBConfig) {
 	err := dbCfgCheck(dbCfg)
 	if err != nil {
 		log.Panic("check db cfg failed")
@@ -100,7 +99,7 @@ func InitDB(dbCfg *config.DBConfig) {
 
 	C2.restoreMemoryFromWAL()
 
-	C2.valueLog, err = valuelog.OpenValueLog(dbCfg.ValueLogConfig)
+	C2.valueLog, err = OpenValueLog(dbCfg.ValueLogConfig, tableFlushC)
 	if err != nil {
 		log.Panic("open Value log failed")
 	}
@@ -273,6 +272,7 @@ func (db *C2KV) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
 }
 
 func (db *C2KV) SaveCommittedEntries(entries []*marshal.KV) (err error) {
+	db.activeMem.Put(entries)
 	return nil
 }
 

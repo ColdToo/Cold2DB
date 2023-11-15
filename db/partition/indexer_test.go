@@ -1,6 +1,7 @@
-package valuelog
+package partition
 
 import (
+	"github.com/ColdToo/Cold2DB/config"
 	"github.com/stretchr/testify/assert"
 	"os"
 	"path/filepath"
@@ -79,7 +80,7 @@ func TestNewIndexer(t *testing.T) {
 		_ = os.RemoveAll(path)
 	}()
 	type args struct {
-		opts IndexerOptions
+		config config.IndexConfig
 	}
 	tests := []struct {
 		name    string
@@ -87,12 +88,12 @@ func TestNewIndexer(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			"bptree-bolt", args{&BPTreeOptions{DirPath: path, IndexType: BptreeBoltDB, ColumnFamilyName: "test-1", BucketName: []byte("test-1"), BatchSize: 1000}}, false,
+			"bptree-bolt", args{}, false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewIndexer(tt.args.opts)
+			got, err := NewIndexer(tt.args.config)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewIndexer() error = %v, wantErr %v", err, tt.wantErr)
 				return

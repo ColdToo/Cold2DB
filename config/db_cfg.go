@@ -48,6 +48,8 @@ type ValueLogConfig struct {
 	ValueLogDir string
 
 	ValueLogFileSize int64
+
+	PartitionNums int
 }
 
 type MemTableConfig struct {
@@ -67,7 +69,6 @@ type MemTableConfig struct {
 }
 
 type IndexConfig struct {
-	// Persist index,IndexerDir dir path to store index meta data
 	IndexerDir string
 
 	IndexerType int8

@@ -18,7 +18,7 @@ func TestInitDB(t *testing.T) {
 			HardStateLogDir: "./path/to/hardstate",
 		},
 		ValueLogConfig: config.ValueLogConfig{
-			ValueLogDir: "./path/to/valuelog",
+			ValueLogDir: "./path/to/partition",
 		},
 	}
 	InitDB(dbCfg)

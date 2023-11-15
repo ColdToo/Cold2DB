@@ -65,8 +65,8 @@ type V struct {
 	Value     []byte
 }
 
-func (v *V) encode() {
-
+func EncodeV(v *V) []byte {
+	return nil
 }
 
 func DecodeV(v []byte) *V {
@@ -149,11 +149,8 @@ func DecodeRaftStateHeader(buf []byte) (header RaftStateHeader) {
 }
 
 /*
-type LogEntry struct {
-	Key       []byte
+type vLogRecord struct {
 	Value     []byte
-	Type      KVType
-	ExpiredAt int64
 }
 
 // EncodeLogEntry  will encode entry into a byte slice.
