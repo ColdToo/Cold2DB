@@ -75,8 +75,9 @@ func (v *ValueLog) ListenAndFlush() {
 			if len(partitionRecords[i]) == 0 {
 				continue
 			}
+			part := i
 			// todo 并发刷入每个partition
-			go v.partition[i].PersistKvs(partitionRecords[i])
+			go v.partition[part].PersistKvs(partitionRecords[part])
 		}
 	}
 }

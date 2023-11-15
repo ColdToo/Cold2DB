@@ -2,13 +2,14 @@ package partition
 
 import (
 	"github.com/ColdToo/Cold2DB/db/marshal"
+	"github.com/valyala/bytebufferpool"
+	"hash/crc32"
 	"os"
 )
 
 const (
-	PathSeparator = "/"
-
 	SSTSuffixName = ".SST"
+	smallValue    = 256
 )
 
 // Partition 一个partition文件由一个index文件和多个sst文件组成
@@ -17,42 +18,73 @@ type Partition struct {
 	activeSST *SST
 	olderSST  []*SST
 	pipeSST   chan *SST
-	index     Indexer
+	indexer   Indexer
 }
 
 type SST struct {
-	fd *os.File
-}
-
-func (s *SST) Write(kvs []*marshal.KV) {
-
+	fd     *os.File
+	offset int64
 }
 
 func OpenPartition() (p *Partition) {
+	go p.AutoCompaction()
 	return
 }
 
 func (p *Partition) PersistKvs(kvs []*marshal.KV) {
-	//bufferd io直接刷盘或者direct io维护一个内存buffer？
+	//每次都刷新到一个新的SST文件中？还是一个SST文件可以刷新一次两次或者三次？
+	buf := bytebufferpool.Get()
+	buf.Reset()
+	defer func() {
+		bytebufferpool.Put(buf)
+	}()
 
-	//异步将kvs的index通过chan写入到index文件中，构建一个index
+	posChan := make(chan *IndexerNode, len(kvs))
+	var fileCurrentOffset int
+	go func() {
+		select {
+		case pos := <-posChan:
+			p.indexer.Put(pos)
+		}
+	}()
 
-	//将kvs刷入到sst中且通过chanel将index刷入到index文件中
-	posChan := make(chan []*IndexerMeta, len(kvs))
+	for _, kv := range kvs {
+		vSize := len(kv.Value)
+		meta := &IndexerNode{
+			Key: kv.Key,
+			Meta: &IndexerMeta{
+				Fid:        p.activeSST.fd.Name(),
+				Offset:     fileCurrentOffset,
+				ValueSize:  vSize,
+				valueCrc32: crc32.ChecksumIEEE(kv.Value),
+				TimeStamp:  kv.TimeStamp,
+				ExpiredAt:  kv.ExpiredAt,
+			},
+		}
 
-	// channel for receiving the positions of the records after writing to the value log
+		if vSize <= smallValue {
+			meta.Meta.Value = kv.Value
+			posChan <- meta
+		}
+
+		fileCurrentOffset += len(kv.Value)
+		buf.Write(kv.Value)
+		posChan <- meta
+	}
+
+	p.activeSST.fd.Write(buf.Bytes())
 }
 
 func (p *Partition) AutoCompaction() {
-
+	p.Compaction()
 }
 
 func (p *Partition) Compaction() {
 
 }
 
-func (p *Partition) Read() {
-
+func (p *Partition) Get(key []byte) []byte {
+	return nil
 }
 
 func (p *Partition) Scan(low, high []byte) {

@@ -61,6 +61,7 @@ type V struct {
 	Id        uint64
 	Index     uint64
 	Type      KVType
+	TimeStamp int64
 	ExpiredAt int64
 	Value     []byte
 }

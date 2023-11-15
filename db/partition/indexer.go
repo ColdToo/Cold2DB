@@ -13,7 +13,6 @@ import (
 var indexBucketName = []byte("index")
 
 var (
-
 	// ErrDirPathNil indexer dir path is nil.
 	ErrDirPathNil = errors.New("indexer dir path is nil")
 
@@ -23,8 +22,7 @@ var (
 
 const (
 	indexFileSuffixName = ".INDEX"
-	separator           = "/"
-	metaHeaderSize      = 5 + 5 + 10
+	metaSize            = 5 + 5 + 10
 )
 
 type IndexerType int8
@@ -38,16 +36,17 @@ type IndexerNode struct {
 	Meta *IndexerMeta
 }
 
+// IndexerMeta smaller value could be place in this struct
 type IndexerMeta struct {
-	TimeStamp int64
-	ExpiredAt int64
-	Value     []byte
-	Fid       uint32
-	Offset    int64
-	ValueSize int
+	Fid        string
+	Offset     int
+	ValueSize  int
+	valueCrc32 uint32
+	Value      []byte
+	TimeStamp  int64
+	ExpiredAt  int64
 }
 
-// EncodeMeta encode IndexerMeta as byte array.
 func EncodeMeta(m *IndexerMeta) []byte {
 	header := make([]byte, metaHeaderSize)
 	var index int
@@ -64,7 +63,6 @@ func EncodeMeta(m *IndexerMeta) []byte {
 	return header[:index]
 }
 
-// DecodeMeta decode meta byte as IndexerMeta.
 func DecodeMeta(buf []byte) *IndexerMeta {
 	m := &IndexerMeta{}
 	var index int
@@ -84,9 +82,8 @@ func DecodeMeta(buf []byte) *IndexerMeta {
 	return m
 }
 
-// Indexer index data are stored in indexer.
 type Indexer interface {
-	Put(key []byte, meta *IndexerMeta) (err error)
+	Put(meta *IndexerNode) (err error)
 
 	Get(key []byte) (meta *IndexerMeta, err error)
 
@@ -157,7 +154,7 @@ func OpenBtreeIndexer(dirPath string) (Indexer, error) {
 	return nil, nil
 }
 
-func (b *BtreeIndexer) Put(key []byte, meta *IndexerMeta) (err error) {
+func (b *BtreeIndexer) Put(meta *IndexerNode) (err error) {
 	return nil
 }
 
