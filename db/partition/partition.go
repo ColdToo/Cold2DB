@@ -4,12 +4,14 @@ import (
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/valyala/bytebufferpool"
 	"hash/crc32"
+	"log"
 	"os"
+	"strings"
 )
 
 const (
-	SSTSuffixName = ".SST"
-	smallValue    = 256
+	SSTFileSuffixName = ".SST"
+	smallValue        = 256
 )
 
 // Partition 一个partition文件由一个index文件和多个sst文件组成
@@ -23,12 +25,41 @@ type Partition struct {
 
 type SST struct {
 	fd     *os.File
+	fName  string
 	offset int64
 }
 
-func OpenPartition() (p *Partition) {
+func OpenPartition(partitionDir string) (p *Partition) {
+	p = &Partition{
+		dirPath: partitionDir,
+		indexer: nil,
+	}
+
+	files, err := os.ReadDir(partitionDir)
+	if err != nil {
+		log.Panicf("open partition dir failed", err)
+	}
+	for _, file := range files {
+		switch {
+		case strings.HasSuffix(file.Name(), indexFileSuffixName):
+			p.indexer, err = NewIndexer(file.Name())
+		case strings.HasSuffix(file.Name(), SSTFileSuffixName):
+		}
+	}
 	go p.AutoCompaction()
 	return
+}
+
+func SSTPipeline() {
+
+}
+
+func (p *Partition) Get(key []byte) []byte {
+	return nil
+}
+
+func (p *Partition) Scan(low, high []byte) {
+
 }
 
 func (p *Partition) PersistKvs(kvs []*marshal.KV) {
@@ -76,17 +107,10 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV) {
 }
 
 func (p *Partition) AutoCompaction() {
+	//根据策略进行compation
 	p.Compaction()
 }
 
 func (p *Partition) Compaction() {
-
-}
-
-func (p *Partition) Get(key []byte) []byte {
-	return nil
-}
-
-func (p *Partition) Scan(low, high []byte) {
 
 }

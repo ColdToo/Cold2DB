@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/ColdToo/Cold2DB/config"
 	"go.etcd.io/bbolt"
 	"path/filepath"
 )
@@ -23,12 +22,6 @@ var (
 const (
 	indexFileSuffixName = ".INDEX"
 	metaSize            = 5 + 5 + 10
-)
-
-type IndexerType int8
-
-const (
-	Btree IndexerType = iota
 )
 
 type IndexerNode struct {
@@ -112,13 +105,8 @@ type IndexerIter interface {
 	Close() error
 }
 
-func NewIndexer(indexCfg config.IndexConfig) (Indexer, error) {
-	switch IndexerType(indexCfg.IndexerType) {
-	case Btree:
-		OpenBtreeIndexer(indexCfg.IndexerDir)
-	default:
-		panic("unknown indexer type")
-	}
+func NewIndexer(indexFileName string) (Indexer, error) {
+	OpenBtreeIndexer(indexFileName)
 	return nil, nil
 }
 

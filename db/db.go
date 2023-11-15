@@ -85,7 +85,6 @@ func OpenDB(dbCfg *config.DBConfig) {
 	C2 = new(C2KV)
 	tableFlushC := make(chan *Memtable, dbCfg.MemConfig.MemtableNums-1)
 	C2.flushChn = tableFlushC
-	C2.immuMems = make([]*Memtable, dbCfg.MemConfig.MemtableNums-1)
 
 	memOpt := MemOpt{
 		memSize: dbCfg.MemConfig.MemtableSize,

@@ -5,6 +5,8 @@ import (
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/db/partition"
+	"github.com/ColdToo/Cold2DB/log"
+	"os"
 )
 
 var (
@@ -36,10 +38,27 @@ type ValueLog struct {
 }
 
 func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable) (lf *ValueLog, err error) {
-	for i := 0; i < vlogCfg.PartitionNums; i++ {
-		//检查文件夹下的partition重新打开
-		partition.OpenPartition()
+	dirs, err := os.ReadDir(vlogCfg.ValueLogDir)
+	if err != nil {
+		log.Panicf("open wal dir failed", err)
 	}
+
+	if len(dirs) == 0 {
+		for i := 0; i < vlogCfg.PartitionNums; i++ {
+			//检查文件夹下的partition重新打开
+			//若vlog下有partition文件夹，则打开该文件夹下的partition以及所有sst文件和index文件
+			partition.OpenPartition()
+		}
+	} else {
+		for _, dir := range dirs {
+			if dir.IsDir() {
+				//检查文件夹下的partition重新打开
+				//若vlog下有partition文件夹，则打开该文件夹下的partition以及所有sst文件和index文件
+				partition.OpenPartition(dir.Name())
+			}
+		}
+	}
+
 	lf = &ValueLog{memFlushC: tableC}
 	return
 }
