@@ -5,8 +5,10 @@ import (
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/db/partition"
+	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
 	"os"
+	"time"
 )
 
 var (
@@ -25,6 +27,8 @@ var (
 type ValueLog struct {
 	memFlushC chan *Memtable //memManger的flushChn
 
+	stateSeg *wal.StateSegment
+
 	partition []*partition.Partition
 
 	// dirPath specifies the directory path where the WAL segment files will be stored.
@@ -37,7 +41,7 @@ type ValueLog struct {
 	hashKeyFunction func([]byte) uint64
 }
 
-func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable) (lf *ValueLog, err error) {
+func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable, stateSegment *wal.StateSegment) (lf *ValueLog, err error) {
 	dirs, err := os.ReadDir(vlogCfg.ValueLogDir)
 	if err != nil {
 		log.Panicf("open wal dir failed", err)
@@ -47,6 +51,7 @@ func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable) (lf *Val
 		for i := 0; i < vlogCfg.PartitionNums; i++ {
 			//检查文件夹下的partition重新打开
 			//若vlog下有partition文件夹，则打开该文件夹下的partition以及所有sst文件和index文件
+			time.Now().String()
 			partition.OpenPartition()
 		}
 	} else {
@@ -59,14 +64,14 @@ func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable) (lf *Val
 		}
 	}
 
-	lf = &ValueLog{memFlushC: tableC}
+	lf = &ValueLog{memFlushC: tableC, stateSeg: stateSegment}
 	return
 }
 
 func (v *ValueLog) Get(key []byte) ([]byte, error) {
 	//查找key对应所在分区在分区中进行查找
 	p := v.getKeyPartition(key)
-	v.partition[p].Read()
+	v.partition[p].Get(key)
 	return nil, nil
 }
 
@@ -85,6 +90,8 @@ func (v *ValueLog) ListenAndFlush() {
 		kvs := mem.All()
 
 		partitionRecords := make([][]*marshal.KV, v.partitionNum)
+
+		var index int64 //获取到该immtable中的最后一个index，刷新persist index
 		for _, record := range kvs {
 			p := v.getKeyPartition(record.Key)
 			partitionRecords[p] = append(partitionRecords[p], &record)
@@ -98,6 +105,9 @@ func (v *ValueLog) ListenAndFlush() {
 			// todo 并发刷入每个partition
 			go v.partition[part].PersistKvs(partitionRecords[part])
 		}
+
+		v.stateSeg.PersistIndex = index
+		v.stateSeg.Persist()
 	}
 }
 

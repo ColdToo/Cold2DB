@@ -1,6 +1,7 @@
 package partition
 
 import (
+	"github.com/ColdToo/Cold2DB/db/iooperator/bufio"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/valyala/bytebufferpool"
 	"hash/crc32"
@@ -11,16 +12,17 @@ import (
 
 const (
 	SSTFileSuffixName = ".SST"
-	smallValue        = 256
+	smallValue        = 128
 )
 
 // Partition 一个partition文件由一个index文件和多个sst文件组成
 type Partition struct {
 	dirPath   string
-	activeSST *SST
-	olderSST  []*SST
+	frozenSST []*SST
 	pipeSST   chan *SST
 	indexer   Indexer
+	SSTmap    map[string]SST
+}
 }
 
 type SST struct {
@@ -44,14 +46,26 @@ func OpenPartition(partitionDir string) (p *Partition) {
 		case strings.HasSuffix(file.Name(), indexFileSuffixName):
 			p.indexer, err = NewIndexer(file.Name())
 		case strings.HasSuffix(file.Name(), SSTFileSuffixName):
+			p.frozenSST = append(p.frozenSST, &SST{
+				fd:     bufio.OpenBufferedFile(file.Name()),
+				fName:  file.Name(),
+				offset: 0,
+			})
 		}
 	}
+
+	sstPipe := make(chan *SST, 0)
+	go func() {
+		sstPipe <- &SST{
+			fd:     bufio.OpenBufferedFile(p.dirPath + "/" + p.dirPath + SSTFileSuffixName),
+			fName:  p.dirPath + "/" + p.dirPath + SSTFileSuffixName,
+			offset: 0,
+		}
+	}()
+	p.pipeSST = sstPipe
+
 	go p.AutoCompaction()
 	return
-}
-
-func SSTPipeline() {
-
 }
 
 func (p *Partition) Get(key []byte) []byte {
@@ -70,6 +84,9 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV) {
 		bytebufferpool.Put(buf)
 	}()
 
+	sst := <-p.pipeSST
+
+	indexNodes := make([]*IndexerNode,0)
 	posChan := make(chan *IndexerNode, len(kvs))
 	var fileCurrentOffset int
 	go func() {
@@ -84,7 +101,7 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV) {
 		meta := &IndexerNode{
 			Key: kv.Key,
 			Meta: &IndexerMeta{
-				Fid:        p.activeSST.fd.Name(),
+				Fid:        fd.Name(),
 				Offset:     fileCurrentOffset,
 				ValueSize:  vSize,
 				valueCrc32: crc32.ChecksumIEEE(kv.Value),
@@ -100,10 +117,12 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV) {
 
 		fileCurrentOffset += len(kv.Value)
 		buf.Write(kv.Value)
-		posChan <- meta
 	}
 
-	p.activeSST.fd.Write(buf.Bytes())
+	p.indexer.Put(pos)
+
+	sst.fd.Write(buf.Bytes())
+	p.frozenSST = append(p.frozenSST)
 }
 
 func (p *Partition) AutoCompaction() {

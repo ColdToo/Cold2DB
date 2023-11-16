@@ -2,14 +2,17 @@ package wal
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/db/iooperator/directio"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/pb"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 type SegmentID = uint32
@@ -224,12 +227,12 @@ func (sr *segmentReader) ReadKVs(kvC chan *marshal.KV, errC chan error) {
 	}
 }
 
-// 需要持久化的状态 persist index apply index
-// immtable刷入硬盘后需要立即将persist index修改
-type stateSegment struct {
+// StateSegment need persist status: persist index、 apply index 、raft hardState
+type StateSegment struct {
+	lock            sync.Mutex
 	Fd              *os.File
 	blockPool       *BlockPool
-	RaftState       pb.HardState //需要持久化的状态
+	RaftState       pb.HardState
 	PersistIndex    int64
 	AppliedIndex    int64
 	Blocks          []byte
@@ -238,7 +241,35 @@ type stateSegment struct {
 	closed          bool
 }
 
-func OpenStateSegmentFile(walDirPath, fileName string) (rSeg *stateSegment, err error) {
+// StateSegment  will encode state into a byte slice.
+// +-------+-----------+-----------+
+// |  crc  | state size|   state(RaftState、PersistIndex、AppliedIndex) |
+// +-------+-----------+-----------+
+// |----------HEADER---|---BODY----+
+func (seg *StateSegment) encodeStateSegment() []byte {
+	stBytes, _ := st.Marshal()
+	stBytesSize := len(stBytes)
+	var size = RaftChunkHeaderSize + stBytesSize
+	buf := make([]byte, size)
+	binary.LittleEndian.PutUint32(buf[Crc32Size:], uint32(stBytesSize))
+	copy(buf[Crc32Size+StateSize:], stBytes)
+
+	// crc32
+	crc := crc32.ChecksumIEEE(buf[Crc32Size+StateSize:])
+	binary.LittleEndian.PutUint32(buf[:4], crc)
+	return buf
+}
+
+func (seg *StateSegment) decodeStateSegment() {
+	crc32 := binary.LittleEndian.Uint32(buf[:Crc32Size])
+	stateSize := binary.LittleEndian.Uint16(buf[Crc32Size : Crc32Size+StateSize])
+	header.crc32 = int32(crc32)
+	header.StateSize = int32(stateSize)
+	header.HeaderSize = RaftChunkHeaderSize
+	return
+}
+
+func OpenStateSegmentFile(walDirPath, fileName string) (rSeg *StateSegment, err error) {
 	fd, err := directio.OpenDirectIOFile(filepath.Join(walDirPath, fileName), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
@@ -250,7 +281,7 @@ func OpenStateSegmentFile(walDirPath, fileName string) (rSeg *stateSegment, err 
 	}
 
 	blockPool := NewBlockPool()
-	rSeg = new(stateSegment)
+	rSeg = new(StateSegment)
 	rSeg.Fd = fd
 	rSeg.RaftState = pb.HardState{}
 	rSeg.blockPool = blockPool
@@ -260,14 +291,17 @@ func OpenStateSegmentFile(walDirPath, fileName string) (rSeg *stateSegment, err 
 	//若fsize不为0读取文件的数据到block并序列化到pb.HardState
 	if fileInfo.Size() > 0 {
 		rSeg.Fd.Read(rSeg.Blocks)
-		header := marshal.DecodeRaftStateHeader(rSeg.Blocks)
-		rSeg.RaftState.Unmarshal(rSeg.Blocks[header.HeaderSize:header.StateSize])
+		rSeg.decodeStateSegment()
 	}
 
 	return rSeg, nil
 }
 
-func (seg *stateSegment) Persist(data []byte) (err error) {
+func (seg *StateSegment) Persist() (err error) {
+	seg.lock.Lock()
+	defer seg.lock.Unlock()
+
+	data := seg.encodeStateSegment()
 	copy(seg.Blocks[0:len(data)], data)
 	_, err = seg.Fd.Seek(0, io.SeekStart)
 	if err != nil {
@@ -280,7 +314,7 @@ func (seg *stateSegment) Persist(data []byte) (err error) {
 	return nil
 }
 
-func (seg *stateSegment) Remove() error {
+func (seg *StateSegment) Remove() error {
 	if !seg.closed {
 		seg.closed = true
 		_ = seg.Fd.Close()
@@ -289,7 +323,7 @@ func (seg *stateSegment) Remove() error {
 	return os.Remove(seg.Fd.Name())
 }
 
-func (seg *stateSegment) Close() error {
+func (seg *StateSegment) Close() error {
 	if seg.closed {
 		return nil
 	}

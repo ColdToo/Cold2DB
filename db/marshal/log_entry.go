@@ -121,34 +121,6 @@ type RaftStateHeader struct {
 	StateSize  int32
 }
 
-// EncodeRaftState  will encode state into a byte slice.
-// +-------+-----------+-----------+
-// |  crc  | state size|   state   |
-// +-------+-----------+-----------+
-// |----------HEADER---|---BODY----+
-func EncodeRaftState(st pb.HardState) ([]byte, int) {
-	stBytes, _ := st.Marshal()
-	stBytesSize := len(stBytes)
-	var size = RaftChunkHeaderSize + stBytesSize
-	buf := make([]byte, size)
-	binary.LittleEndian.PutUint32(buf[Crc32Size:], uint32(stBytesSize))
-	copy(buf[Crc32Size+StateSize:], stBytes)
-
-	// crc32
-	crc := crc32.ChecksumIEEE(buf[Crc32Size+StateSize:])
-	binary.LittleEndian.PutUint32(buf[:4], crc)
-	return buf, size
-}
-
-func DecodeRaftStateHeader(buf []byte) (header RaftStateHeader) {
-	crc32 := binary.LittleEndian.Uint32(buf[:Crc32Size])
-	stateSize := binary.LittleEndian.Uint16(buf[Crc32Size : Crc32Size+StateSize])
-	header.crc32 = int32(crc32)
-	header.StateSize = int32(stateSize)
-	header.HeaderSize = RaftChunkHeaderSize
-	return
-}
-
 /*
 type vLogRecord struct {
 	Value     []byte

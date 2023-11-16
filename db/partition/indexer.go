@@ -24,59 +24,8 @@ const (
 	metaSize            = 5 + 5 + 10
 )
 
-type IndexerNode struct {
-	Key  []byte
-	Meta *IndexerMeta
-}
-
-// IndexerMeta smaller value could be place in this struct
-type IndexerMeta struct {
-	Fid        string
-	Offset     int
-	ValueSize  int
-	valueCrc32 uint32
-	Value      []byte
-	TimeStamp  int64
-	ExpiredAt  int64
-}
-
-func EncodeMeta(m *IndexerMeta) []byte {
-	header := make([]byte, metaHeaderSize)
-	var index int
-	index += binary.PutVarint(header[index:], int64(m.Fid))
-	index += binary.PutVarint(header[index:], m.Offset)
-	index += binary.PutVarint(header[index:], int64(m.ValueSize))
-
-	if m.Value != nil {
-		buf := make([]byte, index+len(m.Value))
-		copy(buf[:index], header[:])
-		copy(buf[index:], m.Value)
-		return buf
-	}
-	return header[:index]
-}
-
-func DecodeMeta(buf []byte) *IndexerMeta {
-	m := &IndexerMeta{}
-	var index int
-	fid, n := binary.Varint(buf[index:])
-	m.Fid = uint32(fid)
-	index += n
-
-	offset, n := binary.Varint(buf[index:])
-	m.Offset = offset
-	index += n
-
-	esize, n := binary.Varint(buf[index:])
-	m.ValueSize = int(esize)
-	index += n
-
-	m.Value = buf[index:]
-	return m
-}
-
 type Indexer interface {
-	Put(meta *IndexerNode) (err error)
+	Put(meta *[]IndexerMeta) (err error)
 
 	Get(key []byte) (meta *IndexerMeta, err error)
 
@@ -105,19 +54,56 @@ type IndexerIter interface {
 	Close() error
 }
 
+type IndexerNode struct {
+	Key  []byte
+	Meta *IndexerMeta
+}
+
+// IndexerMeta smaller value could be place in this struct
+type IndexerMeta struct {
+	Fid        int
+	Offset     int
+	ValueSize  int
+	valueCrc32 uint32
+	TimeStamp  int64
+	ExpiredAt  int64
+	Value      []byte
+}
+
+func EncodeMeta(m *IndexerMeta) []byte {
+	valueSize := len(m.Value)
+	buf := make([]byte, 36+valueSize)
+	binary.LittleEndian.PutUint64(buf[0:8], uint64(m.Fid))
+	binary.LittleEndian.PutUint64(buf[8:16], uint64(m.Offset))
+	binary.LittleEndian.PutUint64(buf[16:24], uint64(m.ValueSize))
+	binary.LittleEndian.PutUint32(buf[24:28], m.valueCrc32)
+	binary.LittleEndian.PutUint64(buf[28:36], uint64(m.TimeStamp))
+	copy(buf[36:], m.Value)
+	return buf
+}
+
+func DecodeMeta(buf []byte) *IndexerMeta {
+	m := &IndexerMeta{}
+	m.Fid = int(binary.LittleEndian.Uint64(buf[0:8]))
+	m.Offset = int(binary.LittleEndian.Uint64(buf[8:16]))
+	m.ValueSize = int(binary.LittleEndian.Uint64(buf[16:24]))
+	m.valueCrc32 = binary.LittleEndian.Uint32(buf[24:28])
+	m.TimeStamp = int64(binary.LittleEndian.Uint64(buf[28:36]))
+	m.Value = make([]byte, len(buf)-36)
+	copy(m.Value, buf[36:])
+	return m
+}
+
 func NewIndexer(indexFileName string) (Indexer, error) {
-	OpenBtreeIndexer(indexFileName)
-	return nil, nil
+	return OpenBtreeIndexer(indexFileName)
 }
 
 type BtreeIndexer struct {
+	index *bbolt.DB
 }
 
 func OpenBtreeIndexer(dirPath string) (Indexer, error) {
-	// open bolt db
-	tree, err := bbolt.Open(
-		filepath.Join(dirPath, fmt.Sprintf(indexFileSuffixName)),
-		0600,
+	bbolt, err := bbolt.Open(filepath.Join(dirPath, fmt.Sprintf(indexFileSuffixName)), 0600,
 		&bbolt.Options{
 			NoSync:          true,
 			InitialMmapSize: 1024,
@@ -129,7 +115,7 @@ func OpenBtreeIndexer(dirPath string) (Indexer, error) {
 	}
 
 	// begin a writable transaction to create the bucket if not exists
-	tx, err := tree.Begin(true)
+	tx, err := bbolt.Begin(true)
 	if err != nil {
 		return nil, err
 	}
@@ -139,11 +125,20 @@ func OpenBtreeIndexer(dirPath string) (Indexer, error) {
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return nil, nil
+	return &BtreeIndexer{
+		index: bbolt,
+	}, nil
 }
 
-func (b *BtreeIndexer) Put(meta *IndexerNode) (err error) {
-	return nil
+func (b *BtreeIndexer) Put(metas []*IndexerNode) (err error) {
+	return b.index.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(indexBucketName)
+		for _, meta := range metas {
+			vBytes := EncodeMeta(meta.Meta)
+			bucket.Put(meta.Key, vBytes)
+		}
+		return nil
+	})
 }
 
 func (b *BtreeIndexer) Get(key []byte) (meta *IndexerMeta, err error) {
