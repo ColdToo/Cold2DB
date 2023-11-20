@@ -226,9 +226,9 @@ func (db *C2KV) restoreImMemTable() {
 
 func (db *C2KV) restoreMemEntries() {
 	appliedIndex := db.wal.StateSegment.AppliedIndex
-	Node := db.wal.OrderSegmentList.Head
 
-	//先定位要读取的segment
+	Node := db.wal.OrderSegmentList.Head
+	//locate the read position of segment
 	for Node != nil {
 		if appliedIndex >= Node.Seg.Index && appliedIndex <= Node.Next.Seg.Index {
 			break

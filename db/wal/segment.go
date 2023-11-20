@@ -69,7 +69,7 @@ func OpenOldSegmentFile(walDirPath string, index uint64) (*segment, error) {
 	}
 
 	fileInfo, _ := fd.Stat()
-	fSize := fileInfo.Size() / Block4096
+	fSize := fileInfo.Size()
 	blockNums := fSize / Block4096
 	remain := fSize % Block4096
 	if remain > 0 {
@@ -155,8 +155,8 @@ func (seg *segment) Remove() error {
 
 // restore memory and truncate wal will use reader
 type segmentReader struct {
-	persistIndex int64
-	appliedIndex int64
+	persistIndex uint64
+	appliedIndex uint64
 	segment      *segment
 	buffer       *bytes.Reader
 
@@ -164,9 +164,12 @@ type segmentReader struct {
 	curBlocksOffset int //当前已经读到第几个block了
 }
 
-func NewSegmentReader(seg *segment, persistIndex, appliedIndex int64) *segmentReader {
+func NewSegmentReader(seg *segment, persistIndex, appliedIndex uint64) *segmentReader {
 	blocks := alignedBlock(seg.blockNums)
-	seg.Fd.Write(blocks)
+	_, err := seg.Fd.Read(blocks)
+	if err != nil {
+		return nil
+	}
 	buffer := bytes.NewReader(blocks)
 	return &segmentReader{
 		segment:      seg,
@@ -178,8 +181,12 @@ func NewSegmentReader(seg *segment, persistIndex, appliedIndex int64) *segmentRe
 }
 
 func (sr *segmentReader) ReadHeaderAndNext() (eHeader marshal.WalEntryHeader, err error) {
+	// todo chunkHeaderSize应该作为pool
 	buf := make([]byte, marshal.ChunkHeaderSize)
+	io.Writer()
 	sr.buffer.Read(buf)
+	io.CopyN()
+
 	eHeader = marshal.DecodeWALEntryHeader(buf)
 
 	//如果header为空
@@ -242,8 +249,8 @@ type StateSegment struct {
 	lock         sync.Mutex
 	Fd           *os.File
 	RaftState    pb.HardState
-	PersistIndex int64
-	AppliedIndex int64
+	PersistIndex uint64
+	AppliedIndex uint64
 	raftBlocks   []byte
 	kvBlocks     []byte
 	closed       bool
@@ -283,7 +290,7 @@ func OpenStateSegmentFile(walDirPath, fileName string) (rSeg *StateSegment, err 
 
 	//若fsize不为0读取文件的数据到block并序列化到pb.HardState
 	if fileInfo.Size() > 0 {
-		rSeg.Fd.Read(rSeg.Blocks)
+		rSeg.Fd.Read(rSeg.raftBlocks)
 		rSeg.decodeStateSegment()
 	}
 
@@ -295,7 +302,7 @@ func (seg *StateSegment) Flush() (err error) {
 	defer seg.lock.Unlock()
 
 	data := seg.encodeStateSegment()
-	copy(seg.Blocks[0:len(data)], data)
+	copy(seg.raftBlocks[0:len(data)], data)
 	_, err = seg.Fd.Seek(0, io.SeekStart)
 	if err != nil {
 		return

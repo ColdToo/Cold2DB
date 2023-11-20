@@ -102,10 +102,33 @@ func TestSegment_Write(t *testing.T) {
 }
 
 func TestSegmentReader_ReadEntries(t *testing.T) {
+	oldSeg, err := OpenOldSegmentFile(TestDirPath, 1)
+	if err != nil {
+		t.Errorf("Expected nil, but got %v", err)
+	}
+	reader := NewSegmentReader(oldSeg, 0, 0)
+	for {
+		header, err := reader.ReadHeaderAndNext()
+		if err.Error() == "EOF" {
+			return
+		}
+		fmt.Println(header.Index)
+	}
 
 }
 
 func TestOpenOldSegmentFile(t *testing.T) {
-	NewSegmentReader()
-	OpenOldSegmentFile(TestDirPath, 1)
+	TestSegment_Write(t)
+	oldSeg, err := OpenOldSegmentFile(TestDirPath, 1)
+	if err != nil {
+		t.Errorf("Expected nil, but got %v", err)
+	}
+	reader := NewSegmentReader(oldSeg, 0, 0)
+	for {
+		header, err := reader.ReadHeaderAndNext()
+		if err.Error() == "EOF" {
+			return
+		}
+		fmt.Println(header.Index)
+	}
 }
