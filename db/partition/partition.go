@@ -7,7 +7,9 @@ import (
 	"hash/crc32"
 	"log"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -21,8 +23,7 @@ type Partition struct {
 	frozenSST []*SST
 	pipeSST   chan *SST
 	indexer   Indexer
-	SSTmap    map[string]SST
-}
+	SSTmap    map[int]SST
 }
 
 type SST struct {
@@ -57,7 +58,7 @@ func OpenPartition(partitionDir string) (p *Partition) {
 	sstPipe := make(chan *SST, 0)
 	go func() {
 		sstPipe <- &SST{
-			fd:     bufio.OpenBufferedFile(p.dirPath + "/" + p.dirPath + SSTFileSuffixName),
+			fd:     bufio.OpenBufferedFile(p.dirPath + time.Now().String() + SSTFileSuffixName),
 			fName:  p.dirPath + "/" + p.dirPath + SSTFileSuffixName,
 			offset: 0,
 		}
@@ -85,23 +86,18 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV) {
 	}()
 
 	sst := <-p.pipeSST
+	fid, _ := strconv.Atoi(sst.fd.Name())
 
-	indexNodes := make([]*IndexerNode,0)
+	indexNodes := make([]*IndexerNode, 0)
 	posChan := make(chan *IndexerNode, len(kvs))
 	var fileCurrentOffset int
-	go func() {
-		select {
-		case pos := <-posChan:
-			p.indexer.Put(pos)
-		}
-	}()
 
 	for _, kv := range kvs {
 		vSize := len(kv.Value)
 		meta := &IndexerNode{
 			Key: kv.Key,
 			Meta: &IndexerMeta{
-				Fid:        fd.Name(),
+				Fid:        fid,
 				Offset:     fileCurrentOffset,
 				ValueSize:  vSize,
 				valueCrc32: crc32.ChecksumIEEE(kv.Value),
@@ -119,7 +115,7 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV) {
 		buf.Write(kv.Value)
 	}
 
-	p.indexer.Put(pos)
+	p.indexer.Put(indexNodes)
 
 	sst.fd.Write(buf.Bytes())
 	p.frozenSST = append(p.frozenSST)

@@ -2,13 +2,13 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/db/partition"
 	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
 	"os"
-	"time"
 )
 
 var (
@@ -22,6 +22,8 @@ var (
 
 	ErrUnsupportedValueLogType = errors.New("unsupported log file type")
 )
+
+const PartitionFormat = "PARTITION_%d"
 
 // ValueLog is an abstraction of a disk file, entry`s read and write will go through it.
 type ValueLog struct {
@@ -51,8 +53,7 @@ func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable, stateSeg
 		for i := 0; i < vlogCfg.PartitionNums; i++ {
 			//检查文件夹下的partition重新打开
 			//若vlog下有partition文件夹，则打开该文件夹下的partition以及所有sst文件和index文件
-			time.Now().String()
-			partition.OpenPartition()
+			partition.OpenPartition(fmt.Sprintf(PartitionFormat, i))
 		}
 	} else {
 		for _, dir := range dirs {
@@ -107,7 +108,7 @@ func (v *ValueLog) ListenAndFlush() {
 		}
 
 		v.stateSeg.PersistIndex = index
-		v.stateSeg.Persist()
+		v.stateSeg.Flush()
 	}
 }
 

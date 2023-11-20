@@ -25,7 +25,7 @@ const (
 )
 
 type Indexer interface {
-	Put(meta *[]IndexerMeta) (err error)
+	Put(meta []*IndexerNode) (err error)
 
 	Get(key []byte) (meta *IndexerMeta, err error)
 

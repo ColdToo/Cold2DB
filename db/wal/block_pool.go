@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	AlignSize = 4096 //不管是ssd还是hhd都默认以4k对齐
+	AlignSize = 4096 //Both SSDs and HHDs are aligned at 4K by default
 	Block4096 = AlignSize
 	num4      = 4
 	num8      = 8
@@ -26,7 +26,7 @@ func NewBlockPool() (bp *BlockPool) {
 	return bp
 }
 
-// AlignedBlock 优先分配block4和block8，若均不能满足再分配自定义的block
+// AlignedBlock  alloc Block4 and Block8, if not enough, alloc custom block
 func (b *BlockPool) AlignedBlock(n int) ([]byte, int) {
 	if n < Block4 {
 		return b.Block4, 4
@@ -58,10 +58,6 @@ func (b *BlockPool) recycleBlock(block []byte) {
 	default:
 		log.Panic("block type error")
 	}
-}
-
-func (b *BlockPool) getBlock4() []byte {
-	return b.Block4
 }
 
 func alignedBlock(blockNums int) []byte {

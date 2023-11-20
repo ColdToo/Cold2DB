@@ -25,7 +25,7 @@ type WAL struct {
 	OlderSegments    map[SegmentID]*segment
 	SegmentPipe      chan *segment
 	OrderSegmentList *OrderedSegmentList
-	StateSegment     *stateSegment //保存需要持久化的raft状态
+	StateSegment     *StateSegment //保存需要持久化的raft状态
 }
 
 func NewWal(config config.WalConfig) (*WAL, error) {
@@ -49,6 +49,7 @@ func (wal *WAL) Write(entries []*pb.Entry) error {
 	//segment文件应该尽量均匀，若此次entries太大那么直接写入新的segment文件中
 	data := make([]byte, 0)
 	bytesCount := 0
+
 	for _, e := range entries {
 		wEntBytes, n := marshal.EncodeWALEntry(e)
 		data = append(data, wEntBytes...)
@@ -62,7 +63,7 @@ func (wal *WAL) Write(entries []*pb.Entry) error {
 		}
 	}
 
-	return wal.ActiveSegment.Write(data, bytesCount)
+	return wal.ActiveSegment.Write(data, bytesCount, entries[0].Index)
 }
 
 func (wal *WAL) activeSegmentIsFull(delta int) bool {
@@ -85,7 +86,7 @@ func (wal *WAL) rotateActiveSegment() error {
 	return nil
 }
 
-func (wal *WAL) Truncate(index int64) error {
+func (wal *WAL) Truncate(index uint64) error {
 	//truncate掉index之后的所有segment包括当前的active segment
 	wal.OrderSegmentList.Find(index)
 	return nil

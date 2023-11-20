@@ -2,13 +2,12 @@ package wal
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/db/iooperator/directio"
 	"github.com/ColdToo/Cold2DB/db/marshal"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
-	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -25,14 +24,16 @@ var (
 )
 
 type segment struct {
-	Index     int64 //该segment文件中的最小index
+	Index     uint64 //该segment文件中的最小log index
 	Fd        *os.File
 	blockPool *BlockPool
 
-	Blocks           []byte
-	blockNums        int //记录当前segment的blocks数量,也可以作为segment的偏移量使用
-	BlocksOffset     int //当前Blocks的偏移量
-	BlocksRemainSize int
+	blocks        []byte //当前segment使用的blocks
+	blockNums     int    //记录当前segment的blocks数量,也可以作为segment的偏移量使用
+	segmentOffset int    //当前segment的偏移量
+
+	blocksOffset     int //当前Blocks的偏移量
+	BlocksRemainSize int //当前Blocks剩余可以写字节数
 	closed           bool
 }
 
@@ -44,22 +45,24 @@ func NewActSegmentFile(dirPath string) (*segment, error) {
 
 	_, err = fd.Seek(0, io.SeekStart)
 	if err != nil {
-		panic(fmt.Errorf("seek to the end of segment file %s failed: %v", ".SEG", err))
+		log.Panicf("seek to the end of segment file %s failed: %v", ".SEG", err)
 	}
 
 	blockPool := NewBlockPool()
+	//default use 4 block as new active segment blocks
 	return &segment{
 		Index:            DefaultIndex,
 		Fd:               fd,
-		Blocks:           blockPool.getBlock4(),
+		blocks:           blockPool.Block4,
 		BlocksRemainSize: Block4,
 		blockNums:        num4,
-		BlocksOffset:     0,
+		blocksOffset:     0,
+		segmentOffset:    0,
 		blockPool:        NewBlockPool(),
 	}, nil
 }
 
-func OpenOldSegmentFile(walDirPath string, index int64) (*segment, error) {
+func OpenOldSegmentFile(walDirPath string, index uint64) (*segment, error) {
 	fd, err := directio.OpenDirectIOFile(SegmentFileName(walDirPath, index), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
@@ -80,45 +83,52 @@ func OpenOldSegmentFile(walDirPath string, index int64) (*segment, error) {
 	}, nil
 }
 
-func SegmentFileName(walDirPath string, index int64) string {
+func SegmentFileName(walDirPath string, index uint64) string {
 	return filepath.Join(walDirPath, fmt.Sprintf("%014d"+SegSuffix, index))
 }
 
-func (seg *segment) Write(data []byte, bytesCount int) (err error) {
-	//如果当前block能够写入
+func (seg *segment) Write(data []byte, bytesCount int, firstIndex uint64) (err error) {
 	if bytesCount < seg.BlocksRemainSize {
-		copy(seg.Blocks[seg.BlocksOffset:len(data)], data)
-		seg.BlocksOffset = seg.BlocksOffset + bytesCount
+		copy(seg.blocks[seg.blocksOffset:len(data)], data)
+		seg.blocksOffset = seg.blocksOffset + bytesCount
 		seg.BlocksRemainSize = seg.BlocksRemainSize - bytesCount
-		seg.Flush()
 	} else {
-		seg.blockPool.recycleBlock(seg.Blocks)
-		//分配新的block
+		seg.blockPool.recycleBlock(seg.blocks)
+		seg.blocksOffset = 0
 		newBlock, nums := seg.blockPool.AlignedBlock(len(data))
+		seg.segmentOffset += nums * Block4096
 		seg.blockNums += nums
-		seg.Blocks = newBlock
-		copy(seg.Blocks[seg.BlocksOffset:len(data)], data)
+		seg.blocks = newBlock
+		copy(seg.blocks[seg.blocksOffset:len(data)], data)
 		seg.BlocksRemainSize = 0
-		seg.Flush()
+	}
+
+	if err = seg.Flush(bytesCount); err == nil && seg.Index == DefaultIndex {
+		seg.Index = firstIndex
+		err = os.Rename(seg.Fd.Name(), SegmentFileName(filepath.Dir(seg.Fd.Name()), seg.Index))
+		if err != nil {
+			log.Errorf("rename segment file %s failed: %v", seg.Fd.Name(), err)
+			return err
+		}
 	}
 
 	return
 }
 
-func (seg *segment) Flush() error {
-	_, err := seg.Fd.Seek(int64(seg.blockNums*Block4096), io.SeekStart)
+func (seg *segment) Flush(bytesCount int) error {
+	_, err := seg.Fd.Seek(int64(seg.blocksOffset), io.SeekStart)
 	if err != nil {
 		return err
 	}
 
-	_, err = seg.Fd.Write(seg.Blocks)
+	_, err = seg.Fd.Write(seg.blocks)
 	if err != nil {
 		return err
 	}
+
+	seg.blocksOffset += bytesCount
 
 	return nil
-
-	//增加blockNums计数
 }
 
 func (seg *segment) Size() int {
@@ -129,18 +139,18 @@ func (seg *segment) Close() error {
 	if seg.closed {
 		return nil
 	}
-
 	seg.closed = true
 	return seg.Fd.Close()
 }
 
 func (seg *segment) Remove() error {
-	if !seg.closed {
-		seg.closed = true
-		_ = seg.Fd.Close()
+	if err := seg.Close(); err == nil {
+		os.Remove(seg.Fd.Name())
+	} else {
+		log.Errorf("close segment file failed", err)
+		return err
 	}
-
-	return os.Remove(seg.Fd.Name())
+	return nil
 }
 
 // restore memory and truncate wal will use reader
@@ -229,16 +239,14 @@ func (sr *segmentReader) ReadKVs(kvC chan *marshal.KV, errC chan error) {
 
 // StateSegment need persist status: persist index、 apply index 、raft hardState
 type StateSegment struct {
-	lock            sync.Mutex
-	Fd              *os.File
-	blockPool       *BlockPool
-	RaftState       pb.HardState
-	PersistIndex    int64
-	AppliedIndex    int64
-	Blocks          []byte
-	BlockSize       int
-	BlockRemainSize int
-	closed          bool
+	lock         sync.Mutex
+	Fd           *os.File
+	RaftState    pb.HardState
+	PersistIndex int64
+	AppliedIndex int64
+	raftBlocks   []byte
+	kvBlocks     []byte
+	closed       bool
 }
 
 // StateSegment  will encode state into a byte slice.
@@ -247,25 +255,10 @@ type StateSegment struct {
 // +-------+-----------+-----------+
 // |----------HEADER---|---BODY----+
 func (seg *StateSegment) encodeStateSegment() []byte {
-	stBytes, _ := st.Marshal()
-	stBytesSize := len(stBytes)
-	var size = RaftChunkHeaderSize + stBytesSize
-	buf := make([]byte, size)
-	binary.LittleEndian.PutUint32(buf[Crc32Size:], uint32(stBytesSize))
-	copy(buf[Crc32Size+StateSize:], stBytes)
-
-	// crc32
-	crc := crc32.ChecksumIEEE(buf[Crc32Size+StateSize:])
-	binary.LittleEndian.PutUint32(buf[:4], crc)
-	return buf
+	return nil
 }
 
 func (seg *StateSegment) decodeStateSegment() {
-	crc32 := binary.LittleEndian.Uint32(buf[:Crc32Size])
-	stateSize := binary.LittleEndian.Uint16(buf[Crc32Size : Crc32Size+StateSize])
-	header.crc32 = int32(crc32)
-	header.StateSize = int32(stateSize)
-	header.HeaderSize = RaftChunkHeaderSize
 	return
 }
 
@@ -284,8 +277,8 @@ func OpenStateSegmentFile(walDirPath, fileName string) (rSeg *StateSegment, err 
 	rSeg = new(StateSegment)
 	rSeg.Fd = fd
 	rSeg.RaftState = pb.HardState{}
-	rSeg.blockPool = blockPool
-	rSeg.Blocks = blockPool.Block4
+	rSeg.raftBlocks = blockPool.Block4
+	rSeg.raftBlocks = blockPool.Block4
 	fileInfo, _ := rSeg.Fd.Stat()
 
 	//若fsize不为0读取文件的数据到block并序列化到pb.HardState
@@ -297,7 +290,7 @@ func OpenStateSegmentFile(walDirPath, fileName string) (rSeg *StateSegment, err 
 	return rSeg, nil
 }
 
-func (seg *StateSegment) Persist() (err error) {
+func (seg *StateSegment) Flush() (err error) {
 	seg.lock.Lock()
 	defer seg.lock.Unlock()
 
@@ -364,7 +357,8 @@ func (oll *OrderedSegmentList) Insert(seg *segment) {
 	current.Next = newNode
 }
 
-func (oll *OrderedSegmentList) Find(index int64) *segment {
+// Find find segment which segment.index<=index and next segment.index>index
+func (oll *OrderedSegmentList) Find(index uint64) *segment {
 	current := oll.Head
 	var prev *Node
 

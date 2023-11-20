@@ -140,7 +140,7 @@ func (db *C2KV) restoreMemoryFromWAL() {
 		return
 	}
 
-	var id int64
+	var id uint64
 	for _, file := range files {
 		if strings.HasSuffix(file.Name(), wal.SegSuffix) {
 			_, err = fmt.Sscanf(file.Name(), "%d.SEG", &id)
@@ -278,7 +278,7 @@ func (db *C2KV) SaveCommittedEntries(entries []*marshal.KV) (err error) {
 func (db *C2KV) SaveHardState(st pb.HardState) error {
 	db.wal.StateSegment.RaftState = st
 	enStateBytes, _ := marshal.EncodeRaftState(st)
-	return db.wal.StateSegment.Persist(enStateBytes)
+	return db.wal.StateSegment.Flush(enStateBytes)
 }
 
 func (db *C2KV) SaveEntries(entries []*pb.Entry) error {
