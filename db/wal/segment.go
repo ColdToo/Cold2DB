@@ -206,7 +206,7 @@ func (sr *segmentReader) ReadHeader() (eHeader marshal.WalEntryHeader, err error
 	return
 }
 
-func (sr *segmentReader) ReadEntry() (ent *pb.Entry, err error) {
+func (sr *segmentReader) readEntry() (ent *pb.Entry, err error) {
 	header, err := sr.ReadHeader()
 	if err != nil {
 		return nil, err
@@ -223,7 +223,7 @@ func (sr *segmentReader) Next(entrySize int) {
 
 func (sr *segmentReader) ReadEntries() (ents []*pb.Entry, err error) {
 	for {
-		ent, err := sr.ReadEntry()
+		ent, err := sr.readEntry()
 		if err != nil && err.Error() == "EOF" {
 			break
 		}
@@ -234,7 +234,7 @@ func (sr *segmentReader) ReadEntries() (ents []*pb.Entry, err error) {
 
 func (sr *segmentReader) ReadKVs(kvC chan *marshal.KV, errC chan error) {
 	for {
-		ent, err := sr.ReadEntry()
+		ent, err := sr.readEntry()
 		if err != nil && err.Error() == "EOF" {
 			errC <- err
 			break
