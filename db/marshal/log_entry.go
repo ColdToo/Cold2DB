@@ -14,7 +14,7 @@ const (
 	// ChunkHeaderSize
 	// Checksum Length  index
 	//    4       4       8
-	ChunkHeaderSize = 15
+	ChunkHeaderSize = 16
 
 	// RaftChunkHeaderSize
 	// Checksum Length
@@ -95,9 +95,9 @@ func EncodeWALEntry(e *pb.Entry) ([]byte, int) {
 	eBytesSize := len(eBytes)
 	var size = ChunkHeaderSize + eBytesSize
 	buf := make([]byte, size)
-	binary.LittleEndian.PutUint32(buf[EntrySize:], uint32(eBytesSize))
-	binary.LittleEndian.PutUint64(buf[EntrySize+IndexSize:], e.Index)
-	copy(buf[Crc32Size+EntrySize+IndexSize:], e.Data)
+	binary.LittleEndian.PutUint32(buf[Crc32Size:], uint32(eBytesSize))
+	binary.LittleEndian.PutUint64(buf[Crc32Size+EntrySize:], e.Index)
+	copy(buf[Crc32Size+EntrySize+IndexSize:], eBytes)
 
 	// crc32
 	crc := crc32.ChecksumIEEE(buf[Crc32Size+EntrySize+IndexSize:])

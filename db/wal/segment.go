@@ -1,7 +1,6 @@
 package wal
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/db/iooperator/directio"
@@ -16,7 +15,10 @@ import (
 
 type SegmentID = uint32
 
-const DefaultIndex = 0
+const (
+	DefaultIndex    = 0
+	InitialBlockNum = 1
+)
 
 var (
 	ErrClosed     = errors.New("the segment file is closed")
@@ -54,9 +56,9 @@ func NewActSegmentFile(dirPath string) (*segment, error) {
 		Index:            DefaultIndex,
 		Fd:               fd,
 		blocks:           blockPool.Block4,
+		blocksOffset:     0,
 		BlocksRemainSize: Block4,
 		blockNums:        num4,
-		blocksOffset:     0,
 		segmentOffset:    0,
 		blockPool:        NewBlockPool(),
 	}, nil
@@ -89,18 +91,16 @@ func SegmentFileName(walDirPath string, index uint64) string {
 
 func (seg *segment) Write(data []byte, bytesCount int, firstIndex uint64) (err error) {
 	if bytesCount < seg.BlocksRemainSize {
-		copy(seg.blocks[seg.blocksOffset:len(data)], data)
-		seg.blocksOffset = seg.blocksOffset + bytesCount
-		seg.BlocksRemainSize = seg.BlocksRemainSize - bytesCount
+		copy(seg.blocks[seg.blocksOffset:bytesCount], data)
 	} else {
 		seg.blockPool.recycleBlock(seg.blocks)
 		seg.blocksOffset = 0
-		newBlock, nums := seg.blockPool.AlignedBlock(len(data))
-		seg.segmentOffset += nums * Block4096
-		seg.blockNums += nums
+		newBlock, nums := seg.blockPool.AlignedBlock(bytesCount)
+		seg.segmentOffset = seg.segmentOffset + nums*Block4096
+		seg.BlocksRemainSize = nums * Block4096
+		seg.blockNums = seg.blockNums + nums
 		seg.blocks = newBlock
-		copy(seg.blocks[seg.blocksOffset:len(data)], data)
-		seg.BlocksRemainSize = 0
+		copy(seg.blocks[seg.blocksOffset:bytesCount], data)
 	}
 
 	if err = seg.Flush(bytesCount); err == nil && seg.Index == DefaultIndex {
@@ -115,8 +115,8 @@ func (seg *segment) Write(data []byte, bytesCount int, firstIndex uint64) (err e
 	return
 }
 
-func (seg *segment) Flush(bytesCount int) error {
-	_, err := seg.Fd.Seek(int64(seg.blocksOffset), io.SeekStart)
+func (seg *segment) Flush(bytesCount int) (err error) {
+	_, err = seg.Fd.Seek(int64(seg.segmentOffset), io.SeekStart)
 	if err != nil {
 		return err
 	}
@@ -127,8 +127,9 @@ func (seg *segment) Flush(bytesCount int) error {
 	}
 
 	seg.blocksOffset += bytesCount
+	seg.BlocksRemainSize -= bytesCount
 
-	return nil
+	return
 }
 
 func (seg *segment) Size() int {
@@ -157,11 +158,10 @@ func (seg *segment) Remove() error {
 type segmentReader struct {
 	persistIndex uint64
 	appliedIndex uint64
-	segment      *segment
-	buffer       *bytes.Reader
-
-	blocksNums      int //缓冲区大小4096*blocksNums
-	curBlocksOffset int //当前已经读到第几个block了
+	blocks       []byte
+	blocksOffset int
+	blocksNums   int
+	curBlockNum  int
 }
 
 func NewSegmentReader(seg *segment, persistIndex, appliedIndex uint64) *segmentReader {
@@ -170,43 +170,39 @@ func NewSegmentReader(seg *segment, persistIndex, appliedIndex uint64) *segmentR
 	if err != nil {
 		return nil
 	}
-	buffer := bytes.NewReader(blocks)
 	return &segmentReader{
-		segment:      seg,
 		persistIndex: persistIndex,
 		appliedIndex: appliedIndex,
-		buffer:       buffer,
+		blocks:       blocks,
 		blocksNums:   seg.blockNums,
+		curBlockNum:  InitialBlockNum,
 	}
 }
 
 func (sr *segmentReader) ReadHeaderAndNext() (eHeader marshal.WalEntryHeader, err error) {
-	// todo chunkHeaderSize应该作为pool
+	// todo chunkHeaderSlice应该作为pool
 	buf := make([]byte, marshal.ChunkHeaderSize)
-	io.Writer()
-	sr.buffer.Read(buf)
-	io.CopyN()
+	copy(buf, sr.blocks[sr.blocksOffset:sr.blocksOffset+marshal.ChunkHeaderSize])
 
 	eHeader = marshal.DecodeWALEntryHeader(buf)
 
 	//如果header为空
 	if eHeader.IsEmpty() {
 		//当前是否是最后一个block？
-		if sr.curBlocksOffset == sr.blocksNums {
+		if sr.curBlockNum == sr.blocksNums {
 			return eHeader, errors.New("EOF")
 		}
-		//移动到下一个blocks开始读取
-		sr.curBlocksOffset++
-		sr.buffer.Seek(int64(sr.curBlocksOffset*Block4096), io.SeekStart)
+		//移动到下一个block开始读取
+		sr.curBlockNum++
+		sr.blocksOffset = sr.curBlockNum * Block4096
 		eHeader = marshal.DecodeWALEntryHeader(buf)
 		if eHeader.IsEmpty() {
-			panic("this branch should not happen")
+			return eHeader, errors.New("EOF")
 		}
-		sr.buffer.Seek(int64(eHeader.EntrySize+marshal.ChunkHeaderSize), io.SeekCurrent)
+		sr.blocksOffset += eHeader.EntrySize + marshal.ChunkHeaderSize
 		return
 	}
-
-	sr.buffer.Seek(int64(eHeader.EntrySize+marshal.ChunkHeaderSize), io.SeekCurrent)
+	sr.blocksOffset += eHeader.EntrySize + marshal.ChunkHeaderSize
 	return
 }
 
@@ -217,8 +213,6 @@ func (sr *segmentReader) ReadEntries() (ents []*pb.Entry, err error) {
 			break
 		}
 		b := make([]byte, header.EntrySize)
-		sr.buffer.Seek(int64(header.EntrySize), io.SeekCurrent)
-		sr.buffer.Read(b)
 		ent := new(pb.Entry)
 		ent.Unmarshal(b)
 		ents = append(ents, ent)
@@ -234,8 +228,6 @@ func (sr *segmentReader) ReadKVs(kvC chan *marshal.KV, errC chan error) {
 			break
 		}
 		b := make([]byte, header.EntrySize)
-		sr.buffer.Seek(int64(header.EntrySize), io.SeekCurrent)
-		sr.buffer.Read(b)
 
 		ent := new(pb.Entry)
 		ent.Unmarshal(b)

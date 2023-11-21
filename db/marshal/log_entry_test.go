@@ -1,62 +1,62 @@
 package marshal
 
 import (
+	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/stretchr/testify/assert"
-	"reflect"
 	"testing"
 )
 
-func TestGobEncodeDecode(t *testing.T) {
-	k := KV{
-		Id:        1,
-		Key:       []byte("key"),
-		Value:     []byte("value"),
-		Type:      TypeDelete,
-		ExpiredAt: 1234567890,
-	}
-
-	encoded, err := GobEncode(k)
-	assert.NoError(t, err)
-
-	decoded, err := GobDecode(encoded)
-	assert.NoError(t, err)
-
-	assert.Equal(t, k, decoded)
+var entries = []*pb.Entry{
+	{
+		Term:  1,
+		Index: 1,
+		Type:  pb.EntryNormal,
+		Data:  []byte("hello world"),
+	},
+	{
+		Term:  2,
+		Index: 2,
+		Type:  pb.EntryNormal,
+		Data:  []byte("hello world"),
+	},
+	{
+		Term:  3,
+		Index: 3,
+		Type:  pb.EntryNormal,
+		Data:  []byte("hello world"),
+	},
+	{
+		Term:  4,
+		Index: 4,
+		Type:  pb.EntryNormal,
+		Data:  []byte("hello world"),
+	},
 }
 
-func TestEncodeDecodeWALEntry(t *testing.T) {
-	entry := &Entry{
-		ExpiredAt: 1234567890,
-		Index:     1,
-		Term:      2,
-		Type:      TypeDelete,
-		Key:       []byte("key"),
-		Value:     []byte("value"),
+func MarshalWALEntries(entries1 []*pb.Entry) (data []byte, bytesCount int) {
+	data = make([]byte, 0)
+	for _, e := range entries1 {
+		wEntBytes, n := EncodeWALEntry(e)
+		data = append(data, wEntBytes...)
+		bytesCount += n
 	}
-
-	encoded, _ := entry.EncodeWALEntry()
-	header := decodeWALEntryHeader(encoded)
-	t.Log(header)
+	return
 }
 
-func TestEncodeDecodeMemEntry(t *testing.T) {
-	// 创建一个测试用的Entry对象
-	entry := &Entry{
-		ExpiredAt: 1234567890,
-		Index:     1,
-		Term:      2,
-		Type:      TypeDelete,
-		Value:     []byte("test value"),
+func TestEncodeANdDecodeWALEntry(t *testing.T) {
+	entry1 := &pb.Entry{
+		Term:  1,
+		Index: 1,
+		Type:  pb.EntryNormal,
+		Data:  []byte("hello world"),
 	}
 
-	// 编码Entry为字节切片
-	encoded := entry.EncodeMemEntry()
+	wEntBytes, _ := EncodeWALEntry(entry1)
+	buf := make([]byte, ChunkHeaderSize)
+	copy(buf, wEntBytes[:ChunkHeaderSize])
+	header := DecodeWALEntryHeader(buf)
+	entry2 := &pb.Entry{}
 
-	// 解码字节切片为Entry对象
-	decoded := DecodeMemEntry(encoded)
-
-	// 检查解码后的Entry是否与原始Entry相等
-	if !reflect.DeepEqual(entry, decoded) {
-		t.Errorf("Decoded entry does not match original entry")
-	}
+	entry2.Unmarshal(wEntBytes[ChunkHeaderSize : ChunkHeaderSize+header.EntrySize])
+	assert.EqualValues(t, entry1, entry2)
 }

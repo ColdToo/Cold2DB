@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/pb"
+	"github.com/stretchr/testify/assert"
 	"os"
 	"testing"
 )
@@ -37,13 +38,57 @@ var entries1 = []*pb.Entry{
 	},
 }
 
+func MarshalWALEntries(entries1 []*pb.Entry) (data []byte, bytesCount int) {
+	data = make([]byte, 0)
+	for _, e := range entries1 {
+		wEntBytes, n := marshal.EncodeWALEntry(e)
+		data = append(data, wEntBytes...)
+		bytesCount += n
+	}
+	return
+}
+
 func TestNewActSegmentFile(t *testing.T) {
 	segment, err := NewActSegmentFile(TestDirPath)
 	if err != nil {
 		t.Errorf("Expected nil, but got %v", err)
 	}
+	assert.EqualValues(t, segment.Index, DefaultIndex)
+	assert.EqualValues(t, segment.Size(), Block4)
+	assert.EqualValues(t, segment.BlocksRemainSize, Block4)
+	assert.EqualValues(t, segment.Fd.Name(), SegmentFileName(TestDirPath, DefaultIndex))
+	assert.EqualValues(t, segment.blocksOffset, 0)
 	segment.Close()
 	segment.Remove()
+}
+
+func TestSegment_Write(t *testing.T) {
+	segment, err := NewActSegmentFile(TestDirPath)
+	if err != nil {
+		t.Errorf("Expected nil, but got %v", err)
+	}
+
+	data, bytesCount := MarshalWALEntries(entries1)
+	segment.Write(data, bytesCount, entries1[0].Index)
+
+	assert.EqualValues(t, len(segment.blocks), bytesCount+segment.BlocksRemainSize)
+	assert.EqualValues(t, bytesCount, segment.blocksOffset)
+}
+
+func TestOpenOldSegmentFile(t *testing.T) {
+	TestSegment_Write(t)
+	oldSeg, err := OpenOldSegmentFile(TestDirPath, entries1[0].Index)
+	if err != nil {
+		t.Errorf("Expected nil, but got %v", err)
+	}
+	reader := NewSegmentReader(oldSeg, 0, 0)
+	for {
+		header, err := reader.ReadHeaderAndNext()
+		if err != nil && err.Error() == "EOF" {
+			return
+		}
+		fmt.Println(header.Index)
+	}
 }
 
 func TestOrderedSegmentList(t *testing.T) {
@@ -81,54 +126,5 @@ func TestOrderedSegmentList(t *testing.T) {
 	for oll.Head != nil {
 		fmt.Println(oll.Head.Seg.Index)
 		oll.Head = oll.Head.Next
-	}
-}
-
-func TestSegment_Write(t *testing.T) {
-	segment, err := NewActSegmentFile(TestDirPath)
-	if err != nil {
-		t.Errorf("Expected nil, but got %v", err)
-	}
-
-	//segment文件应该尽量均匀，若此次entries太大那么直接写入新的segment文件中
-	data := make([]byte, 0)
-	bytesCount := 0
-	for _, e := range entries1 {
-		wEntBytes, n := marshal.EncodeWALEntry(e)
-		data = append(data, wEntBytes...)
-		bytesCount += n
-	}
-	segment.Write(data, bytesCount, entries1[0].Index)
-}
-
-func TestSegmentReader_ReadEntries(t *testing.T) {
-	oldSeg, err := OpenOldSegmentFile(TestDirPath, 1)
-	if err != nil {
-		t.Errorf("Expected nil, but got %v", err)
-	}
-	reader := NewSegmentReader(oldSeg, 0, 0)
-	for {
-		header, err := reader.ReadHeaderAndNext()
-		if err.Error() == "EOF" {
-			return
-		}
-		fmt.Println(header.Index)
-	}
-
-}
-
-func TestOpenOldSegmentFile(t *testing.T) {
-	TestSegment_Write(t)
-	oldSeg, err := OpenOldSegmentFile(TestDirPath, 1)
-	if err != nil {
-		t.Errorf("Expected nil, but got %v", err)
-	}
-	reader := NewSegmentReader(oldSeg, 0, 0)
-	for {
-		header, err := reader.ReadHeaderAndNext()
-		if err.Error() == "EOF" {
-			return
-		}
-		fmt.Println(header.Index)
 	}
 }
