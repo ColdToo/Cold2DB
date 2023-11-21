@@ -159,9 +159,9 @@ type segmentReader struct {
 	persistIndex uint64
 	appliedIndex uint64
 	blocks       []byte
-	blocksOffset int
-	blocksNums   int
-	curBlockNum  int
+	blocksOffset int // current read pointer in blocks
+	blocksNums   int // blocks  number
+	curBlockNum  int // current block position in blocks
 }
 
 func NewSegmentReader(seg *segment, persistIndex, appliedIndex uint64) *segmentReader {
@@ -179,7 +179,7 @@ func NewSegmentReader(seg *segment, persistIndex, appliedIndex uint64) *segmentR
 	}
 }
 
-func (sr *segmentReader) ReadHeaderAndNext() (eHeader marshal.WalEntryHeader, err error) {
+func (sr *segmentReader) ReadHeader() (eHeader marshal.WalEntryHeader, err error) {
 	// todo chunkHeaderSlice应该作为pool
 	buf := make([]byte, marshal.ChunkHeaderSize)
 	copy(buf, sr.blocks[sr.blocksOffset:sr.blocksOffset+marshal.ChunkHeaderSize])
@@ -188,33 +188,45 @@ func (sr *segmentReader) ReadHeaderAndNext() (eHeader marshal.WalEntryHeader, er
 
 	//如果header为空
 	if eHeader.IsEmpty() {
-		//当前是否是最后一个block？
+		//whether the current block is the last block in blocks？
 		if sr.curBlockNum == sr.blocksNums {
 			return eHeader, errors.New("EOF")
 		}
-		//移动到下一个block开始读取
+
+		//move to next block
 		sr.curBlockNum++
 		sr.blocksOffset = sr.curBlockNum * Block4096
+		copy(buf, sr.blocks[sr.blocksOffset:sr.blocksOffset+marshal.ChunkHeaderSize])
 		eHeader = marshal.DecodeWALEntryHeader(buf)
 		if eHeader.IsEmpty() {
 			return eHeader, errors.New("EOF")
 		}
-		sr.blocksOffset += eHeader.EntrySize + marshal.ChunkHeaderSize
 		return
 	}
-	sr.blocksOffset += eHeader.EntrySize + marshal.ChunkHeaderSize
 	return
+}
+
+func (sr *segmentReader) ReadEntry() (ent *pb.Entry, err error) {
+	header, err := sr.ReadHeader()
+	if err != nil {
+		return nil, err
+	}
+	ent = new(pb.Entry)
+	ent.Unmarshal(sr.blocks[sr.blocksOffset : sr.blocksOffset+header.EntrySize])
+	sr.Next(header.EntrySize)
+	return
+}
+
+func (sr *segmentReader) Next(entrySize int) {
+	sr.blocksOffset += entrySize + marshal.ChunkHeaderSize
 }
 
 func (sr *segmentReader) ReadEntries() (ents []*pb.Entry, err error) {
 	for {
-		header, err := sr.ReadHeaderAndNext()
-		if err.Error() == "EOF" {
+		ent, err := sr.ReadEntry()
+		if err != nil && err.Error() == "EOF" {
 			break
 		}
-		b := make([]byte, header.EntrySize)
-		ent := new(pb.Entry)
-		ent.Unmarshal(b)
 		ents = append(ents, ent)
 	}
 	return
@@ -222,15 +234,11 @@ func (sr *segmentReader) ReadEntries() (ents []*pb.Entry, err error) {
 
 func (sr *segmentReader) ReadKVs(kvC chan *marshal.KV, errC chan error) {
 	for {
-		header, err := sr.ReadHeaderAndNext()
-		if err.Error() == "EOF" {
+		ent, err := sr.ReadEntry()
+		if err != nil && err.Error() == "EOF" {
 			errC <- err
 			break
 		}
-		b := make([]byte, header.EntrySize)
-
-		ent := new(pb.Entry)
-		ent.Unmarshal(b)
 		kv := marshal.GobDecode(ent.Data)
 		kvC <- &kv
 	}

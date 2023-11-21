@@ -81,7 +81,7 @@ type WalEntryHeader struct {
 }
 
 func (h WalEntryHeader) IsEmpty() bool {
-	return h.Crc32 == 0 && h.EntrySize == 0 && h.Index == 0
+	return h.Crc32 == 0 || h.EntrySize == 0 || h.Index == 0
 }
 
 // EncodeWALEntry  will encode entry into a byte slice.
