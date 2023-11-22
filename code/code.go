@@ -14,9 +14,8 @@ const (
 
 	MessageProcErr = "MessageProcErr"
 
-	FailedReadMessage  = "FailedReadMessage"
-	TickErr            = "TickErr"
-	ErrProposalDropped = "ErrProposalDropped"
+	FailedReadMessage = "FailedReadMessage"
+	TickErr           = "TickErr"
 )
 
 // ErrCompacted is returned by Storage.Entries/Compact when a requested

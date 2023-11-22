@@ -29,6 +29,8 @@ type RaftOpts struct {
 
 	HeartbeatTick int
 
+	maxNextEntSize uint64
+
 	Peers []config.Node
 }
 
@@ -47,7 +49,7 @@ type Raft struct {
 
 	RaftLog Log
 
-	Progress map[uint64]Progress
+	Progress map[uint64]*Progress
 
 	Role Role
 
@@ -73,6 +75,8 @@ type Raft struct {
 	heartbeatElapsed int
 
 	electionElapsed int
+
+	leadTransferee bool
 }
 
 type Progress struct {
@@ -243,7 +247,21 @@ func (r *Raft) sendHeartbeat(to uint64) {
 func (r *Raft) handleHeartbeatResponse(m *pb.Message) {
 }
 
-func (r *Raft) handlePropMsg(m *pb.Message) {
+func (r *Raft) handlePropMsg(m *pb.Message) error {
+	if len(m.Entries) == 0 {
+		log.Panicf("%x stepped empty MsgProp", r.id)
+	}
+	//首先leader会检查自己的Progress结构是否还存在，以判断自己是否已经被ConfChange操作移出了集群，如果该leader被移出了集群，则不会处理该提议。
+	if r.Progress[r.id] == nil {
+		return code.ErrProposalDropped
+	}
+	if r.leadTransferee {
+		log.Debugf("%x [term %d] transfer leadership to %x is in progress; dropping proposal", r.id, r.Term, r.leadTransferee)
+		return code.ErrProposalDropped
+	}
+
+	//如果msg有配置相关，对这部分配置进行单独
+
 	lastIndex := r.RaftLog.LastIndex()
 	ents := make([]pb.Entry, 0)
 	for _, e := range m.Entries {
@@ -257,11 +275,34 @@ func (r *Raft) handlePropMsg(m *pb.Message) {
 	}
 
 	r.RaftLog.AppendEntries(ents)
-	r.bcastAppendEntries()
+	r.bcastAppendEnts()
 	return
 }
 
-func (r *Raft) bcastAppendEntries() {
+func (r *Raft) appendEntry(es ...pb.Entry) (accepted bool) {
+	li := r.RaftLog.LastIndex()
+	for i := range es {
+		es[i].Term = r.Term
+		es[i].Index = li + 1 + uint64(i)
+	}
+	// Track the size of this uncommitted proposal.
+	if !r.increaseUncommittedSize(es) {
+		log.Debugf(
+			"%x appending new entries to log would exceed uncommitted entry size limit; dropping proposal",
+			r.id,
+		)
+		// Drop the proposal.
+		return false
+	}
+	// use latest "last" index after truncate/append
+	li = r.raftLog.append(es...)
+	r.prs.Progress[r.id].MaybeUpdate(li)
+	// Regardless of maybeCommit's return, our caller will call bcastAppend.
+	r.maybeCommit()
+	return true
+}
+
+func (r *Raft) bcastAppendEnts() {
 	for peer := range r.Progress {
 		if peer != r.id {
 			r.sendAppendEntries(peer)
@@ -532,4 +573,54 @@ func (r *Raft) resetTick() {
 
 func (r *Raft) resetRealElectionTimeout() {
 	r.realElectionTimeout = r.electionTimeout + rand.Intn(r.electionTimeout)
+}
+
+// increaseUncommittedSize computes the size of the proposed entries and
+// determines whether they would push leader over its maxUncommittedSize limit.
+// If the new entries would exceed the limit, the method returns false. If not,
+// the increase in uncommitted entry size is recorded and the method returns
+// true.
+//
+// Empty payloads are never refused. This is used both for appending an empty
+// entry at a new leader's term, as well as leaving a joint configuration.
+func (r *Raft) increaseUncommittedSize(ents []pb.Entry) bool {
+	var s uint64
+	for _, e := range ents {
+		s += uint64(PayloadSize(e))
+	}
+
+	if r.uncommittedSize > 0 && s > 0 && r.uncommittedSize+s > r.maxUncommittedSize {
+		// If the uncommitted tail of the Raft log is empty, allow any size
+		// proposal. Otherwise, limit the size of the uncommitted tail of the
+		// log and drop any proposal that would push the size over the limit.
+		// Note the added requirement s>0 which is used to make sure that
+		// appending single empty entries to the log always succeeds, used both
+		// for replicating a new leader's initial empty entry, and for
+		// auto-leaving joint configurations.
+		return false
+	}
+	r.uncommittedSize += s
+	return true
+}
+
+// reduceUncommittedSize accounts for the newly committed entries by decreasing
+// the uncommitted entry size limit.
+func (r *Raft) reduceUncommittedSize(ents []pb.Entry) {
+	if r.uncommittedSize == 0 {
+		// Fast-path for followers, who do not track or enforce the limit.
+		return
+	}
+
+	var s uint64
+	for _, e := range ents {
+		s += uint64(PayloadSize(e))
+	}
+	if s > r.uncommittedSize {
+		// uncommittedSize may underestimate the size of the uncommitted Raft
+		// log tail but will never overestimate it. Saturate at 0 instead of
+		// allowing overflow.
+		r.uncommittedSize = 0
+	} else {
+		r.uncommittedSize -= s
+	}
 }

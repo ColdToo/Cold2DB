@@ -46,6 +46,7 @@ type Storage interface {
 	LastIndex() uint64
 	FirstIndex() uint64
 	GetSnapshot() (pb.Snapshot, error)
+	Truncate(index uint64) error
 
 	Close()
 }
@@ -316,5 +317,9 @@ func (db *C2KV) GetHardState() (pb.HardState, pb.ConfState, error) {
 }
 
 func (db *C2KV) Close() {
+
+}
+
+func (db *C2KV) Truncate(index uint64) error {
 
 }
