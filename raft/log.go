@@ -46,7 +46,7 @@ type RaftLog struct {
 	// maxNextEntsSize is the maximum number aggregate byte size for per ready
 	maxNextEntsSize uint64
 
-	unstableEnts []*pb.Entry
+	unstableEnts []pb.Entry
 
 	storage db.Storage
 }
@@ -65,11 +65,15 @@ func (l *RaftLog) firstIndex() uint64 {
 }
 
 func (l *RaftLog) lastIndex() uint64 {
-	if len(l.unstableEnts) > 0 {
-		return l.unstableEnts[len(l.unstableEnts)-1].Index
+	if lenth := len(l.unstableEnts); lenth != 0 {
+		return l.offset + uint64(lenth)
 	}
 
-	return l.storage.LastIndex()
+	if i := l.storage.LastIndex(); i != 0 {
+		return i
+	}
+	//index	 默认从1开始
+	return 1
 }
 
 func (l *RaftLog) Term(i uint64) (uint64, error) {
@@ -148,23 +152,6 @@ func (l *RaftLog) unstableEntries() []*pb.Entry {
 		return nil
 	}
 	return l.unstableEnts
-}
-
-// AppendEntries leader append
-func (l *RaftLog) AppendEnts(ents ...pb.Entry) uint64 {
-	after := ents[0].Index - 1
-	if after < l.committed {
-		log.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
-	}
-
-	//todo leader的日志不应该出现截断日志的情况
-	if after != l.offset+uint64(len(l.unstableEnts)) {
-		log.Panicf("leader after should directly append ")
-	}
-
-	l.unstableEnts = append(l.unstableEnts, &ents...)
-
-	return l.lastIndex()
 }
 
 // TruncateAndAppend follower append maybe conflict log so should truncate

@@ -2,6 +2,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db"
@@ -14,6 +15,7 @@ import (
 type Role uint8
 
 const None uint64 = 0
+var SendEmptyMessage bool = true
 
 const (
 	Leader Role = iota
@@ -264,7 +266,9 @@ func (r *Raft) handlePropMsg(m *pb.Message) error {
 		return code.ErrProposalDropped
 	}
 
-	//如果msg有配置相关，对这部分配置进行单独
+	r.handleConfigEntry(m.Entries)
+
+
 	if !r.appendEnts(m.Entries...) {
 		return code.ErrProposalDropped
 	}
@@ -273,14 +277,59 @@ func (r *Raft) handlePropMsg(m *pb.Message) error {
 	return nil
 }
 
+func (r *Raft) handleConfigEntry(ents []pb.Entry) {
+	e := &m.Entries[i]
+	var cc pb.ConfChangeI
+	if e.Type == pb.EntryConfChange {
+		var ccc pb.ConfChange
+		if err := ccc.Unmarshal(e.Data); err != nil {
+			panic(err)
+		}
+		cc = ccc
+	} else if e.Type == pb.EntryConfChangeV2 {
+		var ccc pb.ConfChangeV2
+		if err := ccc.Unmarshal(e.Data); err != nil {
+			panic(err)
+		}
+		cc = ccc
+	}
+	if cc != nil {
+		alreadyPending := r.pendingConfIndex > r.raftLog.applied
+		alreadyJoint := len(r.prs.Config.Voters[1]) > 0
+		wantsLeaveJoint := len(cc.AsV2().Changes) == 0
+
+		var refused string
+		if alreadyPending {
+			refused = fmt.Sprintf("possible unapplied conf change at index %d (applied to %d)", r.pendingConfIndex, r.raftLog.applied)
+		} else if alreadyJoint && !wantsLeaveJoint {
+			refused = "must transition out of joint config first"
+		} else if !alreadyJoint && wantsLeaveJoint {
+			refused = "not in joint state; refusing empty conf change"
+		}
+
+		if refused != "" {
+			r.logger.Infof("%x ignoring conf change %v at config %s: %s", r.id, cc, r.prs.Config, refused)
+			m.Entries[i] = pb.Entry{Type: pb.EntryNormal}
+		} else {
+			r.pendingConfIndex = r.raftLog.lastIndex() + uint64(i) + 1
+		}
+	}
+}
+}
+
 func (r *Raft) appendEnts(es ...pb.Entry) (accepted bool) {
-	li := r.RaftLog.LastIndex()
+	li := r.RaftLog.lastIndex()
 	for i := range es {
 		es[i].Term = r.Term
-		es[i].Index = li + 1 + uint64(i)
+		es[i].Index = li + uint64(i)
 	}
 
-	// Track the size of this uncommitted proposal.
+	after := es[0].Index - 1
+	if after < r.RaftLog.committed {
+		log.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
+	}
+
+	// 限流
 	if !r.increaseUncommittedSize(es) {
 		log.Debugf(
 			"%x appending new entries to log would exceed uncommitted entry size limit; dropping proposal",
@@ -289,18 +338,14 @@ func (r *Raft) appendEnts(es ...pb.Entry) (accepted bool) {
 		return false
 	}
 
-	// use latest "last" index after truncate/append
-	li = r.RaftLog.AppendEnts(es...)
-	r.Progress[r.id].MaybeUpdate(li)
-	// Regardless of maybeCommit's return, our caller will call bcastAppend.
-	r.maybeCommit()
+	r.RaftLog.unstableEnts = append(r.RaftLog.unstableEnts, es...)
 	return true
 }
 
 func (r *Raft) bcastAppendEnts() {
 	for peer := range r.Progress {
 		if peer != r.id {
-			r.sendAppendEntries(peer, SendEmptyMsg)
+			r.sendAppendEntries(peer, SendEmptyMessage)
 		}
 	}
 }
