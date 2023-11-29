@@ -7,6 +7,7 @@ import (
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
+	"github.com/ColdToo/Cold2DB/raft/tracker"
 	"math/rand"
 )
 
@@ -33,7 +34,6 @@ type RaftOpts struct {
 
 	Peers []config.Node
 }
-
 type Raft struct {
 	id uint64
 
@@ -41,15 +41,19 @@ type Raft struct {
 
 	Term uint64
 
+	// max msg can send to follower
+	maxMsgSize uint64
+
+	maxUncommittedSize uint64
 	// votes records
 	VoteFor     uint64
 	votes       map[uint64]bool
 	voteCount   int //获取的认可票数
 	rejectCount int //获取的拒绝票数
 
-	RaftLog Log
+	RaftLog RaftLog
 
-	Progress map[uint64]*Progress
+	Progress map[uint64]*tracker.Progress
 
 	Role Role
 
@@ -180,7 +184,7 @@ func (r *Raft) becomeLeader() {
 	r.tick = r.tickHeartbeat
 	for _, v := range r.Progress {
 		v.Match = 0
-		v.Next = r.RaftLog.LastIndex() + 1 //因为不知道其他节点的目前日志的一个状态，默认同步
+		v.Next = r.RaftLog.lastIndex() + 1 //因为不知道其他节点的目前日志的一个状态，默认同步
 	}
 	entries := make([]pb.Entry, 1)
 	entries = append(entries, pb.Entry{
@@ -261,42 +265,33 @@ func (r *Raft) handlePropMsg(m *pb.Message) error {
 	}
 
 	//如果msg有配置相关，对这部分配置进行单独
-
-	lastIndex := r.RaftLog.LastIndex()
-	ents := make([]pb.Entry, 0)
-	for _, e := range m.Entries {
-		ents = append(ents, pb.Entry{
-			Type:  e.Type,
-			Term:  r.Term,
-			Index: lastIndex + 1,
-			Data:  e.Data,
-		})
-		lastIndex += 1
+	if !r.appendEnts(m.Entries...) {
+		return code.ErrProposalDropped
 	}
 
-	r.RaftLog.AppendEntries(ents)
 	r.bcastAppendEnts()
-	return
+	return nil
 }
 
-func (r *Raft) appendEntry(es ...pb.Entry) (accepted bool) {
+func (r *Raft) appendEnts(es ...pb.Entry) (accepted bool) {
 	li := r.RaftLog.LastIndex()
 	for i := range es {
 		es[i].Term = r.Term
 		es[i].Index = li + 1 + uint64(i)
 	}
+
 	// Track the size of this uncommitted proposal.
 	if !r.increaseUncommittedSize(es) {
 		log.Debugf(
 			"%x appending new entries to log would exceed uncommitted entry size limit; dropping proposal",
 			r.id,
 		)
-		// Drop the proposal.
 		return false
 	}
+
 	// use latest "last" index after truncate/append
-	li = r.raftLog.append(es...)
-	r.prs.Progress[r.id].MaybeUpdate(li)
+	li = r.RaftLog.AppendEnts(es...)
+	r.Progress[r.id].MaybeUpdate(li)
 	// Regardless of maybeCommit's return, our caller will call bcastAppend.
 	r.maybeCommit()
 	return true
@@ -305,13 +300,30 @@ func (r *Raft) appendEntry(es ...pb.Entry) (accepted bool) {
 func (r *Raft) bcastAppendEnts() {
 	for peer := range r.Progress {
 		if peer != r.id {
-			r.sendAppendEntries(peer)
+			r.sendAppendEntries(peer, SendEmptyMsg)
 		}
 	}
 }
 
-func (r *Raft) sendAppendEntries(to uint64) error {
-	lastIndex := r.RaftLog.LastIndex()
+// 当需要发送包含新条目的附加RPC时，如果需要发送空消息以传达更新的提交索引，则将sendIfEmpty标记为true。
+func (r *Raft) sendAppendEntries(to uint64, sendIfEmpty bool) error {
+	lastIndex := r.RaftLog.lastIndex()
+	pr := r.Progress[to]
+
+	//判断是否可以发送entries给该节点
+	//1、该节点处于snapshot状态不应该发送
+	if pr.IsPaused() {
+		return false
+	}
+
+	m := pb.Message{}
+	m.To = to
+
+	term, errt := r.RaftLog.Term(pr.Next - 1)
+	ents, erre := r.RaftLog.Entries(pr.Next, r.maxMsgSize)
+	if len(ents) == 0 && !sendIfEmpty {
+		return false
+	}
 
 	// 如果最后一条日志索引>=追随者的nextIndex，才会发送entries
 	if lastIndex < r.Progress[to].Next {

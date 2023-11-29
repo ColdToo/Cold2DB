@@ -40,7 +40,7 @@ type Storage interface {
 	SaveCommittedEntries(entries []*marshal.KV) error
 
 	GetHardState() (pb.HardState, pb.ConfState, error)
-	Entries(lo, hi uint64) ([]*pb.Entry, error)
+	Entries(lo, hi, maxSize uint64) ([]*pb.Entry, error)
 	Term(i uint64) (uint64, error)
 	AppliedIndex() uint64
 	LastIndex() uint64
@@ -264,7 +264,7 @@ func (db *C2KV) Scan(lowKey []byte, highKey []byte) (err error) {
 	return err
 }
 
-func (db *C2KV) Entries(lo, hi uint64) (entries []*pb.Entry, err error) {
+func (db *C2KV) Entries(lo, hi, maxSize uint64) (entries []*pb.Entry, err error) {
 	if int(lo) < len(db.entries) {
 		return nil, errors.New("some entries is compacted")
 	}

@@ -1,7 +1,7 @@
 package raft
 
 import (
-	"errors"
+	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -37,8 +37,10 @@ type RaftLog struct {
 
 	stabled uint64
 
-	//第i条entries数组数据在raft日志中的索引为i + unstable.offset。
-	//raftLog在创建时，会将unstable的offset置为storage的last index + 1，
+	// 这个偏移量（u.offset）表示当前不稳定日志中的第一个条目在整个日志中的位置。举个例子，
+	// 如果 u.offset 为 10，那么不稳定日志中的第一个条目在整个日志中的位置就是第 10 个位置。
+	// 这个字段通常在日志条目被写入存储或者日志被截断并追加新条目时进行更新。
+	// raftLog在创建时，会将unstable的offset置为storage的last index + 1，
 	offset uint64
 
 	// maxNextEntsSize is the maximum number aggregate byte size for per ready
@@ -57,12 +59,12 @@ func newRaftLog(storage db.Storage, maxNextEntsSize uint64) Log {
 }
 
 // FirstIndex 返回未压缩日志的索引
-func (l *RaftLog) FirstIndex() uint64 {
+func (l *RaftLog) firstIndex() uint64 {
 	//在raft初始化时storage此时还未有已经持久化的raftlog日志此时应该返回unstable中的最后一条日志
 	return l.storage.FirstIndex()
 }
 
-func (l *RaftLog) LastIndex() uint64 {
+func (l *RaftLog) lastIndex() uint64 {
 	if len(l.unstableEnts) > 0 {
 		return l.unstableEnts[len(l.unstableEnts)-1].Index
 	}
@@ -85,51 +87,58 @@ func (l *RaftLog) StableTo(i uint64) {
 }
 
 // Entries 获取指定范围内的日志切片
-func (l *RaftLog) Entries(low, high uint64) (ents []*pb.Entry, err error) {
-	err = l.mustCheckOutOfBounds(low, high)
-	if err != nil {
-		return
+func (l *RaftLog) Entries(lo, hi uint64, maxSize uint64) (ents []pb.Entry, err error) {
+	if lo > l.lastIndex() || lo == hi {
+		return nil, nil
+	}
+	err = l.mustCheckOutOfBounds(lo, hi)
+
+	if lo < l.offset {
+		storedEnts, err := l.storage.Entries(lo, min(hi, l.offset), maxSize)
+		if err == code.ErrCompacted {
+			return nil, err
+		} else if err == code.ErrUnavailable {
+			log.Panicf("entries[%d:%d) is unavailable from storage", lo, min(hi, l.offset))
+		} else if err != nil {
+			panic(err) // TODO(bdarnell)
+		}
+
+		// check if ents has reached the size limitation
+		if uint64(len(storedEnts)) < min(hi, l.offset)-lo {
+			return storedEnts, nil
+		}
+
+		ents = storedEnts
 	}
 
-	if low > high {
-		return nil, errors.New("low should not > high")
+	if hi > l.offset {
+		unstable := l.unstableEnts[lo-l.offset : hi-l.offset]
+		if len(ents) > 0 {
+			combined := make([]pb.Entry, len(ents)+len(unstable))
+			n := copy(combined, ents)
+			copy(combined[n:], unstable)
+			ents = combined
+		} else {
+			ents = unstable
+		}
 	}
-
-	if low < l.first {
-		//这条entries已经被压缩了无法返回
-		return nil, errors.New("the low is < first log index")
-	}
-
-	if low > l.applied {
-		return l.entries[low-l.applied : high-l.applied+1], nil
-	}
-
-	if high < l.applied {
-		return l.storage.Entries(low, high)
-	}
-
-	if low < l.applied && high > l.applied {
-		entries, _ := l.storage.Entries(low, l.applied)
-		ents = append(ents, entries...)
-		entries = l.entries[0 : high-l.applied+1]
-		ents = append(ents, entries...)
-	}
-
-	return
+	return limitSize(ents, maxSize), nil
 }
 
+// l.firstIndex <= lo <= hi <= total raft log length
 func (l *RaftLog) mustCheckOutOfBounds(lo, hi uint64) error {
 	if lo > hi {
 		log.Panicf("invalid slice %d > %d", lo, hi)
 	}
-	fi := l.FirstIndex()
+	fi := l.firstIndex()
 	if lo < fi {
-		return errors.New("is compacted")
+		return code.ErrCompacted
 	}
 
-	length := l.LastIndex() + 1 - fi
+	//计算整个raft日志的长度
+	length := l.lastIndex() + 1 - fi
 	if lo < fi || hi > fi+length {
-		log.Panicf("slice[%d,%d) out of bound [%d,%d]", lo, hi, fi, l.LastIndex())
+		log.Panicf("slice[%d,%d) out of bound [%d,%d]", lo, hi, fi, l.lastIndex())
 	}
 	return nil
 }
@@ -142,14 +151,19 @@ func (l *RaftLog) unstableEntries() []*pb.Entry {
 }
 
 // AppendEntries leader append
-func (l *RaftLog) AppendEntries(ents []pb.Entry) {
-	if len(ents) == 0 {
-		return l.lastIndex()
+func (l *RaftLog) AppendEnts(ents ...pb.Entry) uint64 {
+	after := ents[0].Index - 1
+	if after < l.committed {
+		log.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
 	}
-	if after := ents[0].Index - 1; after < l.committed {
-		l.logger.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
+
+	//todo leader的日志不应该出现截断日志的情况
+	if after != l.offset+uint64(len(l.unstableEnts)) {
+		log.Panicf("leader after should directly append ")
 	}
-	l.unstable.truncateAndAppend(ents)
+
+	l.unstableEnts = append(l.unstableEnts, &ents...)
+
 	return l.lastIndex()
 }
 
