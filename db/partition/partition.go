@@ -19,11 +19,11 @@ const (
 
 // Partition 一个partition文件由一个index文件和多个sst文件组成
 type Partition struct {
-	dirPath   string
-	frozenSST []*SST
-	pipeSST   chan *SST
-	indexer   Indexer
-	SSTmap    map[int]SST
+	dirPath string
+	oldSST  []*SST
+	pipeSST chan *SST
+	indexer Indexer
+	SSTmap  map[int]SST
 }
 
 type SST struct {
@@ -35,19 +35,19 @@ type SST struct {
 func OpenPartition(partitionDir string) (p *Partition) {
 	p = &Partition{
 		dirPath: partitionDir,
-		indexer: nil,
 	}
 
 	files, err := os.ReadDir(partitionDir)
 	if err != nil {
-		log.Panicf("open partition dir failed", err)
+		log.Panicf("open partition dir failed %e", err)
 	}
+
 	for _, file := range files {
 		switch {
 		case strings.HasSuffix(file.Name(), indexFileSuffixName):
 			p.indexer, err = NewIndexer(file.Name())
 		case strings.HasSuffix(file.Name(), SSTFileSuffixName):
-			p.frozenSST = append(p.frozenSST, &SST{
+			p.oldSST = append(p.oldSST, &SST{
 				fd:     bufio.OpenBufferedFile(file.Name()),
 				fName:  file.Name(),
 				offset: 0,
@@ -55,7 +55,8 @@ func OpenPartition(partitionDir string) (p *Partition) {
 		}
 	}
 
-	sstPipe := make(chan *SST, 0)
+	//sst pipeline for speed
+	sstPipe := make(chan *SST, 1)
 	go func() {
 		sstPipe <- &SST{
 			fd:     bufio.OpenBufferedFile(p.dirPath + time.Now().String() + SSTFileSuffixName),

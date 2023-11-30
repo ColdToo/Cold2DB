@@ -2,22 +2,13 @@ package partition
 
 import (
 	"encoding/binary"
-	"errors"
-	"fmt"
 	"go.etcd.io/bbolt"
 	"path/filepath"
+	"time"
 )
 
 // bucket name for bolt db to store index data
 var indexBucketName = []byte("index")
-
-var (
-	// ErrDirPathNil indexer dir path is nil.
-	ErrDirPathNil = errors.New("indexer dir path is nil")
-
-	// ErrOptionsTypeNotMatch indexer options not match.
-	ErrOptionsTypeNotMatch = errors.New("indexer options not match")
-)
 
 const (
 	indexFileSuffixName = ".INDEX"
@@ -38,20 +29,6 @@ type Indexer interface {
 	Sync() error
 
 	Close() (err error)
-}
-
-type IndexerIter interface {
-	First() (key, value []byte)
-
-	Last() (key, value []byte)
-
-	Seek(seek []byte) (key, value []byte)
-
-	Next() (key, value []byte)
-
-	Prev() (key, value []byte)
-
-	Close() error
 }
 
 type IndexerNode struct {
@@ -94,16 +71,8 @@ func DecodeMeta(buf []byte) *IndexerMeta {
 	return m
 }
 
-func NewIndexer(indexFileName string) (Indexer, error) {
-	return OpenBtreeIndexer(indexFileName)
-}
-
-type BtreeIndexer struct {
-	index *bbolt.DB
-}
-
-func OpenBtreeIndexer(dirPath string) (Indexer, error) {
-	bbolt, err := bbolt.Open(filepath.Join(dirPath, fmt.Sprintf(indexFileSuffixName)), 0600,
+func NewIndexer(partitionDir string) (Indexer, error) {
+	indexer, err := bbolt.Open(filepath.Join(partitionDir, time.Now().String()+indexFileSuffixName), 0600,
 		&bbolt.Options{
 			NoSync:          true,
 			InitialMmapSize: 1024,
@@ -115,7 +84,7 @@ func OpenBtreeIndexer(dirPath string) (Indexer, error) {
 	}
 
 	// begin a writable transaction to create the bucket if not exists
-	tx, err := bbolt.Begin(true)
+	tx, err := indexer.Begin(true)
 	if err != nil {
 		return nil, err
 	}
@@ -126,8 +95,12 @@ func OpenBtreeIndexer(dirPath string) (Indexer, error) {
 		return nil, err
 	}
 	return &BtreeIndexer{
-		index: bbolt,
+		index: indexer,
 	}, nil
+}
+
+type BtreeIndexer struct {
+	index *bbolt.DB
 }
 
 func (b *BtreeIndexer) Put(metas []*IndexerNode) (err error) {
