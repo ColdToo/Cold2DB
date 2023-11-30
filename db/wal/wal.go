@@ -1,7 +1,6 @@
 package wal
 
 import (
-	"errors"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -11,36 +10,30 @@ import (
 const (
 	FileModePerm = 0644
 	SegSuffix    = ".SEG"
-	RaftSuffix   = ".RAFT"
-)
-
-var (
-	ErrValueTooLarge       = errors.New("the data size can't larger than segment size")
-	ErrPendingSizeTooLarge = errors.New("the upper bound of pendingWrites can't larger than segment size")
+	RaftSuffix   = ".RAFT-SEG"
+	KVSuffix     = ".KV-SEG"
 )
 
 type WAL struct {
 	Config           config.WalConfig
 	ActiveSegment    *segment
-	OlderSegments    map[SegmentID]*segment
 	SegmentPipe      chan *segment
 	OrderSegmentList *OrderedSegmentList
-	StateSegment     *StateSegment //保存需要持久化的raft状态
+	RaftStateSegment *raftStateSegment //保存需要持久化的raft相关状态
+	KVStateSegment   *KVStateSegment   //保存需要持久化的raft相关状态
 }
 
 func NewWal(config config.WalConfig) (*WAL, error) {
-	wal := &WAL{
-		Config:        config,
-		OlderSegments: make(map[SegmentID]*segment),
-	}
-
 	acSegment, err := NewActSegmentFile(config.WalDirPath)
 	if err != nil {
 		return nil, err
 	}
-	wal.ActiveSegment = acSegment
 
-	wal.OrderSegmentList = NewOrderedSegmentList()
+	wal := &WAL{
+		Config:           config,
+		OrderSegmentList: NewOrderedSegmentList(),
+		ActiveSegment:    acSegment,
+	}
 
 	return wal, nil
 }
@@ -88,7 +81,17 @@ func (wal *WAL) rotateActiveSegment() error {
 
 func (wal *WAL) Truncate(index uint64) error {
 	//truncate掉index之后的所有segment包括当前的active segment
-	wal.OrderSegmentList.Find(index)
+	seg := wal.OrderSegmentList.Find(index)
+	reader := NewSegmentReader(seg, 0, 0)
+	header, err := reader.ReadHeader()
+	if err != nil {
+		return err
+	}
+	if header.Index == index {
+
+	}
+
+	reader.Next(header.EntrySize)
 	return nil
 }
 

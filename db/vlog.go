@@ -29,7 +29,7 @@ const PartitionFormat = "PARTITION_%d"
 type ValueLog struct {
 	memFlushC chan *Memtable //memManger的flushChn
 
-	stateSeg *wal.StateSegment
+	kvStateSeg *wal.KVStateSegment
 
 	partition []*partition.Partition
 
@@ -43,7 +43,7 @@ type ValueLog struct {
 	hashKeyFunction func([]byte) uint64
 }
 
-func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable, stateSegment *wal.StateSegment) (lf *ValueLog, err error) {
+func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable, stateSegment *wal.KVStateSegment) (lf *ValueLog, err error) {
 	dirs, err := os.ReadDir(vlogCfg.ValueLogDir)
 	if err != nil {
 		log.Panicf("open wal dir failed", err)
@@ -65,7 +65,7 @@ func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable, stateSeg
 		}
 	}
 
-	lf = &ValueLog{memFlushC: tableC, stateSeg: stateSegment}
+	lf = &ValueLog{memFlushC: tableC, kvStateSeg: stateSegment}
 	return
 }
 

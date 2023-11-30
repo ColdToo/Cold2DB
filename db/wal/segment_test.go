@@ -83,7 +83,7 @@ func TestOpenOldSegmentFile(t *testing.T) {
 	}
 }
 
-func TestSegmentReader_ReadHeaderAndNext(t *testing.T) {
+func TestSegmentReader_ReadHeader(t *testing.T) {
 	TestSegment_Write(t)
 	oldSeg, err := OpenOldSegmentFile(TestDirPath, entries1[0].Index)
 	if err != nil {
@@ -98,6 +98,20 @@ func TestSegmentReader_ReadHeaderAndNext(t *testing.T) {
 		reader.Next(header.EntrySize)
 		fmt.Println(header.Index)
 	}
+}
+
+func TestSegmentReader_ReadEntries(t *testing.T) {
+	TestSegment_Write(t)
+	oldSeg, err := OpenOldSegmentFile(TestDirPath, entries1[0].Index)
+	if err != nil {
+		t.Errorf("Expected nil, but got %v", err)
+	}
+	reader := NewSegmentReader(oldSeg, 0, 0)
+	reader.ReadEntries()
+}
+
+func TestSegmentReader_ReadKVs(t *testing.T) {
+
 }
 
 func TestOrderedSegmentList(t *testing.T) {

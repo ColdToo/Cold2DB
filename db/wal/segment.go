@@ -16,8 +16,8 @@ import (
 type SegmentID = uint32
 
 const (
-	DefaultIndex    = 0
-	InitialBlockNum = 1
+	DefaultMinLogIndex = 0
+	InitialBlockNum    = 1
 )
 
 var (
@@ -31,8 +31,8 @@ type segment struct {
 	blockPool *BlockPool
 
 	blocks        []byte //当前segment使用的blocks
-	blockNums     int    //记录当前segment的blocks数量,也可以作为segment的偏移量使用
-	segmentOffset int    //当前segment的偏移量
+	blockNums     int    //记录当前segment已分配的blocks数量
+	segmentOffset int    //blocks写入segment文件的偏移量
 
 	blocksOffset     int //当前Blocks的偏移量
 	BlocksRemainSize int //当前Blocks剩余可以写字节数
@@ -53,7 +53,7 @@ func NewActSegmentFile(dirPath string) (*segment, error) {
 	blockPool := NewBlockPool()
 	//default use 4 block as new active segment blocks
 	return &segment{
-		Index:            DefaultIndex,
+		Index:            DefaultMinLogIndex,
 		Fd:               fd,
 		blocks:           blockPool.Block4,
 		blocksOffset:     0,
@@ -103,7 +103,7 @@ func (seg *segment) Write(data []byte, bytesCount int, firstIndex uint64) (err e
 		copy(seg.blocks[seg.blocksOffset:bytesCount], data)
 	}
 
-	if err = seg.Flush(bytesCount); err == nil && seg.Index == DefaultIndex {
+	if err = seg.Flush(bytesCount); err == nil && seg.Index == DefaultMinLogIndex {
 		seg.Index = firstIndex
 		err = os.Rename(seg.Fd.Name(), SegmentFileName(filepath.Dir(seg.Fd.Name()), seg.Index))
 		if err != nil {
@@ -154,6 +154,59 @@ func (seg *segment) Remove() error {
 	return nil
 }
 
+// OrderedSegmentList 由segment组成的有序单链表
+type OrderedSegmentList struct {
+	Head *Node
+}
+
+type Node struct {
+	Seg  *segment
+	Next *Node
+}
+
+func NewOrderedSegmentList() *OrderedSegmentList {
+	return &OrderedSegmentList{}
+}
+
+func (oll *OrderedSegmentList) Insert(seg *segment) {
+	newNode := &Node{Seg: seg}
+
+	if oll.Head == nil || oll.Head.Seg.Index >= seg.Index {
+		newNode.Next = oll.Head
+		oll.Head = newNode
+		return
+	}
+
+	current := oll.Head
+	for current.Next != nil && current.Next.Seg.Index < seg.Index {
+		current = current.Next
+	}
+
+	newNode.Next = current.Next
+	current.Next = newNode
+}
+
+// Find find segment which segment.index<=index and next segment.index>index
+func (oll *OrderedSegmentList) Find(index uint64) *segment {
+	current := oll.Head
+	var prev *Node
+
+	for current != nil && current.Seg.Index < index {
+		prev = current
+		current = current.Next
+	}
+
+	if current != nil && current.Seg.Index == index {
+		return current.Seg
+	}
+
+	if prev != nil {
+		return prev.Seg
+	}
+
+	return nil
+}
+
 // restore memory and truncate wal will use reader
 type segmentReader struct {
 	persistIndex uint64
@@ -186,7 +239,6 @@ func (sr *segmentReader) ReadHeader() (eHeader marshal.WalEntryHeader, err error
 
 	eHeader = marshal.DecodeWALEntryHeader(buf)
 
-	//如果header为空
 	if eHeader.IsEmpty() {
 		//whether the current block is the last block in blocks？
 		if sr.curBlockNum == sr.blocksNums {
@@ -245,11 +297,10 @@ func (sr *segmentReader) ReadKVs(kvC chan *marshal.KV, errC chan error) {
 }
 
 // StateSegment need persist status: persist index、 apply index 、raft hardState
-type StateSegment struct {
+type raftStateSegment struct {
 	lock         sync.Mutex
 	Fd           *os.File
 	RaftState    pb.HardState
-	PersistIndex uint64
 	AppliedIndex uint64
 	raftBlocks   []byte
 	kvBlocks     []byte
@@ -258,18 +309,18 @@ type StateSegment struct {
 
 // StateSegment  will encode state into a byte slice.
 // +-------+-----------+-----------+
-// |  crc  | state size|   state(RaftState、PersistIndex、AppliedIndex) |
+// |  crc  | state size|   state   |
 // +-------+-----------+-----------+
 // |----------HEADER---|---BODY----+
-func (seg *StateSegment) encodeStateSegment() []byte {
+func (seg *raftStateSegment) encodeRaftStateSegment() []byte {
 	return nil
 }
 
-func (seg *StateSegment) decodeStateSegment() {
+func (seg *raftStateSegment) decodeRaftStateSegment() {
 	return
 }
 
-func OpenStateSegmentFile(walDirPath, fileName string) (rSeg *StateSegment, err error) {
+func OpenRaftStateSegment(walDirPath, fileName string) (rSeg *raftStateSegment, err error) {
 	fd, err := directio.OpenDirectIOFile(filepath.Join(walDirPath, fileName), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
@@ -281,7 +332,7 @@ func OpenStateSegmentFile(walDirPath, fileName string) (rSeg *StateSegment, err 
 	}
 
 	blockPool := NewBlockPool()
-	rSeg = new(StateSegment)
+	rSeg = new(raftStateSegment)
 	rSeg.Fd = fd
 	rSeg.RaftState = pb.HardState{}
 	rSeg.raftBlocks = blockPool.Block4
@@ -291,13 +342,13 @@ func OpenStateSegmentFile(walDirPath, fileName string) (rSeg *StateSegment, err 
 	//若fsize不为0读取文件的数据到block并序列化到pb.HardState
 	if fileInfo.Size() > 0 {
 		rSeg.Fd.Read(rSeg.raftBlocks)
-		rSeg.decodeStateSegment()
+		rSeg.decodeRaftStateSegment()
 	}
 
 	return rSeg, nil
 }
 
-func (seg *StateSegment) Flush() (err error) {
+func (seg *raftStateSegment) FlushRaftState() (err error) {
 	seg.lock.Lock()
 	defer seg.lock.Unlock()
 
@@ -314,7 +365,7 @@ func (seg *StateSegment) Flush() (err error) {
 	return nil
 }
 
-func (seg *StateSegment) Remove() error {
+func (seg *raftStateSegment) Remove() error {
 	if !seg.closed {
 		seg.closed = true
 		_ = seg.Fd.Close()
@@ -323,7 +374,7 @@ func (seg *StateSegment) Remove() error {
 	return os.Remove(seg.Fd.Name())
 }
 
-func (seg *StateSegment) Close() error {
+func (seg *raftStateSegment) Close() error {
 	if seg.closed {
 		return nil
 	}
@@ -332,55 +383,80 @@ func (seg *StateSegment) Close() error {
 	return seg.Fd.Close()
 }
 
-// OrderedSegmentList 由segment组成的有序单链表
-type OrderedSegmentList struct {
-	Head *Node
+type KVStateSegment struct {
+	lock         sync.Mutex
+	Fd           *os.File
+	PersistIndex uint64
+	AppliedIndex uint64
+	Blocks       []byte
+	closed       bool
 }
 
-type Node struct {
-	Seg  *segment
-	Next *Node
+func OpenKVStateSegment(walDirPath, fileName string) (kvSeg *KVStateSegment, err error) {
+	fd, err := directio.OpenDirectIOFile(filepath.Join(walDirPath, fileName), os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = fd.Seek(0, io.SeekStart)
+	if err != nil {
+		panic(fmt.Errorf("seek to the end of segment file %s failed: %v", ".SEG", err))
+	}
+
+	blockPool := NewBlockPool()
+	kvSeg = new(KVStateSegment)
+	kvSeg.Fd = fd
+	kvSeg.Blocks = blockPool.Block4
+	fileInfo, _ := kvSeg.Fd.Stat()
+
+	//若fsize不为0读取文件的数据到block并序列化到pb.HardState
+	if fileInfo.Size() > 0 {
+		kvSeg.Fd.Read(kvSeg.Blocks)
+		kvSeg.decodeKVStateSegment()
+	}
+
+	return kvSeg, nil
 }
 
-func NewOrderedSegmentList() *OrderedSegmentList {
-	return &OrderedSegmentList{}
+func (seg *KVStateSegment) encodeKVStateSegment() []byte {
+	return nil
 }
 
-func (oll *OrderedSegmentList) Insert(seg *segment) {
-	newNode := &Node{Seg: seg}
+func (seg *KVStateSegment) decodeKVStateSegment() {
+	return
+}
 
-	if oll.Head == nil || oll.Head.Seg.Index >= seg.Index {
-		newNode.Next = oll.Head
-		oll.Head = newNode
+func (seg *KVStateSegment) FlushKVState() (err error) {
+	seg.lock.Lock()
+	defer seg.lock.Unlock()
+
+	data := seg.encodeStateSegment()
+	copy(seg.Blocks[0:len(data)], data)
+	_, err = seg.Fd.Seek(0, io.SeekStart)
+	if err != nil {
 		return
 	}
-
-	current := oll.Head
-	for current.Next != nil && current.Next.Seg.Index < seg.Index {
-		current = current.Next
+	_, err = seg.Fd.Write(data)
+	if err != nil {
+		return err
 	}
-
-	newNode.Next = current.Next
-	current.Next = newNode
+	return nil
 }
 
-// Find find segment which segment.index<=index and next segment.index>index
-func (oll *OrderedSegmentList) Find(index uint64) *segment {
-	current := oll.Head
-	var prev *Node
-
-	for current != nil && current.Seg.Index < index {
-		prev = current
-		current = current.Next
+func (seg *KVStateSegment) Remove() error {
+	if !seg.closed {
+		seg.closed = true
+		_ = seg.Fd.Close()
 	}
 
-	if current != nil && current.Seg.Index == index {
-		return current.Seg
+	return os.Remove(seg.Fd.Name())
+}
+
+func (seg *KVStateSegment) Close() error {
+	if seg.closed {
+		return nil
 	}
 
-	if prev != nil {
-		return prev.Seg
-	}
-
-	return nil
+	seg.closed = true
+	return seg.Fd.Close()
 }

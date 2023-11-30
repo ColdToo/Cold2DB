@@ -77,7 +77,7 @@ func DecodeV(v []byte) *V {
 type WalEntryHeader struct {
 	Crc32     int
 	EntrySize int
-	Index     int64
+	Index     uint64
 }
 
 func (h WalEntryHeader) IsEmpty() bool {
@@ -108,10 +108,10 @@ func EncodeWALEntry(e *pb.Entry) ([]byte, int) {
 func DecodeWALEntryHeader(buf []byte) (header WalEntryHeader) {
 	crc32 := binary.LittleEndian.Uint32(buf[:Crc32Size])
 	entrySize := binary.LittleEndian.Uint16(buf[Crc32Size : Crc32Size+EntrySize])
-	index := binary.LittleEndian.Uint16(buf[Crc32Size+EntrySize : Crc32Size+EntrySize+IndexSize])
+	index := binary.LittleEndian.Uint64(buf[Crc32Size+EntrySize : Crc32Size+EntrySize+IndexSize])
 	header.Crc32 = int(crc32)
 	header.EntrySize = int(entrySize)
-	header.Index = int64(index)
+	header.Index = index
 	return
 }
 

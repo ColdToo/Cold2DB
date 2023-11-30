@@ -61,8 +61,10 @@ type C2KV struct {
 	flushChn chan *Memtable
 
 	memtablePipe chan *Memtable
-	//raft log entries
-	entries []*pb.Entry
+
+	logOffset uint64
+
+	entries []*pb.Entry //stable raft log entries
 
 	wal *wal.WAL
 
@@ -84,8 +86,8 @@ func OpenDB(dbCfg *config.DBConfig) {
 	}
 
 	C2 = new(C2KV)
-	tableFlushC := make(chan *Memtable, dbCfg.MemConfig.MemtableNums-1)
-	C2.flushChn = tableFlushC
+	memTableFlushC := make(chan *Memtable, dbCfg.MemConfig.MemtableNums-1)
+	C2.flushChn = memTableFlushC
 
 	memOpt := MemOpt{
 		memSize: dbCfg.MemConfig.MemtableSize,
@@ -99,7 +101,7 @@ func OpenDB(dbCfg *config.DBConfig) {
 
 	C2.restoreMemoryFromWAL()
 
-	C2.valueLog, err = OpenValueLog(dbCfg.ValueLogConfig, tableFlushC)
+	C2.valueLog, err = OpenValueLog(dbCfg.ValueLogConfig, memTableFlushC, C2.wal.KVStateSegment)
 	if err != nil {
 		log.Panic("open Value log failed")
 	}
@@ -143,8 +145,9 @@ func (db *C2KV) restoreMemoryFromWAL() {
 
 	var id uint64
 	for _, file := range files {
-		if strings.HasSuffix(file.Name(), wal.SegSuffix) {
-			_, err = fmt.Sscanf(file.Name(), "%d.SEG", &id)
+		fName := file.Name()
+		if strings.HasSuffix(fName, wal.SegSuffix) {
+			_, err = fmt.Sscanf(fName, "%d.SEG", &id)
 			if err != nil {
 				log.Panicf("can not scan file")
 			}
@@ -156,18 +159,32 @@ func (db *C2KV) restoreMemoryFromWAL() {
 			db.wal.OrderSegmentList.Insert(segmentFile)
 		}
 
-		if strings.HasSuffix(file.Name(), wal.RaftSuffix) {
-			raftSegmentFile, err := wal.OpenStateSegmentFile(db.wal.Config.WalDirPath, file.Name())
+		if strings.HasSuffix(fName, wal.RaftSuffix) {
+			db.wal.RaftStateSegment, err = wal.OpenRaftStateSegment(db.wal.Config.WalDirPath, file.Name())
 			if err != nil {
 				return
 			}
-			db.wal.StateSegment = raftSegmentFile
+		}
+		if strings.HasSuffix(fName, wal.KVSuffix) {
+			db.wal.KVStateSegment, err = wal.OpenKVStateSegment(db.wal.Config.WalDirPath, file.Name())
+			if err != nil {
+				return
+			}
 		}
 	}
 
-	//创建一个新的state segment file
-	if db.wal.StateSegment == nil {
-		wal.OpenStateSegmentFile(db.wal.Config.WalDirPath, time.Now().String())
+	if db.wal.RaftStateSegment == nil {
+		db.wal.RaftStateSegment, err = wal.OpenRaftStateSegment(db.wal.Config.WalDirPath, time.Now().String())
+		if err != nil {
+			return
+		}
+	}
+
+	if db.wal.KVStateSegment == nil {
+		db.wal.KVStateSegment, err = wal.OpenKVStateSegment(db.wal.Config.WalDirPath, time.Now().String())
+		if err != nil {
+			return
+		}
 	}
 
 	// 启动两个goroutine分别将old segment file加载到Immemtble和enties中
@@ -180,8 +197,8 @@ func (db *C2KV) restoreMemoryFromWAL() {
 }
 
 func (db *C2KV) restoreImMemTable() {
-	persistIndex := db.wal.StateSegment.PersistIndex
-	appliedIndex := db.wal.StateSegment.AppliedIndex
+	persistIndex := db.wal.KVStateSegment.PersistIndex
+	appliedIndex := db.wal.RaftStateSegment.AppliedIndex
 	Node := db.wal.OrderSegmentList.Head
 
 	kvC := make(chan *marshal.KV, 1000)
@@ -226,7 +243,7 @@ func (db *C2KV) restoreImMemTable() {
 }
 
 func (db *C2KV) restoreMemEntries() {
-	appliedIndex := db.wal.StateSegment.AppliedIndex
+	appliedIndex := db.wal.RaftStateSegment.AppliedIndex
 
 	Node := db.wal.OrderSegmentList.Head
 	//locate the read position of segment
@@ -277,7 +294,7 @@ func (db *C2KV) SaveCommittedEntries(entries []*marshal.KV) (err error) {
 }
 
 func (db *C2KV) SaveHardState(st pb.HardState) error {
-	db.wal.StateSegment.RaftState = st
+	db.wal.RaftStateSegment.RaftState = st
 	enStateBytes, _ := marshal.EncodeRaftState(st)
 	return db.wal.StateSegment.Flush(enStateBytes)
 }
