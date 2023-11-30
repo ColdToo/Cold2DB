@@ -20,7 +20,7 @@ type WAL struct {
 	SegmentPipe      chan *segment
 	OrderSegmentList *OrderedSegmentList
 	RaftStateSegment *raftStateSegment //保存需要持久化的raft相关状态
-	KVStateSegment   *KVStateSegment   //保存需要持久化的raft相关状态
+	KVStateSegment   *KVStateSegment   //保存需要持久化的kv相关状态
 }
 
 func NewWal(config config.WalConfig) (*WAL, error) {

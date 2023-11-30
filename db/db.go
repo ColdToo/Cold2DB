@@ -113,11 +113,6 @@ func dbCfgCheck(dbCfg *config.DBConfig) error {
 			return err
 		}
 	}
-	if !utils.PathExist(dbCfg.IndexConfig.IndexerDir) {
-		if err := os.MkdirAll(dbCfg.IndexConfig.IndexerDir, os.ModePerm); err != nil {
-			return err
-		}
-	}
 	if !utils.PathExist(dbCfg.WalConfig.WalDirPath) {
 		if err := os.MkdirAll(dbCfg.WalConfig.WalDirPath, os.ModePerm); err != nil {
 			return err
@@ -295,8 +290,7 @@ func (db *C2KV) SaveCommittedEntries(entries []*marshal.KV) (err error) {
 
 func (db *C2KV) SaveHardState(st pb.HardState) error {
 	db.wal.RaftStateSegment.RaftState = st
-	enStateBytes, _ := marshal.EncodeRaftState(st)
-	return db.wal.StateSegment.Flush(enStateBytes)
+	return db.wal.RaftStateSegment.Flush()
 }
 
 func (db *C2KV) SaveEntries(entries []*pb.Entry) error {

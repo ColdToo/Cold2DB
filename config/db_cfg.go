@@ -7,8 +7,6 @@ type DBConfig struct {
 
 	ValueLogConfig ValueLogConfig
 
-	IndexConfig IndexConfig
-
 	WalConfig WalConfig
 }
 
@@ -32,7 +30,6 @@ type MemConfig struct {
 }
 
 type WalConfig struct {
-	// wal dir path, one memtable corresponds one wal
 	WalDirPath string
 
 	SegmentSize int //specifies the maximum size of each segment file in bytes. SegmentSize int64
@@ -42,12 +39,4 @@ type ValueLogConfig struct {
 	ValueLogDir string
 
 	PartitionNums int
-
-	IndexerType int8
-}
-
-type IndexConfig struct {
-	IndexerDir string
-
-	IndexerType int8
 }

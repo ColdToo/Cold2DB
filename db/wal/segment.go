@@ -296,7 +296,7 @@ func (sr *segmentReader) ReadKVs(kvC chan *marshal.KV, errC chan error) {
 	}
 }
 
-// StateSegment need persist status: persist index、 apply index 、raft hardState
+// raftStateSegment need persist status: apply index 、commit index
 type raftStateSegment struct {
 	Fd           *os.File
 	RaftState    pb.HardState
@@ -345,8 +345,8 @@ func OpenRaftStateSegment(walDirPath, fileName string) (rSeg *raftStateSegment, 
 	return rSeg, nil
 }
 
-func (seg *raftStateSegment) FlushRaftState() (err error) {
-	data := seg.encodeStateSegment()
+func (seg *raftStateSegment) Flush() (err error) {
+	data := seg.encodeRaftStateSegment()
 	copy(seg.Blocks[0:len(data)], data)
 	_, err = seg.Fd.Seek(0, io.SeekStart)
 	if err != nil {
@@ -420,7 +420,7 @@ func OpenKVStateSegment(walDirPath, fileName string) (kvSeg *KVStateSegment, err
 	return kvSeg, nil
 }
 
-func (seg *KVStateSegment) FlushKVState() (err error) {
+func (seg *KVStateSegment) Flush() (err error) {
 	seg.lock.Lock()
 	defer seg.lock.Unlock()
 

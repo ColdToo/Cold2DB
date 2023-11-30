@@ -9,6 +9,7 @@ import (
 	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
 	"os"
+	"time"
 )
 
 var (
@@ -23,18 +24,17 @@ var (
 	ErrUnsupportedValueLogType = errors.New("unsupported log file type")
 )
 
-const PartitionFormat = "PARTITION_%d"
+const PartitionFormat = "PARTITION_%d_%s"
 
 // ValueLog is an abstraction of a disk file, entry`s read and write will go through it.
 type ValueLog struct {
+	vlogCfg config.ValueLogConfig
+
 	memFlushC chan *Memtable //memManger的flushChn
 
 	kvStateSeg *wal.KVStateSegment
 
 	partition []*partition.Partition
-
-	// dirPath specifies the directory path where the WAL segment files will be stored.
-	dirPath string
 
 	// value log are partitioned to several parts for concurrent writing and reading
 	partitionNum uint32
@@ -53,12 +53,14 @@ func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable, stateSeg
 		for i := 0; i < vlogCfg.PartitionNums; i++ {
 			//检查文件夹下的partition重新打开
 			//若vlog下有partition文件夹，则打开该文件夹下的partition以及所有sst文件和index文件
-			partition.OpenPartition(fmt.Sprintf(PartitionFormat, i))
+			partition.OpenPartition(fmt.Sprintf(PartitionFormat, i, time.Now().String()))
 		}
-	} else {
+	}
+
+	//若vlog下有partition文件夹，则打开该文件夹下的partition以及所有sst文件和index文件
+	if len(dirs) > 0 {
 		for _, dir := range dirs {
 			if dir.IsDir() {
-				//检查文件夹下的partition重新打开
 				//若vlog下有partition文件夹，则打开该文件夹下的partition以及所有sst文件和index文件
 				partition.OpenPartition(dir.Name())
 			}
