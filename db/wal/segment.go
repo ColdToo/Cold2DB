@@ -298,12 +298,10 @@ func (sr *segmentReader) ReadKVs(kvC chan *marshal.KV, errC chan error) {
 
 // StateSegment need persist status: persist index、 apply index 、raft hardState
 type raftStateSegment struct {
-	lock         sync.Mutex
 	Fd           *os.File
 	RaftState    pb.HardState
 	AppliedIndex uint64
-	raftBlocks   []byte
-	kvBlocks     []byte
+	Blocks       []byte
 	closed       bool
 }
 
@@ -335,8 +333,7 @@ func OpenRaftStateSegment(walDirPath, fileName string) (rSeg *raftStateSegment, 
 	rSeg = new(raftStateSegment)
 	rSeg.Fd = fd
 	rSeg.RaftState = pb.HardState{}
-	rSeg.raftBlocks = blockPool.Block4
-	rSeg.raftBlocks = blockPool.Block4
+	rSeg.Blocks = blockPool.Block4
 	fileInfo, _ := rSeg.Fd.Stat()
 
 	//若fsize不为0读取文件的数据到block并序列化到pb.HardState
@@ -349,11 +346,8 @@ func OpenRaftStateSegment(walDirPath, fileName string) (rSeg *raftStateSegment, 
 }
 
 func (seg *raftStateSegment) FlushRaftState() (err error) {
-	seg.lock.Lock()
-	defer seg.lock.Unlock()
-
 	data := seg.encodeStateSegment()
-	copy(seg.raftBlocks[0:len(data)], data)
+	copy(seg.Blocks[0:len(data)], data)
 	_, err = seg.Fd.Seek(0, io.SeekStart)
 	if err != nil {
 		return
@@ -392,6 +386,14 @@ type KVStateSegment struct {
 	closed       bool
 }
 
+func (seg *KVStateSegment) encodeKVStateSegment() []byte {
+	return nil
+}
+
+func (seg *KVStateSegment) decodeKVStateSegment() {
+	return
+}
+
 func OpenKVStateSegment(walDirPath, fileName string) (kvSeg *KVStateSegment, err error) {
 	fd, err := directio.OpenDirectIOFile(filepath.Join(walDirPath, fileName), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
@@ -418,19 +420,11 @@ func OpenKVStateSegment(walDirPath, fileName string) (kvSeg *KVStateSegment, err
 	return kvSeg, nil
 }
 
-func (seg *KVStateSegment) encodeKVStateSegment() []byte {
-	return nil
-}
-
-func (seg *KVStateSegment) decodeKVStateSegment() {
-	return
-}
-
 func (seg *KVStateSegment) FlushKVState() (err error) {
 	seg.lock.Lock()
 	defer seg.lock.Unlock()
 
-	data := seg.encodeStateSegment()
+	data := seg.encodeKVStateSegment()
 	copy(seg.Blocks[0:len(data)], data)
 	_, err = seg.Fd.Seek(0, io.SeekStart)
 	if err != nil {
