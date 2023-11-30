@@ -3,6 +3,7 @@ package wal
 import (
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"os"
 )
@@ -24,15 +25,29 @@ type WAL struct {
 }
 
 func NewWal(config config.WalConfig) (*WAL, error) {
-	acSegment, err := NewActSegmentFile(config.WalDirPath)
+	acSegment, err := NewSegmentFile(config.WalDirPath)
 	if err != nil {
 		return nil, err
 	}
+
+	segmentPipe := make(chan *segment, 0)
+
+	// segment pipeline boosts the throughput of the WAL.
+	go func() {
+		for {
+			acSegment, err = NewSegmentFile(config.WalDirPath)
+			if err != nil {
+				log.Errorf("create a new segment file error", err)
+			}
+			segmentPipe <- acSegment
+		}
+	}()
 
 	wal := &WAL{
 		Config:           config,
 		OrderSegmentList: NewOrderedSegmentList(),
 		ActiveSegment:    acSegment,
+		SegmentPipe:      segmentPipe,
 	}
 
 	return wal, nil

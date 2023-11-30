@@ -11,7 +11,7 @@ func MockData(block []byte) {
 	}
 }
 
-func TestAlignedBlockAligned4(t *testing.T) {
+func TestAlignedBlock(t *testing.T) {
 	blockPool := NewBlockPool()
 
 	block1, count1 := blockPool.AlignedBlock(1)

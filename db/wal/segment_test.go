@@ -48,26 +48,27 @@ func MarshalWALEntries(entries1 []*pb.Entry) (data []byte, bytesCount int) {
 	return
 }
 
-func TestNewActSegmentFile(t *testing.T) {
-	segment, err := NewActSegmentFile(TestDirPath)
+func TestSegmentFile_NewSegmentFile(t *testing.T) {
+	segment, err := NewSegmentFile(TestDirPath)
 	if err != nil {
 		t.Errorf("Expected nil, but got %v", err)
 	}
-	assert.EqualValues(t, segment.Index, DefaultIndex)
+	assert.EqualValues(t, segment.Index, DefaultMinLogIndex)
 	assert.EqualValues(t, segment.Size(), Block4)
 	assert.EqualValues(t, segment.BlocksRemainSize, Block4)
-	assert.EqualValues(t, segment.Fd.Name(), SegmentFileName(TestDirPath, DefaultIndex))
+	assert.EqualValues(t, segment.Fd.Name(), SegmentFileName(TestDirPath, DefaultMinLogIndex))
 	assert.EqualValues(t, segment.blocksOffset, 0)
 	segment.Close()
 	segment.Remove()
 }
 
-func TestSegment_Write(t *testing.T) {
-	segment, err := NewActSegmentFile(TestDirPath)
+func TestSegmentFile_Write(t *testing.T) {
+	segment, err := NewSegmentFile(TestDirPath)
 	if err != nil {
 		t.Errorf("Expected nil, but got %v", err)
 	}
 
+	//todo 测试不同分支的write
 	data, bytesCount := MarshalWALEntries(entries1)
 	segment.Write(data, bytesCount, entries1[0].Index)
 
@@ -75,21 +76,28 @@ func TestSegment_Write(t *testing.T) {
 	assert.EqualValues(t, bytesCount, segment.blocksOffset)
 }
 
-func TestOpenOldSegmentFile(t *testing.T) {
-	TestSegment_Write(t)
-	_, err := OpenOldSegmentFile(TestDirPath, entries1[0].Index)
+func TestSegmentFile_OpenOldSegmentFile(t *testing.T) {
+	newSegment, err := NewSegmentFile(TestDirPath)
 	if err != nil {
 		t.Errorf("Expected nil, but got %v", err)
 	}
+	newSegment.Close()
+	oldSegment, err := OpenOldSegmentFile(TestDirPath, newSegment.Index)
+	assert.Equal(t, newSegment, oldSegment)
+}
+
+//
+
+func MockSegmentWrite(entries []*pb.Entry) *segment {
+	segment, _ := NewSegmentFile(TestDirPath)
+	data, bytesCount := MarshalWALEntries(entries)
+	segment.Write(data, bytesCount, entries[0].Index)
+	return segment
 }
 
 func TestSegmentReader_ReadHeader(t *testing.T) {
-	TestSegment_Write(t)
-	oldSeg, err := OpenOldSegmentFile(TestDirPath, entries1[0].Index)
-	if err != nil {
-		t.Errorf("Expected nil, but got %v", err)
-	}
-	reader := NewSegmentReader(oldSeg, 0, 0)
+	segment := MockSegmentWrite(entries1)
+	reader := NewSegmentReader(segment, 0, 0)
 	for {
 		header, err := reader.ReadHeader()
 		if err != nil && err.Error() == "EOF" {
@@ -101,18 +109,16 @@ func TestSegmentReader_ReadHeader(t *testing.T) {
 }
 
 func TestSegmentReader_ReadEntries(t *testing.T) {
-	TestSegment_Write(t)
-	oldSeg, err := OpenOldSegmentFile(TestDirPath, entries1[0].Index)
-	if err != nil {
-		t.Errorf("Expected nil, but got %v", err)
-	}
-	reader := NewSegmentReader(oldSeg, 0, 0)
+	segment := MockSegmentWrite(entries1)
+	reader := NewSegmentReader(segment, 0, 0)
 	reader.ReadEntries()
 }
 
 func TestSegmentReader_ReadKVs(t *testing.T) {
 
 }
+
+//
 
 func TestOrderedSegmentList(t *testing.T) {
 	// Create a new OrderedSegmentList

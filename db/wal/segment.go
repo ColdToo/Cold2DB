@@ -3,7 +3,7 @@ package wal
 import (
 	"errors"
 	"fmt"
-	"github.com/ColdToo/Cold2DB/db/iooperator/directio"
+	"github.com/ColdToo/Cold2DB/db/iooperator"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -20,11 +20,6 @@ const (
 	InitialBlockNum    = 1
 )
 
-var (
-	ErrClosed     = errors.New("the segment file is closed")
-	ErrInvalidCRC = errors.New("invalid crc, the data may be corrupted")
-)
-
 type segment struct {
 	Index     uint64 //该segment文件中的最小log index
 	Fd        *os.File
@@ -39,15 +34,10 @@ type segment struct {
 	closed           bool
 }
 
-func NewActSegmentFile(dirPath string) (*segment, error) {
-	fd, err := directio.OpenDirectIOFile(SegmentFileName(dirPath, 0>>1), os.O_CREATE|os.O_RDWR, 0644)
+func NewSegmentFile(dirPath string) (*segment, error) {
+	fd, err := iooperator.OpenDirectIOFile(SegmentFileName(dirPath, DefaultMinLogIndex), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
-	}
-
-	_, err = fd.Seek(0, io.SeekStart)
-	if err != nil {
-		log.Panicf("seek to the end of segment file %s failed: %v", ".SEG", err)
 	}
 
 	blockPool := NewBlockPool()
@@ -60,12 +50,12 @@ func NewActSegmentFile(dirPath string) (*segment, error) {
 		BlocksRemainSize: Block4,
 		blockNums:        num4,
 		segmentOffset:    0,
-		blockPool:        NewBlockPool(),
+		blockPool:        blockPool,
 	}, nil
 }
 
 func OpenOldSegmentFile(walDirPath string, index uint64) (*segment, error) {
-	fd, err := directio.OpenDirectIOFile(SegmentFileName(walDirPath, index), os.O_CREATE|os.O_RDWR, 0644)
+	fd, err := iooperator.OpenDirectIOFile(SegmentFileName(walDirPath, index), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +309,7 @@ func (seg *raftStateSegment) decodeRaftStateSegment() {
 }
 
 func OpenRaftStateSegment(walDirPath, fileName string) (rSeg *raftStateSegment, err error) {
-	fd, err := directio.OpenDirectIOFile(filepath.Join(walDirPath, fileName), os.O_CREATE|os.O_RDWR, 0644)
+	fd, err := iooperator.OpenDirectIOFile(filepath.Join(walDirPath, fileName), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +328,7 @@ func OpenRaftStateSegment(walDirPath, fileName string) (rSeg *raftStateSegment, 
 
 	//若fsize不为0读取文件的数据到block并序列化到pb.HardState
 	if fileInfo.Size() > 0 {
-		rSeg.Fd.Read(rSeg.raftBlocks)
+		rSeg.Fd.Read(rSeg.Blocks)
 		rSeg.decodeRaftStateSegment()
 	}
 
@@ -395,7 +385,7 @@ func (seg *KVStateSegment) decodeKVStateSegment() {
 }
 
 func OpenKVStateSegment(walDirPath, fileName string) (kvSeg *KVStateSegment, err error) {
-	fd, err := directio.OpenDirectIOFile(filepath.Join(walDirPath, fileName), os.O_CREATE|os.O_RDWR, 0644)
+	fd, err := iooperator.OpenDirectIOFile(filepath.Join(walDirPath, fileName), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
