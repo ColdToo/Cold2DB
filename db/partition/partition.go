@@ -119,7 +119,7 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV) {
 	p.indexer.Put(indexNodes)
 
 	sst.fd.Write(buf.Bytes())
-	p.frozenSST = append(p.frozenSST)
+	p.oldSST = append(p.oldSST)
 }
 
 func (p *Partition) AutoCompaction() {

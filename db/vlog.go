@@ -36,7 +36,7 @@ type ValueLog struct {
 	partition []*partition.Partition
 
 	// value log are partitioned to several parts for concurrent writing and reading
-	partitionNum uint32
+	partitionNums int
 
 	// hash function for sharding
 	hashKeyFunction func([]byte) uint64
@@ -49,10 +49,10 @@ func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable, stateSeg
 	}
 
 	partitions := make([]*partition.Partition, 0)
-	lf = &ValueLog{memFlushC: tableC, kvStateSeg: stateSegment, partition: partitions}
+	lf = &ValueLog{memFlushC: tableC, kvStateSeg: stateSegment, partition: partitions, partitionNums: vlogCfg.PartitionNums}
 
 	if len(dirs) == 0 {
-		for i := 0; i < vlogCfg.PartitionNums; i++ {
+		for i := 0; i < lf.partitionNums; i++ {
 			p := partition.OpenPartition(fmt.Sprintf(PartitionFormat, i))
 			partitions = append(partitions, p)
 		}
@@ -93,25 +93,28 @@ func (v *ValueLog) ListenAndFlush() {
 		//获取有序kvs
 		kvs := mem.All()
 
-		partitionRecords := make([][]*marshal.KV, v.partitionNum)
+		partitionRecords := make([][]*marshal.KV, v.partitionNums)
 
-		var index int64 //获取到该immtable中的最后一个index，刷新persist index
+		var index uint64 //获取到该immtable中的最后一个index，刷新persist index
 		for _, record := range kvs {
 			p := v.getKeyPartition(record.Key)
 			partitionRecords[p] = append(partitionRecords[p], &record)
 		}
 
-		for i := 0; i < int(v.partitionNum); i++ {
+		for i := 0; i < int(v.partitionNums); i++ {
 			if len(partitionRecords[i]) == 0 {
 				continue
 			}
 			part := i
-			// todo 并发刷入每个partition
+
 			go v.partition[part].PersistKvs(partitionRecords[part])
 		}
 
-		v.stateSeg.PersistIndex = index
-		v.stateSeg.Flush()
+		v.kvStateSeg.PersistIndex = index
+		err := v.kvStateSeg.Flush()
+		if err != nil {
+			log.Panicf("can not flush kv state segment file %e", err)
+		}
 	}
 }
 
