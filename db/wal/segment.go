@@ -199,31 +199,27 @@ func (oll *OrderedSegmentList) Find(index uint64) *segment {
 
 // restore memory and truncate wal will use reader
 type segmentReader struct {
-	persistIndex uint64
-	appliedIndex uint64
 	blocks       []byte
 	blocksOffset int // current read pointer in blocks
 	blocksNums   int // blocks  number
 	curBlockNum  int // current block position in blocks
 }
 
-func NewSegmentReader(seg *segment, persistIndex, appliedIndex uint64) *segmentReader {
+func NewSegmentReader(seg *segment) *segmentReader {
 	blocks := alignedBlock(seg.blockNums)
 	_, err := seg.Fd.Read(blocks)
 	if err != nil {
 		return nil
 	}
 	return &segmentReader{
-		persistIndex: persistIndex,
-		appliedIndex: appliedIndex,
-		blocks:       blocks,
-		blocksNums:   seg.blockNums,
-		curBlockNum:  InitialBlockNum,
+		blocks:      blocks,
+		blocksNums:  seg.blockNums,
+		curBlockNum: InitialBlockNum,
 	}
 }
 
 func (sr *segmentReader) ReadHeader() (eHeader marshal.WalEntryHeader, err error) {
-	// todo chunkHeaderSlice应该作为pool
+	// todo chunkHeaderSlice应该池化减少GC
 	buf := make([]byte, marshal.ChunkHeaderSize)
 	copy(buf, sr.blocks[sr.blocksOffset:sr.blocksOffset+marshal.ChunkHeaderSize])
 
@@ -248,7 +244,7 @@ func (sr *segmentReader) ReadHeader() (eHeader marshal.WalEntryHeader, err error
 	return
 }
 
-func (sr *segmentReader) readEntry() (ent *pb.Entry, err error) {
+func (sr *segmentReader) ReadEntry() (ent *pb.Entry, err error) {
 	header, err := sr.ReadHeader()
 	if err != nil {
 		return nil, err
@@ -261,29 +257,6 @@ func (sr *segmentReader) readEntry() (ent *pb.Entry, err error) {
 
 func (sr *segmentReader) Next(entrySize int) {
 	sr.blocksOffset += entrySize + marshal.ChunkHeaderSize
-}
-
-func (sr *segmentReader) ReadEntries() (ents []*pb.Entry, err error) {
-	for {
-		ent, err := sr.readEntry()
-		if err != nil && err.Error() == "EOF" {
-			break
-		}
-		ents = append(ents, ent)
-	}
-	return
-}
-
-func (sr *segmentReader) ReadKVs(kvC chan *marshal.KV, errC chan error) {
-	for {
-		ent, err := sr.readEntry()
-		if err != nil && err.Error() == "EOF" {
-			errC <- err
-			break
-		}
-		kv := marshal.GobDecode(ent.Data)
-		kvC <- &kv
-	}
 }
 
 // raftStateSegment need persist status: apply index 、commit index

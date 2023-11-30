@@ -191,6 +191,9 @@ func (db *C2KV) restoreMemoryFromWAL() {
 	return
 }
 
+// ----------------- |  restore imm table |    restore mem entries     |
+// -----------persist-index----------apply-index-------------------commit-index----------
+
 func (db *C2KV) restoreImMemTable() {
 	persistIndex := db.wal.KVStateSegment.PersistIndex
 	appliedIndex := db.wal.RaftStateSegment.AppliedIndex
@@ -210,9 +213,20 @@ func (db *C2KV) restoreImMemTable() {
 
 	for Node != nil {
 		Seg := Node.Seg
-		reader := wal.NewSegmentReader(Seg, persistIndex, appliedIndex)
+		reader := wal.NewSegmentReader(Seg)
 
-		go reader.ReadKVs(kvC, signalC)
+		go func() {
+			for {
+				ent, err := reader.ReadEntry()
+				if err != nil && err.Error() == "EOF" {
+					signalC <- err
+					break
+				}
+				kv := marshal.GobDecode(ent.Data)
+				kvC <- &kv
+				reader.Next(ent.)
+			}
+		}()
 
 		select {
 		case kv := <-kvC:
@@ -240,8 +254,8 @@ func (db *C2KV) restoreImMemTable() {
 func (db *C2KV) restoreMemEntries() {
 	appliedIndex := db.wal.RaftStateSegment.AppliedIndex
 
-	Node := db.wal.OrderSegmentList.Head
 	//locate the read position of segment
+	Node := db.wal.OrderSegmentList.Head
 	for Node != nil {
 		if appliedIndex >= Node.Seg.Index && appliedIndex <= Node.Next.Seg.Index {
 			break
@@ -251,8 +265,19 @@ func (db *C2KV) restoreMemEntries() {
 
 	for Node != nil {
 		Seg := Node.Seg
-		reader := wal.NewSegmentReader(Seg, 0, appliedIndex)
+		reader := wal.NewSegmentReader(Seg)
 		kvs, err := reader.ReadEntries()
+		for {
+			ent, err := reader.ReadEntry()
+			if err != nil {
+				if err.Error() == "EOF" {
+					break
+				} else {
+					return nil, err
+				}
+			}
+			ents = append(ents, ent)
+		}
 		if err != nil {
 			log.Panic("read header failed")
 		}
