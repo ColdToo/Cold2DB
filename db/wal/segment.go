@@ -138,7 +138,6 @@ func (seg *segment) Remove() error {
 	if err := seg.Close(); err == nil {
 		os.Remove(seg.Fd.Name())
 	} else {
-		log.Errorf("close segment file failed", err)
 		return err
 	}
 	return nil
@@ -193,6 +192,11 @@ func (oll *OrderedSegmentList) Find(index uint64) *segment {
 	if prev != nil {
 		return prev.Seg
 	}
+
+	return nil
+}
+
+func (oll *OrderedSegmentList) Truncate(index uint64) (err error) {
 
 	return nil
 }

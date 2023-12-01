@@ -382,7 +382,7 @@ func (r *Raft) sendAppendEntries(to uint64, sendIfEmpty bool) error {
 	preLogTerm, err := r.RaftLog.Term(preLogIndex)
 	if err != nil {
 		// 日志如果被压缩那么需要发送快照,说明此时需要的index已经小于applied index了
-		if err == db.ErrCompacted {
+		if err == code.ErrCompacted {
 			//todo 开始发送快照
 		}
 		return err

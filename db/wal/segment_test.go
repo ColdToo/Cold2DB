@@ -2,7 +2,6 @@ package wal
 
 import (
 	"fmt"
-	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/stretchr/testify/assert"
 	"os"
@@ -38,14 +37,15 @@ var entries1 = []*pb.Entry{
 	},
 }
 
-func MarshalWALEntries(entries1 []*pb.Entry) (data []byte, bytesCount int) {
-	data = make([]byte, 0)
-	for _, e := range entries1 {
-		wEntBytes, n := marshal.EncodeWALEntry(e)
-		data = append(data, wEntBytes...)
-		bytesCount += n
+func TestSegmentFileName(t *testing.T) {
+	var id int64
+	segmentName := SegmentFileName("tmp", 1)
+	_, err := fmt.Sscanf(segmentName, "%d.SEG", &id)
+	if err != nil {
+		fmt.Println("提取失败:", err)
 	}
-	return
+	fmt.Println(segmentName)
+	fmt.Println(id)
 }
 
 func TestSegmentFile_NewSegmentFile(t *testing.T) {

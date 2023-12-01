@@ -194,7 +194,7 @@ func (an *AppNode) applyCommitedEntries(ents []*pb.Entry) (err error) {
 		kvIds = append(kvIds, kv)
 	}
 
-	err = an.kvStore.storage.SaveCommittedEntries(kvs)
+	err = an.kvStore.storage.Put(kvs)
 	if err != nil {
 		log.Errorf("", err)
 		return

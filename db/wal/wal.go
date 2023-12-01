@@ -16,9 +16,11 @@ const (
 )
 
 type WAL struct {
-	Config           config.WalConfig
-	ActiveSegment    *segment
-	SegmentPipe      chan *segment
+	WalDirPath    string
+	SegmentSize   int
+	ActiveSegment *segment
+	SegmentPipe   chan *segment
+	//todo ordered segment 是否会有并发问题
 	OrderSegmentList *OrderedSegmentList
 	RaftStateSegment *raftStateSegment //保存需要持久化的raft相关状态
 	KVStateSegment   *KVStateSegment   //保存需要持久化的kv相关状态
@@ -44,7 +46,8 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 	}()
 
 	wal := &WAL{
-		Config:           config,
+		WalDirPath:       config.WalDirPath,
+		SegmentSize:      config.SegmentSize * 2 * 1024 * 1024,
 		OrderSegmentList: NewOrderedSegmentList(),
 		ActiveSegment:    acSegment,
 		SegmentPipe:      segmentPipe,
@@ -78,8 +81,8 @@ func (wal *WAL) activeSegmentIsFull(delta int) bool {
 	//应尽可能使segment大小均匀，这样查找能提高查找某个entry的效率
 	actSegSize := wal.ActiveSegment.Size()
 	comSize := actSegSize + delta
-	if comSize > wal.Config.SegmentSize {
-		if actSegSize*2 > wal.Config.SegmentSize {
+	if comSize > wal.SegmentSize {
+		if actSegSize*2 > wal.SegmentSize {
 			return false
 		}
 	}
@@ -105,32 +108,57 @@ func (wal *WAL) Truncate(index uint64) error {
 	}
 	if header.Index == index {
 		// truncate掉index之后的ent
+		err = seg.Fd.Truncate(int64(reader.curBlockNum + reader.blocksOffset))
+		if err != nil {
+			log.Errorf("Truncate segment file failed", err)
+		}
 	}
-	//truncate掉index后的所有segment文件
 
-	reader.Next(header.EntrySize)
+	// 1、truncate掉index后的所有segment文件
+	// 2、移除ordered segment list中index之后的segment
+	segList := wal.OrderSegmentList
+	for segList.Head != nil {
+		if segList.Head.Seg.Index < index {
+			segList.Head = segList.Head.Next
+			continue
+		}
+
+		removeNode := segList.Head.Next
+		segList.Head.Next = nil
+		for removeNode != nil {
+			err := removeNode.Seg.Remove()
+			if err != nil {
+				log.Errorf("remove segment file failed", err)
+			}
+			removeNode = removeNode.Next
+		}
+		break
+	}
+
 	return nil
 }
 
 func (wal *WAL) Close() error {
-	for wal.OrderSegmentList.Head != nil {
-		err := wal.OrderSegmentList.Head.Seg.Close()
+	segList := *wal.OrderSegmentList
+	for segList.Head != nil {
+		err := segList.Head.Seg.Close()
 		if err != nil {
 			return err
 		}
-		wal.OrderSegmentList.Head = wal.OrderSegmentList.Head.Next
+		segList.Head = segList.Head.Next
 	}
 	// close the active segment file.
 	return wal.ActiveSegment.Close()
 }
 
 func (wal *WAL) Remove() error {
-	for wal.OrderSegmentList.Head != nil {
-		err := os.Remove(wal.OrderSegmentList.Head.Seg.Fd.Name())
+	segList := wal.OrderSegmentList
+	for segList.Head != nil {
+		err := os.Remove(segList.Head.Seg.Fd.Name())
 		if err != nil {
 			return err
 		}
-		wal.OrderSegmentList.Head = wal.OrderSegmentList.Head.Next
+		segList.Head = segList.Head.Next
 	}
 
 	// delete the active segment file.
