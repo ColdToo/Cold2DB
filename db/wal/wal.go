@@ -98,7 +98,7 @@ func (wal *WAL) rotateActiveSegment() error {
 func (wal *WAL) Truncate(index uint64) error {
 	//truncate掉index之后的所有segment包括当前的active segment
 	seg := wal.OrderSegmentList.Find(index)
-	reader := NewSegmentReader(seg, 0, 0)
+	reader := NewSegmentReader(seg)
 	header, err := reader.ReadHeader()
 	if err != nil {
 		return err
@@ -106,6 +106,7 @@ func (wal *WAL) Truncate(index uint64) error {
 	if header.Index == index {
 		// truncate掉index之后的ent
 	}
+	//truncate掉index后的所有segment文件
 
 	reader.Next(header.EntrySize)
 	return nil
@@ -123,7 +124,7 @@ func (wal *WAL) Close() error {
 	return wal.ActiveSegment.Close()
 }
 
-func (wal *WAL) Delete() error {
+func (wal *WAL) Remove() error {
 	for wal.OrderSegmentList.Head != nil {
 		err := os.Remove(wal.OrderSegmentList.Head.Seg.Fd.Name())
 		if err != nil {

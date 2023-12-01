@@ -16,25 +16,25 @@ var entries1 = []*pb.Entry{
 		Term:  1,
 		Index: 1,
 		Type:  pb.EntryNormal,
-		Data:  []byte("hello world"),
+		Data:  []byte("hello world1"),
 	},
 	{
 		Term:  2,
 		Index: 2,
 		Type:  pb.EntryNormal,
-		Data:  []byte("hello world"),
+		Data:  []byte("hello world2"),
 	},
 	{
 		Term:  3,
 		Index: 3,
 		Type:  pb.EntryNormal,
-		Data:  []byte("hello world"),
+		Data:  []byte("hello world3"),
 	},
 	{
 		Term:  4,
 		Index: 4,
 		Type:  pb.EntryNormal,
-		Data:  []byte("hello world"),
+		Data:  []byte("hello world4"),
 	},
 }
 
@@ -85,33 +85,29 @@ func MockSegmentWrite(entries []*pb.Entry) *segment {
 	return segment
 }
 
-func TestSegmentReader_ReadHeader(t *testing.T) {
+func TestSegmentReader_Block4(t *testing.T) {
 	segment := MockSegmentWrite(entries1)
-	seg, _ := OpenOldSegmentFile(TestDirPath, segment.Index)
-	reader := NewSegmentReader(seg, 0, 0)
+	seg, err := OpenOldSegmentFile(TestDirPath, segment.Index)
+	if err != nil {
+		t.Error(err)
+	}
+	reader := NewSegmentReader(seg)
+	ents := make([]*pb.Entry, 0)
+	//确保读出的数据正确
+	assert.EqualValues(t, segment.blocks, reader.blocks)
 	for {
 		header, err := reader.ReadHeader()
 		if err != nil && err.Error() == "EOF" {
-			return
+			break
+		}
+		entry, err := reader.ReadEntry(header)
+		if err != nil {
+			t.Error(err)
 		}
 		reader.Next(header.EntrySize)
-		fmt.Println(header.Index)
-	}
-}
-
-func TestSegmentReader_ReadEntries(t *testing.T) {
-	segment := MockSegmentWrite(entries1)
-	seg, _ := OpenOldSegmentFile(TestDirPath, segment.Index)
-	reader := NewSegmentReader(seg, 0, 0)
-	ents, err := reader.ReadEntries()
-	if err != nil {
-		t.Errorf("Expected nil, but got %v", err)
+		ents = append(ents, entry)
 	}
 	assert.EqualValues(t, entries1, ents)
-}
-
-func TestSegmentReader_ReadKVs(t *testing.T) {
-
 }
 
 //

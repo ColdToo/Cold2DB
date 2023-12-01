@@ -222,7 +222,6 @@ func (sr *segmentReader) ReadHeader() (eHeader marshal.WalEntryHeader, err error
 	// todo chunkHeaderSlice应该池化减少GC
 	buf := make([]byte, marshal.ChunkHeaderSize)
 	copy(buf, sr.blocks[sr.blocksOffset:sr.blocksOffset+marshal.ChunkHeaderSize])
-
 	eHeader = marshal.DecodeWALEntryHeader(buf)
 
 	if eHeader.IsEmpty() {
@@ -239,24 +238,24 @@ func (sr *segmentReader) ReadHeader() (eHeader marshal.WalEntryHeader, err error
 		if eHeader.IsEmpty() {
 			return eHeader, errors.New("EOF")
 		}
+		sr.blocksOffset += marshal.ChunkHeaderSize
 		return
 	}
+	sr.blocksOffset += marshal.ChunkHeaderSize
 	return
 }
 
-func (sr *segmentReader) ReadEntry() (ent *pb.Entry, err error) {
-	header, err := sr.ReadHeader()
-	if err != nil {
-		return nil, err
-	}
+func (sr *segmentReader) ReadEntry(header marshal.WalEntryHeader) (ent *pb.Entry, err error) {
 	ent = new(pb.Entry)
-	ent.Unmarshal(sr.blocks[sr.blocksOffset : sr.blocksOffset+header.EntrySize])
-	sr.Next(header.EntrySize)
+	err = ent.Unmarshal(sr.blocks[sr.blocksOffset : sr.blocksOffset+header.EntrySize])
+	if err != nil {
+		log.Panicf("unmarshal", err)
+	}
 	return
 }
 
 func (sr *segmentReader) Next(entrySize int) {
-	sr.blocksOffset += entrySize + marshal.ChunkHeaderSize
+	sr.blocksOffset += entrySize
 }
 
 // raftStateSegment need persist status: apply index 、commit index

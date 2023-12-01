@@ -192,7 +192,7 @@ func (db *C2KV) restoreMemoryFromWAL() {
 }
 
 // ----------------- |  restore imm table |    restore mem entries     |
-// -----------persist-index----------apply-index-------------------commit-index----------
+// -----------persist-index----------apply-index-------------------commit-index----------stable-index-----------
 
 func (db *C2KV) restoreImMemTable() {
 	persistIndex := db.wal.KVStateSegment.PersistIndex
@@ -217,14 +217,25 @@ func (db *C2KV) restoreImMemTable() {
 
 		go func() {
 			for {
-				ent, err := reader.ReadEntry()
-				if err != nil && err.Error() == "EOF" {
-					signalC <- err
+				header, err := reader.ReadHeader()
+				ent, err := reader.ReadEntry(header)
+				if err != nil {
+					if err.Error() == "EOF" {
+						break
+					} else {
+						log.Panicf("read header failed", err)
+					}
+				}
+				if header.Index < persistIndex {
+					continue
+				}
+				if header.Index == appliedIndex {
 					break
 				}
+
 				kv := marshal.GobDecode(ent.Data)
 				kvC <- &kv
-				reader.Next(ent.)
+				reader.Next(header.EntrySize)
 			}
 		}()
 
@@ -264,24 +275,30 @@ func (db *C2KV) restoreMemEntries() {
 	}
 
 	for Node != nil {
+		ents := make([]*pb.Entry, 0)
 		Seg := Node.Seg
 		reader := wal.NewSegmentReader(Seg)
-		kvs, err := reader.ReadEntries()
 		for {
-			ent, err := reader.ReadEntry()
+			header, err := reader.ReadHeader()
+			ent, err := reader.ReadEntry(header)
 			if err != nil {
 				if err.Error() == "EOF" {
 					break
 				} else {
-					return nil, err
+					log.Panicf("read header failed", err)
 				}
 			}
+
+			if header.Index < appliedIndex {
+				continue
+			}
+
 			ents = append(ents, ent)
+			reader.Next(header.EntrySize)
 		}
-		if err != nil {
-			log.Panic("read header failed")
-		}
-		db.entries = append(db.entries, kvs...)
+
+		db.entries = append(db.entries, ents...)
+		//todo 更新offset
 		Node = Node.Next
 	}
 	return
@@ -301,6 +318,8 @@ func (db *C2KV) Scan(lowKey []byte, highKey []byte) (err error) {
 	return err
 }
 
+//
+
 func (db *C2KV) Entries(lo, hi, maxSize uint64) (entries []*pb.Entry, err error) {
 	if int(lo) < len(db.entries) {
 		return nil, errors.New("some entries is compacted")
@@ -318,6 +337,7 @@ func (db *C2KV) SaveHardState(st pb.HardState) error {
 	return db.wal.RaftStateSegment.Flush()
 }
 
+// SaveEntries 保存unstable entry到稳定存储中
 func (db *C2KV) SaveEntries(entries []*pb.Entry) error {
 	err := db.wal.Write(entries)
 	if err != nil {
@@ -357,5 +377,5 @@ func (db *C2KV) Close() {
 }
 
 func (db *C2KV) Truncate(index uint64) error {
-
+	return db.wal.Truncate(index)
 }
