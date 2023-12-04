@@ -21,9 +21,10 @@ const (
 )
 
 type segment struct {
-	Index     uint64 //该segment文件中的最小log index
-	Fd        *os.File
-	blockPool *BlockPool
+	Index              uint64 //该segment文件中的最小log index
+	defaultSegmentSize int
+	Fd                 *os.File
+	blockPool          *BlockPool
 
 	blocks        []byte //当前segment使用的blocks
 	blockNums     int    //记录当前segment已分配的blocks数量
@@ -34,7 +35,7 @@ type segment struct {
 	closed           bool
 }
 
-func NewSegmentFile(dirPath string) (*segment, error) {
+func NewSegmentFile(dirPath string, segmentSize int) (*segment, error) {
 	fd, err := iooperator.OpenDirectIOFile(SegmentFileName(dirPath, DefaultMinLogIndex), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
@@ -43,14 +44,10 @@ func NewSegmentFile(dirPath string) (*segment, error) {
 	blockPool := NewBlockPool()
 	//default use 4 block as new active segment blocks
 	return &segment{
-		Index:            DefaultMinLogIndex,
-		Fd:               fd,
-		blocks:           blockPool.Block4,
-		blocksOffset:     0,
-		BlocksRemainSize: Block4,
-		blockNums:        num4,
-		segmentOffset:    0,
-		blockPool:        blockPool,
+		Index:              DefaultMinLogIndex,
+		Fd:                 fd,
+		blockPool:          blockPool,
+		defaultSegmentSize: segmentSize,
 	}, nil
 }
 
@@ -80,20 +77,41 @@ func SegmentFileName(walDirPath string, index uint64) string {
 }
 
 func (seg *segment) Write(data []byte, bytesCount int, firstIndex uint64) (err error) {
+	//当Blocks为nil时重新分配blocks
+	if seg.blocks == nil {
+		blocks, blockNums := seg.blockPool.AlignedBlock(bytesCount)
+		seg.blockNums = seg.blockNums + blockNums
+		seg.blocks = blocks
+		seg.BlocksRemainSize = seg.blockNums * Block4096
+	}
+
 	if bytesCount < seg.BlocksRemainSize {
 		copy(seg.blocks[seg.blocksOffset:bytesCount], data)
 	} else {
 		seg.blockPool.recycleBlock(seg.blocks)
 		seg.blocksOffset = 0
+		seg.segmentOffset += len(seg.blocks)
+
 		newBlock, nums := seg.blockPool.AlignedBlock(bytesCount)
-		seg.segmentOffset = seg.segmentOffset + nums*Block4096
 		seg.BlocksRemainSize = nums * Block4096
 		seg.blockNums = seg.blockNums + nums
 		seg.blocks = newBlock
 		copy(seg.blocks[seg.blocksOffset:bytesCount], data)
 	}
 
-	if err = seg.Flush(bytesCount); err == nil && seg.Index == DefaultMinLogIndex {
+	if err = seg.Flush(); err == nil {
+		//超过Block4或者Block8的块不会回收直接清空
+		if bytesCount > Block4 || bytesCount > Block8 {
+			seg.blocks = nil
+			seg.blocksOffset = 0
+			seg.BlocksRemainSize = 0
+			seg.segmentOffset += len(seg.blocks)
+		}
+		seg.blocksOffset += bytesCount
+		seg.BlocksRemainSize -= bytesCount
+	}
+
+	if seg.Index == DefaultMinLogIndex {
 		seg.Index = firstIndex
 		err = os.Rename(seg.Fd.Name(), SegmentFileName(filepath.Dir(seg.Fd.Name()), seg.Index))
 		if err != nil {
@@ -105,7 +123,7 @@ func (seg *segment) Write(data []byte, bytesCount int, firstIndex uint64) (err e
 	return
 }
 
-func (seg *segment) Flush(bytesCount int) (err error) {
+func (seg *segment) Flush() (err error) {
 	_, err = seg.Fd.Seek(int64(seg.segmentOffset), io.SeekStart)
 	if err != nil {
 		return err
@@ -115,9 +133,6 @@ func (seg *segment) Flush(bytesCount int) (err error) {
 	if err != nil {
 		return err
 	}
-
-	seg.blocksOffset += bytesCount
-	seg.BlocksRemainSize -= bytesCount
 
 	return
 }
@@ -136,7 +151,10 @@ func (seg *segment) Close() error {
 
 func (seg *segment) Remove() error {
 	if err := seg.Close(); err == nil {
-		os.Remove(seg.Fd.Name())
+		err = os.Remove(seg.Fd.Name())
+		if err != nil {
+			log.Errorf("remove segment file %s failed: %v", seg.Fd.Name(), err)
+		}
 	} else {
 		return err
 	}

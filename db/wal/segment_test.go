@@ -49,7 +49,7 @@ func TestSegmentFileName(t *testing.T) {
 }
 
 func TestSegmentFile_NewSegmentFile(t *testing.T) {
-	segment, err := NewSegmentFile(TestDirPath)
+	segment, err := NewSegmentFile(TestWALConfig1.WalDirPath, TestWALConfig1.SegmentSize)
 	if err != nil {
 		t.Errorf("Expected nil, but got %v", err)
 	}
@@ -63,12 +63,13 @@ func TestSegmentFile_NewSegmentFile(t *testing.T) {
 }
 
 func TestSegmentFile_Write(t *testing.T) {
-	segment, err := NewSegmentFile(TestDirPath)
+	segment, err := NewSegmentFile(TestWALConfig1.WalDirPath, TestWALConfig1.SegmentSize)
 	if err != nil {
 		t.Errorf("Expected nil, but got %v", err)
 	}
 
 	//todo 测试不同分支的write
+	// 1、第一次就写入超过block4096*4的场景
 	data, bytesCount := MarshalWALEntries(entries1)
 	segment.Write(data, bytesCount, entries1[0].Index)
 
@@ -79,7 +80,7 @@ func TestSegmentFile_Write(t *testing.T) {
 //
 
 func MockSegmentWrite(entries []*pb.Entry) *segment {
-	segment, _ := NewSegmentFile(TestDirPath)
+	segment, _ := NewSegmentFile(TestWALConfig1.WalDirPath, TestWALConfig1.SegmentSize)
 	data, bytesCount := MarshalWALEntries(entries)
 	segment.Write(data, bytesCount, entries[0].Index)
 	return segment

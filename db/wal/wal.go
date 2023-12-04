@@ -27,7 +27,7 @@ type WAL struct {
 }
 
 func NewWal(config config.WalConfig) (*WAL, error) {
-	acSegment, err := NewSegmentFile(config.WalDirPath)
+	acSegment, err := NewSegmentFile(config.WalDirPath, config.SegmentSize)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 	// segment pipeline boosts the throughput of the WAL.
 	go func() {
 		for {
-			acSegment, err = NewSegmentFile(config.WalDirPath)
+			acSegment, err = NewSegmentFile(config.WalDirPath, config.SegmentSize)
 			if err != nil {
 				log.Errorf("create a new segment file error", err)
 			}
@@ -79,14 +79,14 @@ func (wal *WAL) Write(entries []*pb.Entry) error {
 
 func (wal *WAL) activeSegmentIsFull(delta int) bool {
 	//应尽可能使segment大小均匀，这样查找能提高查找某个entry的效率
+	//active segment size 是根据目前已分配的block数量来计算的，而不是实际数据占用空间
 	actSegSize := wal.ActiveSegment.Size()
-	comSize := actSegSize + delta
-	if comSize > wal.SegmentSize {
-		if actSegSize*2 > wal.SegmentSize {
-			return false
-		}
-	}
-	return true
+	totalSize := actSegSize + delta
+
+	// 1、total size > wal.segmentSize
+	// 2、delta > wal.SegmentSize*0.5
+	// 3、已经分配了内存空间
+	return totalSize > wal.SegmentSize && float64(delta) > float64(wal.SegmentSize)*0.5 && wal.ActiveSegment.blockNums != 0
 }
 
 func (wal *WAL) rotateActiveSegment() error {
