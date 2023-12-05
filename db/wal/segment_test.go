@@ -7,17 +7,6 @@ import (
 	"testing"
 )
 
-func TestSegmentFileName(t *testing.T) {
-	var id int64
-	segmentName := SegmentFileName("tmp", 1)
-	_, err := fmt.Sscanf(segmentName, "%d.SEG", &id)
-	if err != nil {
-		fmt.Println("提取失败:", err)
-	}
-	fmt.Println(segmentName)
-	fmt.Println(id)
-}
-
 func TestSegmentFile_NewSegmentFile(t *testing.T) {
 	segment, err := NewSegmentFile(TestWALConfig1.WalDirPath, TestWALConfig1.SegmentSize)
 	if err != nil {
@@ -40,8 +29,8 @@ func TestSegmentFile_Write(t *testing.T) {
 
 	//todo 测试不同分支的write
 	// 1、第一次就写入超过block4096*4的场景
-	data, bytesCount := MarshalWALEntries(entries1)
-	segment.Write(data, bytesCount, entries1[0].Index)
+	data, bytesCount := MarshalWALEntries(Entries5)
+	segment.Write(data, bytesCount, Entries5[0].Index)
 
 	assert.EqualValues(t, len(segment.blocks), bytesCount+segment.BlocksRemainSize)
 	assert.EqualValues(t, bytesCount, segment.blocksOffset)
@@ -50,7 +39,7 @@ func TestSegmentFile_Write(t *testing.T) {
 //
 
 func TestSegmentReader_Block4(t *testing.T) {
-	segment := MockSegmentWrite(entries1)
+	segment := MockSegmentWrite(Entries5)
 	reader := NewSegmentReader(segment)
 	ents := make([]*pb.Entry, 0)
 	//确保读出的数据正确
@@ -67,7 +56,7 @@ func TestSegmentReader_Block4(t *testing.T) {
 		reader.Next(header.EntrySize)
 		ents = append(ents, entry)
 	}
-	assert.EqualValues(t, entries1, ents)
+	assert.EqualValues(t, Entries5, ents)
 }
 
 func TestSegmentReader_Blocks(t *testing.T) {
