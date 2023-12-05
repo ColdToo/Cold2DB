@@ -11,7 +11,7 @@ import (
 
 const CreatEntriesFmt = "create entries nums %d, data length %d, bytes count %s"
 
-var Entries61MB = CreateEntries(500000, 100)
+var Entries61MB = CreateEntries(500000, 250)
 var Entries133MB = CreateEntries(500000, 250)
 var Entries1MB = CreateEntries(5000, 250)
 
@@ -27,6 +27,23 @@ func CreateEntries(num int, length int) []*pb.Entry {
 		entries[i] = entry
 	}
 	return entries
+}
+
+func SplitEntries(interval int, entries []*pb.Entry) [][]*pb.Entry {
+	totalEntries := make([][]*pb.Entry, 0)
+	count := 0
+	subEntries := make([]*pb.Entry, 0)
+	for _, e := range entries {
+		if count <= interval {
+			subEntries = append(subEntries, e)
+			count++
+		} else {
+			totalEntries = append(totalEntries, subEntries)
+			subEntries = make([]*pb.Entry, 0)
+			count = 0
+		}
+	}
+	return totalEntries
 }
 
 func generateData(length int) []byte {
@@ -82,13 +99,18 @@ func TestWAL_Truncate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 60; i++ {
-		err = wal.Write(Entries1MB)
+	defer func() {
+		err = wal.Close()
+		err = wal.Remove()
+	}()
+	ents := SplitEntries(10000, Entries61MB)
+	for _, e := range ents {
+		err = wal.Write(e)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	wal.Truncate(2500)
+	wal.Truncate(25000)
 	err = wal.Close()
 	err = wal.Remove()
 }

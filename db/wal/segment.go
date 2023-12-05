@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 type SegmentID = uint32
@@ -35,8 +36,9 @@ type segment struct {
 	closed           bool
 }
 
+// todo 生成随机名字的segmentfile
 func NewSegmentFile(dirPath string, segmentSize int) (*segment, error) {
-	fd, err := iooperator.OpenDirectIOFile(SegmentFileName(dirPath, DefaultMinLogIndex), os.O_CREATE|os.O_RDWR, 0644)
+	fd, err := iooperator.OpenDirectIOFile(filepath.Join(dirPath, fmt.Sprintf("%014d"+SegSuffix, time.Now().Unix())), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -106,16 +108,17 @@ func (seg *segment) Write(data []byte, bytesCount int, firstIndex uint64) (err e
 			seg.blocksOffset = 0
 			seg.BlocksRemainSize = 0
 			seg.segmentOffset += len(seg.blocks)
+		} else {
+			seg.blocksOffset += bytesCount
+			seg.BlocksRemainSize -= bytesCount
 		}
-		seg.blocksOffset += bytesCount
-		seg.BlocksRemainSize -= bytesCount
 	}
 
 	if seg.Index == DefaultMinLogIndex {
 		seg.Index = firstIndex
 		err = os.Rename(seg.Fd.Name(), SegmentFileName(filepath.Dir(seg.Fd.Name()), seg.Index))
 		if err != nil {
-			log.Errorf("rename segment file %s failed: %v", seg.Fd.Name(), err)
+			println(err)
 			return err
 		}
 	}

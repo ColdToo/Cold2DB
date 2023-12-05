@@ -39,7 +39,10 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 		for {
 			acSegment, err = NewSegmentFile(config.WalDirPath, config.SegmentSize)
 			if err != nil {
-				log.Errorf("create a new segment file error", err)
+				log.Panicf("create a new segment file error", err)
+			}
+			if acSegment.Fd == nil {
+				log.Panicf("create a new segment file error", err)
 			}
 			segmentPipe <- acSegment
 		}
@@ -67,11 +70,9 @@ func (wal *WAL) Write(entries []*pb.Entry) error {
 		bytesCount += n
 	}
 
-	// if the active segment file is full, sync it and create a new one.
+	// if current active segment file is full, create a new one.
 	if wal.activeSegmentIsFull(bytesCount) {
-		if err := wal.rotateActiveSegment(); err != nil {
-			return err
-		}
+		wal.rotateActiveSegment()
 	}
 
 	return wal.ActiveSegment.Write(data, bytesCount, entries[0].Index)
@@ -89,12 +90,11 @@ func (wal *WAL) activeSegmentIsFull(delta int) bool {
 	return totalSize > wal.SegmentSize && float64(delta) > float64(wal.SegmentSize)*0.5 && wal.ActiveSegment.blockNums != 0
 }
 
-func (wal *WAL) rotateActiveSegment() error {
+func (wal *WAL) rotateActiveSegment() {
 	//从active pipeline获取已经创建好的pipeline
 	newSegment := <-wal.SegmentPipe
 	wal.OrderSegmentList.Insert(wal.ActiveSegment)
 	wal.ActiveSegment = newSegment
-	return nil
 }
 
 // Truncate truncate掉index之后的所有segment以及index之后的entry
