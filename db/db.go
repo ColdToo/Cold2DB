@@ -130,7 +130,7 @@ func (db *C2KV) restoreMemoryFromWAL() {
 			if err != nil {
 				log.Panicf("can not scan file")
 			}
-			segmentFile, err := wal.OpenOldSegmentFile(db.wal.Config.WalDirPath, id)
+			segmentFile, err := wal.OpenOldSegmentFile(db.wal.WalDirPath, id)
 			if err != nil {
 				log.Panicf("open segment file failed")
 			}
@@ -139,13 +139,13 @@ func (db *C2KV) restoreMemoryFromWAL() {
 		}
 
 		if strings.HasSuffix(fName, wal.RaftSuffix) {
-			db.wal.RaftStateSegment, err = wal.OpenRaftStateSegment(db.wal.Config.WalDirPath, file.Name())
+			db.wal.RaftStateSegment, err = wal.OpenRaftStateSegment(db.wal.WalDirPath, file.Name())
 			if err != nil {
 				return
 			}
 		}
 		if strings.HasSuffix(fName, wal.KVSuffix) {
-			db.wal.KVStateSegment, err = wal.OpenKVStateSegment(db.wal.Config.WalDirPath, file.Name())
+			db.wal.KVStateSegment, err = wal.OpenKVStateSegment(db.wal.WalDirPath, file.Name())
 			if err != nil {
 				return
 			}
@@ -153,14 +153,14 @@ func (db *C2KV) restoreMemoryFromWAL() {
 	}
 
 	if db.wal.RaftStateSegment == nil {
-		db.wal.RaftStateSegment, err = wal.OpenRaftStateSegment(db.wal.Config.WalDirPath, time.Now().String())
+		db.wal.RaftStateSegment, err = wal.OpenRaftStateSegment(db.wal.WalDirPath, time.Now().String())
 		if err != nil {
 			return
 		}
 	}
 
 	if db.wal.KVStateSegment == nil {
-		db.wal.KVStateSegment, err = wal.OpenKVStateSegment(db.wal.Config.WalDirPath, time.Now().String())
+		db.wal.KVStateSegment, err = wal.OpenKVStateSegment(db.wal.WalDirPath, time.Now().String())
 		if err != nil {
 			return
 		}

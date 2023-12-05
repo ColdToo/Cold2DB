@@ -7,11 +7,11 @@ import (
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
+	"github.com/google/uuid"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 )
 
 type SegmentID = uint32
@@ -22,6 +22,7 @@ const (
 )
 
 type segment struct {
+	WalDirPath         string
 	Index              uint64 //该segment文件中的最小log index
 	defaultSegmentSize int
 	Fd                 *os.File
@@ -36,9 +37,8 @@ type segment struct {
 	closed           bool
 }
 
-// todo 生成随机名字的segmentfile
 func NewSegmentFile(dirPath string, segmentSize int) (*segment, error) {
-	fd, err := iooperator.OpenDirectIOFile(filepath.Join(dirPath, fmt.Sprintf("%014d"+SegSuffix, time.Now().Unix())), os.O_CREATE|os.O_RDWR, 0644)
+	fd, err := iooperator.OpenDirectIOFile(filepath.Join(dirPath, fmt.Sprintf("%s"+TMPSuffix, uuid.New().String())), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -46,6 +46,7 @@ func NewSegmentFile(dirPath string, segmentSize int) (*segment, error) {
 	blockPool := NewBlockPool()
 	//default use 4 block as new active segment blocks
 	return &segment{
+		WalDirPath:         dirPath,
 		Index:              DefaultMinLogIndex,
 		Fd:                 fd,
 		blockPool:          blockPool,
@@ -114,11 +115,18 @@ func (seg *segment) Write(data []byte, bytesCount int, firstIndex uint64) (err e
 		}
 	}
 
+	//修改名字
 	if seg.Index == DefaultMinLogIndex {
 		seg.Index = firstIndex
-		err = os.Rename(seg.Fd.Name(), SegmentFileName(filepath.Dir(seg.Fd.Name()), seg.Index))
+		seg.Fd.Close()
+		err = os.Rename(seg.Fd.Name(), SegmentFileName(seg.WalDirPath, seg.Index))
 		if err != nil {
-			println(err)
+			log.Panicf("open segment file %s failed: %v", seg.Fd.Name(), err)
+			return err
+		}
+		seg.Fd, err = iooperator.OpenDirectIOFile(SegmentFileName(seg.WalDirPath, seg.Index), os.O_CREATE|os.O_RDWR, 0644)
+		if err != nil {
+			log.Panicf("open segment file %s failed: %v", seg.Fd.Name(), err)
 			return err
 		}
 	}

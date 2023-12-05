@@ -11,6 +11,7 @@ import (
 const (
 	FileModePerm = 0644
 	SegSuffix    = ".SEG"
+	TMPSuffix    = ".TMP"
 	RaftSuffix   = ".RAFT-SEG"
 	KVSuffix     = ".KV-SEG"
 )
@@ -32,16 +33,13 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 		return nil, err
 	}
 
-	segmentPipe := make(chan *segment, 0)
+	segmentPipe := make(chan *segment, 5)
 
 	// segment pipeline boosts the throughput of the WAL.
 	go func() {
 		for {
 			acSegment, err = NewSegmentFile(config.WalDirPath, config.SegmentSize)
 			if err != nil {
-				log.Panicf("create a new segment file error", err)
-			}
-			if acSegment.Fd == nil {
 				log.Panicf("create a new segment file error", err)
 			}
 			segmentPipe <- acSegment
@@ -102,19 +100,22 @@ func (wal *WAL) Truncate(index uint64) error {
 	//truncate掉index之后的所有segment包括当前的active segment
 	seg := wal.OrderSegmentList.Find(index)
 	reader := NewSegmentReader(seg)
-	header, err := reader.ReadHeader()
-	if err != nil {
-		return err
-	}
-	if header.Index == index {
-		// truncate掉index之后的ent
-		err = seg.Fd.Truncate(int64(reader.curBlockNum + reader.blocksOffset))
+	for {
+		header, err := reader.ReadHeader()
 		if err != nil {
-			log.Errorf("Truncate segment file failed", err)
+			return err
 		}
+		if header.Index == index {
+			err = seg.Fd.Truncate(int64(reader.curBlockNum + reader.blocksOffset))
+			if err != nil {
+				log.Errorf("Truncate segment file failed", err)
+			}
+			break
+		}
+		reader.Next(header.EntrySize)
 	}
 
-	// 1、truncate掉index后的所有segment文件
+	// 1、删除index后的所有segment文件
 	// 2、移除ordered segment list中index之后的segment
 	segList := wal.OrderSegmentList
 	for segList.Head != nil {
@@ -123,14 +124,14 @@ func (wal *WAL) Truncate(index uint64) error {
 			continue
 		}
 
-		removeNode := segList.Head.Next
+		removeHead := segList.Head.Next
 		segList.Head.Next = nil
-		for removeNode != nil {
-			err := removeNode.Seg.Remove()
+		for removeHead != nil {
+			err := removeHead.Seg.Remove()
 			if err != nil {
 				log.Errorf("remove segment file failed", err)
 			}
-			removeNode = removeNode.Next
+			removeHead = removeHead.Next
 		}
 		break
 	}
