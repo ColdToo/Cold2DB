@@ -95,8 +95,11 @@ func (wal *WAL) rotateActiveSegment() {
 	wal.ActiveSegment = newSegment
 }
 
-// Truncate truncate掉index之后的所有segment以及index之后的entry
+// Truncate truncate掉index之后的所有segment以及该index之后的entry
 func (wal *WAL) Truncate(index uint64) error {
+	wal.OrderSegmentList.Insert(wal.ActiveSegment)
+	wal.ActiveSegment = <-wal.SegmentPipe
+
 	//truncate掉index之后的所有segment包括当前的active segment
 	seg := wal.OrderSegmentList.Find(index)
 	reader := NewSegmentReader(seg)
@@ -105,8 +108,9 @@ func (wal *WAL) Truncate(index uint64) error {
 		if err != nil {
 			return err
 		}
+		reader.Next(header.EntrySize)
 		if header.Index == index {
-			err = seg.Fd.Truncate(int64(reader.curBlockNum + reader.blocksOffset))
+			err = seg.Fd.Truncate(int64(reader.blocksOffset))
 			if err != nil {
 				log.Errorf("Truncate segment file failed", err)
 			}
@@ -115,8 +119,6 @@ func (wal *WAL) Truncate(index uint64) error {
 		reader.Next(header.EntrySize)
 	}
 
-	// 1、删除index后的所有segment文件
-	// 2、移除ordered segment list中index之后的segment
 	segList := wal.OrderSegmentList
 	for segList.Head != nil {
 		if segList.Head.Seg.Index < index {

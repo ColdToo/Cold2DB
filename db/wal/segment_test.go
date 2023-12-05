@@ -4,38 +4,8 @@ import (
 	"fmt"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/stretchr/testify/assert"
-	"os"
 	"testing"
 )
-
-var TestDirPath, _ = os.Getwd()
-
-var entries1 = []*pb.Entry{
-	{
-		Term:  1,
-		Index: 1,
-		Type:  pb.EntryNormal,
-		Data:  []byte("hello world1"),
-	},
-	{
-		Term:  2,
-		Index: 2,
-		Type:  pb.EntryNormal,
-		Data:  []byte("hello world2"),
-	},
-	{
-		Term:  3,
-		Index: 3,
-		Type:  pb.EntryNormal,
-		Data:  []byte("hello world3"),
-	},
-	{
-		Term:  4,
-		Index: 4,
-		Type:  pb.EntryNormal,
-		Data:  []byte("hello world4"),
-	},
-}
 
 func TestSegmentFileName(t *testing.T) {
 	var id int64
@@ -56,7 +26,7 @@ func TestSegmentFile_NewSegmentFile(t *testing.T) {
 	assert.EqualValues(t, segment.Index, DefaultMinLogIndex)
 	assert.EqualValues(t, segment.Size(), Block4)
 	assert.EqualValues(t, segment.BlocksRemainSize, Block4)
-	assert.EqualValues(t, segment.Fd.Name(), SegmentFileName(TestDirPath, DefaultMinLogIndex))
+	assert.EqualValues(t, segment.Fd.Name(), SegmentFileName(TestWalDirPath, DefaultMinLogIndex))
 	assert.EqualValues(t, segment.blocksOffset, 0)
 	segment.Close()
 	segment.Remove()
@@ -79,16 +49,30 @@ func TestSegmentFile_Write(t *testing.T) {
 
 //
 
-func MockSegmentWrite(entries []*pb.Entry) *segment {
-	segment, _ := NewSegmentFile(TestWALConfig1.WalDirPath, TestWALConfig1.SegmentSize)
-	data, bytesCount := MarshalWALEntries(entries)
-	segment.Write(data, bytesCount, entries[0].Index)
-	return segment
-}
-
 func TestSegmentReader_Block4(t *testing.T) {
 	segment := MockSegmentWrite(entries1)
-	seg, err := OpenOldSegmentFile(TestDirPath, segment.Index)
+	reader := NewSegmentReader(segment)
+	ents := make([]*pb.Entry, 0)
+	//确保读出的数据正确
+	assert.EqualValues(t, segment.blocks, reader.blocks)
+	for {
+		header, err := reader.ReadHeader()
+		if err != nil && err.Error() == "EOF" {
+			break
+		}
+		entry, err := reader.ReadEntry(header)
+		if err != nil {
+			t.Error(err)
+		}
+		reader.Next(header.EntrySize)
+		ents = append(ents, entry)
+	}
+	assert.EqualValues(t, entries1, ents)
+}
+
+func TestSegmentReader_Blocks(t *testing.T) {
+	segment := MockSegmentWrite(Entries1MB)
+	seg, err := OpenOldSegmentFile(TestWalDirPath, segment.Index)
 	if err != nil {
 		t.Error(err)
 	}
@@ -108,7 +92,7 @@ func TestSegmentReader_Block4(t *testing.T) {
 		reader.Next(header.EntrySize)
 		ents = append(ents, entry)
 	}
-	assert.EqualValues(t, entries1, ents)
+	assert.EqualValues(t, Entries1MB, ents)
 }
 
 //
