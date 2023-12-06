@@ -18,10 +18,6 @@ func TestWAL_Truncate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		err = wal.Close()
-		err = wal.Remove()
-	}()
 	ents := SplitEntries(10000, Entries61MB)
 	for _, e := range ents {
 		err = wal.Write(e)
@@ -46,6 +42,8 @@ func TestWAL_Truncate(t *testing.T) {
 	}
 
 	assert.EqualValues(t, entries2, entries3)
+	err = wal.Close()
+	err = wal.Remove()
 }
 
 func TestWAL_Write(t *testing.T) {

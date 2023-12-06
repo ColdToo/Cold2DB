@@ -6,6 +6,8 @@ import (
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 const (
@@ -109,7 +111,6 @@ func (wal *WAL) Truncate(index uint64) error {
 		}
 		reader.Next(header.EntrySize)
 		if header.Index == index {
-			//todo 需要修改truncate之后segment相关数据
 			err = seg.Fd.Truncate(int64(reader.blocksOffset))
 			if err != nil {
 				log.Errorf("Truncate segment file failed", err)
@@ -123,28 +124,35 @@ func (wal *WAL) Truncate(index uint64) error {
 }
 
 func (wal *WAL) Close() error {
-	segList := wal.OrderSegmentList
-	for segList.Head != nil {
-		err := segList.Head.Seg.Close()
+	node := wal.OrderSegmentList.Head
+	for node != nil {
+		err := node.Seg.Close()
 		if err != nil {
 			return err
 		}
-		segList.Head = segList.Head.Next
+		node = node.Next
 	}
 	// close the active segment file.
 	return wal.ActiveSegment.Close()
 }
 
 func (wal *WAL) Remove() error {
-	segList := wal.OrderSegmentList
-	for segList.Head != nil {
-		err := os.Remove(segList.Head.Seg.Fd.Name())
+	node := wal.OrderSegmentList.Head
+	for node != nil {
+		err := node.Seg.Remove()
 		if err != nil {
 			return err
 		}
-		segList.Head = segList.Head.Next
+		node = node.Next
 	}
 
-	// delete the active segment file.
-	return wal.ActiveSegment.Remove()
+	wal.ActiveSegment.Remove()
+
+	filepath.Walk(wal.WalDirPath, func(path string, info os.FileInfo, err error) error {
+		if !info.IsDir() && strings.HasSuffix(path, ".TMP") {
+			os.Remove(path)
+		}
+		return nil
+	})
+	return nil
 }

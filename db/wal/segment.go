@@ -85,7 +85,7 @@ func (seg *segment) Write(data []byte, bytesCount int, firstIndex uint64) (err e
 		seg.BlocksRemainSize = blockNums * Block4096
 		seg.blocksOffset = 0
 		seg.blocks = blocks
-		seg.blockNums = seg.blockNums + blockNums
+		seg.blockNums += blockNums
 	}
 
 	if bytesCount < seg.BlocksRemainSize {
@@ -107,6 +107,7 @@ func (seg *segment) Write(data []byte, bytesCount int, firstIndex uint64) (err e
 		if len(seg.blocks) > Block4 || len(seg.blocks) > Block8 {
 			seg.segmentOffset += len(seg.blocks)
 			seg.blocks = nil
+			seg.BlocksRemainSize = 0
 		} else {
 			seg.blocksOffset += bytesCount
 			seg.BlocksRemainSize -= bytesCount
@@ -161,13 +162,20 @@ func (seg *segment) Close() error {
 }
 
 func (seg *segment) Remove() error {
-	if err := seg.Close(); err == nil {
-		err = os.Remove(seg.Fd.Name())
+	if seg.closed {
+		err := os.Remove(seg.Fd.Name())
 		if err != nil {
 			log.Errorf("remove segment file %s failed: %v", seg.Fd.Name(), err)
 		}
 	} else {
-		return err
+		if err := seg.Close(); err == nil {
+			err = os.Remove(seg.Fd.Name())
+			if err != nil {
+				log.Errorf("remove segment file %s failed: %v", seg.Fd.Name(), err)
+			}
+		} else {
+			return err
+		}
 	}
 	return nil
 }
@@ -254,6 +262,7 @@ type segmentReader struct {
 
 func NewSegmentReader(seg *segment) *segmentReader {
 	blocks := alignedBlock(seg.blockNums)
+	seg.Fd.Seek(0, io.SeekStart)
 	_, err := seg.Fd.Read(blocks)
 	if err != nil {
 		log.Panicf("read file error", err)
@@ -279,6 +288,7 @@ func (sr *segmentReader) ReadHeader() (eHeader marshal.WalEntryHeader, err error
 			blockNums++
 		}
 
+		//若当前块为blocks中的最后一块return EOF
 		if len(sr.blocks)/Block4096 == blockNums {
 			return eHeader, errors.New("EOF")
 		}
