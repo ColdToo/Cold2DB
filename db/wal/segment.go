@@ -3,22 +3,22 @@ package wal
 import (
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
+
 	"github.com/ColdToo/Cold2DB/db/iooperator"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/google/uuid"
-	"io"
-	"os"
-	"path/filepath"
-	"sync"
 )
 
 type SegmentID = uint32
 
 const (
 	DefaultMinLogIndex = 0
-	InitialBlockNum    = 1
 )
 
 type segment struct {
@@ -225,9 +225,24 @@ func (oll *OrderedSegmentList) Find(index uint64) *segment {
 	return nil
 }
 
-func (oll *OrderedSegmentList) Truncate(index uint64) (err error) {
+func (oll *OrderedSegmentList) truncate(index uint64) {
+	node := oll.Head
+	prev := new(Node)
+	for node != nil {
+		if node.Seg.Index < index {
+			prev = node
+			node = node.Next
+			continue
+		}
+		prev.Next = nil
+		break
+	}
 
-	return nil
+	for node != nil {
+		node.Seg.Close()
+		node.Seg.Remove()
+		node = node.Next
+	}
 }
 
 // restore memory and truncate wal will use reader
@@ -235,19 +250,17 @@ type segmentReader struct {
 	blocks       []byte
 	blocksOffset int // current read pointer in blocks
 	blocksNums   int // blocks  number
-	curBlockNum  int // current block position in blocks
 }
 
 func NewSegmentReader(seg *segment) *segmentReader {
 	blocks := alignedBlock(seg.blockNums)
 	_, err := seg.Fd.Read(blocks)
 	if err != nil {
-		return nil
+		log.Panicf("read file error", err)
 	}
 	return &segmentReader{
-		blocks:      blocks,
-		blocksNums:  seg.blockNums,
-		curBlockNum: InitialBlockNum,
+		blocks:     blocks,
+		blocksNums: seg.blockNums,
 	}
 }
 
@@ -258,14 +271,19 @@ func (sr *segmentReader) ReadHeader() (eHeader marshal.WalEntryHeader, err error
 	eHeader = marshal.DecodeWALEntryHeader(buf)
 
 	if eHeader.IsEmpty() {
-		//whether the current block is the last block in blocks？
-		if sr.curBlockNum == sr.blocksNums {
+		//当前blocks已经读空，需要判断下一个block是否能读出数据若为空则返回EOF
+		//算出当前的指针位于blocks中的第几个块
+		//若为blocks中的最后一个块返回eof,若不为最后一个块则移动指针到下一个块读取header
+		blockNums := sr.blocksOffset / Block4096
+		if remain := sr.blocksOffset % Block4096; remain > 0 {
+			blockNums++
+		}
+
+		if len(sr.blocks)/Block4096 == blockNums {
 			return eHeader, errors.New("EOF")
 		}
 
-		//move to next block
-		sr.curBlockNum++
-		sr.blocksOffset = sr.curBlockNum * Block4096
+		sr.blocksOffset = blockNums * Block4096
 		copy(buf, sr.blocks[sr.blocksOffset:sr.blocksOffset+marshal.ChunkHeaderSize])
 		eHeader = marshal.DecodeWALEntryHeader(buf)
 		if eHeader.IsEmpty() {

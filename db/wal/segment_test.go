@@ -25,7 +25,12 @@ func TestSegmentFile_Write(t *testing.T) {
 	}
 
 	//todo 测试不同分支的write
-	// 1、第一次就写入超过block4096*4的场景
+	// 1、写入<block4
+	// 2、写入>block4，<block8
+	// 3、写入大于block8
+	// 4、连续写入<block4的数据
+	// 5、连续写入>block4，<block8的数据
+	// 6、连续写入大于block8的数据
 	data, bytesCount := MarshalWALEntries(Entries5)
 	segment.Write(data, bytesCount, Entries5[0].Index)
 
@@ -33,10 +38,9 @@ func TestSegmentFile_Write(t *testing.T) {
 	assert.EqualValues(t, bytesCount, segment.blocksOffset)
 }
 
-//
-
+// todo 在不同的写入场景下测试read
 func TestSegmentReader_Block4(t *testing.T) {
-	segment := MockSegmentWrite(Entries5)
+	segment := MockSegmentWrite(Entries20)
 	reader := NewSegmentReader(segment)
 	ents := make([]*pb.Entry, 0)
 	//确保读出的数据正确
@@ -53,11 +57,12 @@ func TestSegmentReader_Block4(t *testing.T) {
 		reader.Next(header.EntrySize)
 		ents = append(ents, entry)
 	}
-	assert.EqualValues(t, Entries5, ents)
+	assert.EqualValues(t, Entries20, ents)
 }
 
+// 写入的数据量大于block8
 func TestSegmentReader_Blocks(t *testing.T) {
-	segment := MockSegmentWrite(Entries1MB)
+	segment := MockSegmentWrite(Entries61MB)
 	reader := NewSegmentReader(segment)
 	ents := make([]*pb.Entry, 0)
 	//确保读出的数据正确
@@ -73,7 +78,7 @@ func TestSegmentReader_Blocks(t *testing.T) {
 		reader.Next(header.EntrySize)
 		ents = append(ents, entry)
 	}
-	assert.EqualValues(t, Entries1MB, ents)
+	assert.EqualValues(t, Entries61MB, ents)
 }
 
 //

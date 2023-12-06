@@ -16,6 +16,7 @@ var Entries61MB = CreateEntries(50000, 250)
 var Entries133MB = CreateEntries(500000, 250)
 var Entries1MB = CreateEntries(5000, 250)
 var Entries5 = CreateEntries(5, 250)
+var Entries20 = CreateEntries(40, 250)
 
 var TestWalDirPath, _ = os.Getwd()
 
@@ -97,4 +98,21 @@ func MockSegmentWrite(entries []*pb.Entry) *segment {
 	data, bytesCount := MarshalWALEntries(entries)
 	segment.Write(data, bytesCount, entries[0].Index)
 	return segment
+}
+
+func readEntriesBySeg(segment *segment) (entries []*pb.Entry) {
+	reader := NewSegmentReader(segment)
+	for {
+		header, err := reader.ReadHeader()
+		if err != nil && err.Error() == "EOF" {
+			break
+		}
+		entry, err := reader.ReadEntry(header)
+		if err != nil {
+			println(err)
+		}
+		reader.Next(header.EntrySize)
+		entries = append(entries, entry)
+	}
+	return
 }
