@@ -44,7 +44,6 @@ func NewSegmentFile(dirPath string, segmentSize int) (*segment, error) {
 	}
 
 	blockPool := NewBlockPool()
-	//default use 4 block as new active segment blocks
 	return &segment{
 		WalDirPath:         dirPath,
 		Index:              DefaultMinLogIndex,
@@ -83,36 +82,37 @@ func (seg *segment) Write(data []byte, bytesCount int, firstIndex uint64) (err e
 	//当Blocks为nil时重新分配blocks
 	if seg.blocks == nil {
 		blocks, blockNums := seg.blockPool.AlignedBlock(bytesCount)
-		seg.blockNums = seg.blockNums + blockNums
+		seg.BlocksRemainSize = blockNums * Block4096
+		seg.blocksOffset = 0
 		seg.blocks = blocks
-		seg.BlocksRemainSize = seg.blockNums * Block4096
+		seg.blockNums = seg.blockNums + blockNums
 	}
 
 	if bytesCount < seg.BlocksRemainSize {
 		copy(seg.blocks[seg.blocksOffset:bytesCount], data)
 	} else {
-		seg.blockPool.recycleBlock(seg.blocks)
-		seg.blocksOffset = 0
 		seg.segmentOffset += len(seg.blocks)
+		seg.blockPool.recycleBlock(seg.blocks)
 
 		newBlock, nums := seg.blockPool.AlignedBlock(bytesCount)
 		seg.BlocksRemainSize = nums * Block4096
 		seg.blockNums = seg.blockNums + nums
 		seg.blocks = newBlock
+		seg.blocksOffset = 0
 		copy(seg.blocks[seg.blocksOffset:bytesCount], data)
 	}
 
 	if err = seg.Flush(); err == nil {
 		//超过Block4或者Block8的块不会回收直接清空
-		if bytesCount > Block4 || bytesCount > Block8 {
-			seg.blocks = nil
-			seg.blocksOffset = 0
-			seg.BlocksRemainSize = 0
+		if len(seg.blocks) > Block4 || len(seg.blocks) > Block8 {
 			seg.segmentOffset += len(seg.blocks)
+			seg.blocks = nil
 		} else {
 			seg.blocksOffset += bytesCount
 			seg.BlocksRemainSize -= bytesCount
 		}
+	} else {
+		return err
 	}
 
 	//修改名字

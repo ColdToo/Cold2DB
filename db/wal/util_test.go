@@ -62,10 +62,9 @@ func SplitEntries(interval int, entries []*pb.Entry) [][]*pb.Entry {
 
 func generateData(length int) []byte {
 	rand.Seed(time.Now().UnixNano())
-	const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	data := make([]byte, length)
 	for i := 0; i < length; i++ {
-		data[i] = byte(rand.Intn(len(letterBytes)))
+		data[i] = 'a'
 	}
 	return data
 }

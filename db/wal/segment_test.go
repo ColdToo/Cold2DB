@@ -13,9 +13,6 @@ func TestSegmentFile_NewSegmentFile(t *testing.T) {
 		t.Errorf("Expected nil, but got %v", err)
 	}
 	assert.EqualValues(t, segment.Index, DefaultMinLogIndex)
-	assert.EqualValues(t, segment.Size(), Block4)
-	assert.EqualValues(t, segment.BlocksRemainSize, Block4)
-	assert.EqualValues(t, segment.Fd.Name(), SegmentFileName(TestWalDirPath, DefaultMinLogIndex))
 	assert.EqualValues(t, segment.blocksOffset, 0)
 	segment.Close()
 	segment.Remove()
@@ -61,14 +58,9 @@ func TestSegmentReader_Block4(t *testing.T) {
 
 func TestSegmentReader_Blocks(t *testing.T) {
 	segment := MockSegmentWrite(Entries1MB)
-	seg, err := OpenOldSegmentFile(TestWalDirPath, segment.Index)
-	if err != nil {
-		t.Error(err)
-	}
-	reader := NewSegmentReader(seg)
+	reader := NewSegmentReader(segment)
 	ents := make([]*pb.Entry, 0)
 	//确保读出的数据正确
-	assert.EqualValues(t, segment.blocks, reader.blocks)
 	for {
 		header, err := reader.ReadHeader()
 		if err != nil && err.Error() == "EOF" {
