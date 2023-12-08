@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"hash/crc32"
-
-	"github.com/ColdToo/Cold2DB/log"
 )
 
 const (
@@ -23,25 +22,20 @@ const (
 
 	Crc32Size = 4
 	EntrySize = 4
-	StateSize = 2
 	IndexSize = 8
-)
 
-// KVType type of Entry.
-type KVType byte
-
-const (
-	TypeDelete KVType = iota + 1
+	TypeDelete = 1
 )
 
 type KV struct {
-	Key []byte
-	V
+	Key    []byte
+	Value  *Value
+	VBytes []byte
 }
 
-func GobEncode(KV any) ([]byte, error) {
+func GobEncode(kv KV) ([]byte, error) {
 	var buf bytes.Buffer
-	err := gob.NewEncoder(&buf).Encode(KV)
+	err := gob.NewEncoder(&buf).Encode(kv)
 	if err != nil {
 		log.Errorf("encode err:", err)
 		return nil, err
@@ -57,22 +51,28 @@ func GobDecode(data []byte) (kv KV) {
 	return
 }
 
-type V struct {
-	Id        uint64
+type Value struct {
+	BatchId   uint64
 	Index     uint64
-	Type      KVType
 	TimeStamp int64
 	ExpiredAt int64
+	Type      int8
 	Value     []byte
 }
 
-func EncodeV(v *V) []byte {
+func EncodeV(v *Value) []byte {
 	return nil
 }
 
-func DecodeV(v []byte) *V {
+func DecodeV(v []byte) *Value {
 	return nil
 }
+
+// EncodeWALEntry  will encode entry into a byte slice.
+// +-------+-----------+--------+-----------+
+// |  crc  | entry size|  index |   entry
+// +-------+-----------+--------+-----------+
+// |----------HEADER------------|---BODY----+
 
 type WalEntryHeader struct {
 	Crc32     int
@@ -83,12 +83,6 @@ type WalEntryHeader struct {
 func (h WalEntryHeader) IsEmpty() bool {
 	return h.Crc32 == 0 || h.EntrySize == 0 || h.Index == 0
 }
-
-// EncodeWALEntry  will encode entry into a byte slice.
-// +-------+-----------+--------+-----------+
-// |  crc  | entry size|  index |   entry
-// +-------+-----------+--------+-----------+
-// |----------HEADER------------|---BODY----+
 
 func EncodeWALEntry(e *pb.Entry) ([]byte, int) {
 	eBytes, _ := e.Marshal()

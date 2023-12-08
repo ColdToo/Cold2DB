@@ -18,6 +18,7 @@
 package arenaskl
 
 import (
+	"github.com/ColdToo/Cold2DB/code"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
@@ -119,7 +120,7 @@ func (it *Iterator) Seek(key []byte) (found bool) {
 func (it *Iterator) put(key []byte, val []byte) error {
 	var spl [maxHeight]splice
 	if it.seekForSplice(key, &spl) {
-		return ErrRecordExists
+		return code.ErrRecordExists
 	}
 
 	if it.list.testing {
@@ -214,7 +215,7 @@ func (it *Iterator) put(key []byte, val []byte) error {
 					panic("how can another thread have inserted a node at a non-base level?")
 				}
 
-				return ErrRecordExists
+				return code.ErrRecordExists
 			}
 		}
 	}
@@ -231,7 +232,7 @@ func (it *Iterator) Set(val []byte) error {
 	}
 
 	err = it.trySetValue(newVal)
-	for err == ErrRecordExists {
+	for err == code.ErrRecordExists {
 		err = it.trySetValue(newVal)
 	}
 	return nil
@@ -241,11 +242,11 @@ func (it *Iterator) trySetValue(new uint64) error {
 	if !atomic.CompareAndSwapUint64(&it.nd.value, it.value, new) {
 		old := atomic.LoadUint64(&it.nd.value)
 		if old == deletedVal {
-			return ErrRecordDeleted
+			return code.ErrRecordDeleted
 		}
 
 		it.value = old
-		return ErrRecordUpdated
+		return code.ErrRecordUpdated
 	}
 
 	it.value = new
@@ -256,7 +257,7 @@ func (it *Iterator) Get(key []byte) (value []byte, err error) {
 	if it.Seek(key) {
 		return it.Value(), nil
 	}
-	return nil, ErrRecordNotExists
+	return nil, code.ErrRecordNotExists
 }
 
 func (it *Iterator) seekForSplice(key []byte, spl *[maxHeight]splice) (found bool) {

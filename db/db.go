@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"fmt"
+	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/db/wal"
@@ -11,6 +12,7 @@ import (
 	"github.com/ColdToo/Cold2DB/utils"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,21 +40,23 @@ type Storage interface {
 var C2 *C2KV
 
 type C2KV struct {
+	dbCfg *config.DBConfig
+
 	activeMem *Memtable
 
-	immuMems []*Memtable
+	immtableQ *MemtableQueue
 
-	flushChn chan *Memtable
+	flushC chan *Memtable
 
 	memtablePipe chan *Memtable
-
-	logOffset uint64
-
-	entries []*pb.Entry //stable raft log entries
 
 	wal *wal.WAL
 
 	valueLog *ValueLog
+
+	logOffset uint64
+
+	entries []*pb.Entry //stable raft log entries
 }
 
 func GetStorage() (Storage, error) {
@@ -71,12 +75,13 @@ func OpenDB(dbCfg *config.DBConfig) {
 
 	C2 = new(C2KV)
 	memTableFlushC := make(chan *Memtable, dbCfg.MemConfig.MemtableNums-1)
-	C2.flushChn = memTableFlushC
-
+	C2.memtablePipe = make(chan *Memtable, dbCfg.MemConfig.MemtableNums/2)
+	C2.immtableQ = NewMemtableQueue(dbCfg.MemConfig.MemtableNums)
+	C2.flushC = memTableFlushC
 	memOpt := MemOpt{
 		memSize: dbCfg.MemConfig.MemtableSize,
 	}
-	C2.activeMem, err = newMemtable(memOpt)
+	C2.activeMem, err = NewMemtable(memOpt)
 	if err != nil {
 		return
 	}
@@ -89,32 +94,45 @@ func OpenDB(dbCfg *config.DBConfig) {
 	if err != nil {
 		log.Panic("open Value log failed")
 	}
+
+	go func() {
+		for {
+			memtable, err := NewMemtable(memOpt)
+			if err != nil {
+				log.Panicf("create a new segment file error", err)
+			}
+			C2.memtablePipe <- memtable
+		}
+	}()
 }
 
-func dbCfgCheck(dbCfg *config.DBConfig) error {
+func dbCfgCheck(dbCfg *config.DBConfig) (err error) {
 	if !utils.PathExist(dbCfg.DBPath) {
-		if err := os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
+		if err = os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
 			return err
 		}
 	}
 	if !utils.PathExist(dbCfg.WalConfig.WalDirPath) {
-		if err := os.MkdirAll(dbCfg.WalConfig.WalDirPath, os.ModePerm); err != nil {
+		if err = os.MkdirAll(dbCfg.WalConfig.WalDirPath, os.ModePerm); err != nil {
 			return err
 		}
 	}
 	if !utils.PathExist(dbCfg.ValueLogConfig.ValueLogDir) {
-		if err := os.MkdirAll(dbCfg.ValueLogConfig.ValueLogDir, os.ModePerm); err != nil {
+		if err = os.MkdirAll(dbCfg.ValueLogConfig.ValueLogDir, os.ModePerm); err != nil {
 			return err
 		}
 	}
 	if dbCfg.MemConfig.MemtableNums <= 5 || dbCfg.MemConfig.MemtableNums > 20 {
-		return errors.New("")
+		return code.ErrIllegalMemtableNums
 	}
 	return nil
 }
 
+// ----------------- |  restore imm table |    restore mem entries     |
+// -----------persist-index----------apply-index-------------------commit-index----------stable-index-----------
+
 func (db *C2KV) restoreMemoryFromWAL() {
-	files, err := os.ReadDir(db.wal.Config.WalDirPath)
+	files, err := os.ReadDir(db.wal.WalDirPath)
 	if err != nil {
 		log.Panicf("open wal dir failed", err)
 	}
@@ -175,9 +193,6 @@ func (db *C2KV) restoreMemoryFromWAL() {
 	return
 }
 
-// ----------------- |  restore imm table |    restore mem entries     |
-// -----------persist-index----------apply-index-------------------commit-index----------stable-index-----------
-
 func (db *C2KV) restoreImMemTable() {
 	persistIndex := db.wal.KVStateSegment.PersistIndex
 	appliedIndex := db.wal.RaftStateSegment.AppliedIndex
@@ -225,12 +240,12 @@ func (db *C2KV) restoreImMemTable() {
 
 		select {
 		case kv := <-kvC:
-			err := memTable.put(kv)
+			//todo 是否要并发刷盘
+			err := memTable.put(kv.Key, marshal.EncodeV(kv.Value))
 			if err.Error() == "memtable is full" {
-				db.immuMems = append(db.immuMems, memTable)
-				//获取一个新的memtable写入，并将该memtable加入immtable中
+				db.immtableQ.Enqueue(memTable)
 				memTable = <-db.memtablePipe
-				memTable.put(kv)
+				memTable.put(kv.Key, marshal.EncodeV(kv.Value))
 			} else {
 				log.Panicf("read segment failed")
 			}
@@ -299,21 +314,56 @@ func (db *C2KV) Get(key []byte) (val []byte, err error) {
 }
 
 func (db *C2KV) Scan(lowKey []byte, highKey []byte) (err error) {
+	//todo memtable和vlog分别下发扫描命令然后再聚合结果
+	// 1、获取需要扫描的memtable
+	// 2、扫描vlog
+	// 3、有没有并发问题？
+	db.valueLog.Scan(lowKey, highKey)
 	return err
 }
 
-//
+func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
+	kvCs := make([]chan *marshal.KV, db.activeMem.memOpt.concurrency)
+	var bytesCount int
+	for _, kv := range kvs {
+		bytesCount += len(kv.Key)
+		kv.VBytes = marshal.EncodeV(kv.Value)
+		bytesCount += len(kv.VBytes)
+	}
+
+	//判断是否超出当前memtable大小，若超过获取新的memtable
+	if bytesCount+db.activeMem.Size() > db.activeMem.memOpt.memSize {
+		if C2.immtableQ.size > C2.immtableQ.capacity/2 {
+			C2.flushC <- C2.immtableQ.Dequeue()
+		}
+		db.immtableQ.Enqueue(db.activeMem)
+		db.activeMem = <-db.memtablePipe
+	}
+
+	//todo 并发写入active memtable 提高并发度
+	wg := &sync.WaitGroup{}
+	for _, kvC := range kvCs {
+		wg.Add(1)
+		go func(kvC chan *marshal.KV) {
+			for {
+				kv := <-kvC
+				err = db.activeMem.put(kv.Key, kv.VBytes)
+				if err != nil {
+					return
+				}
+			}
+			wg.Done()
+		}(kvC)
+	}
+	wg.Wait()
+	return nil
+}
 
 func (db *C2KV) Entries(lo, hi, maxSize uint64) (entries []*pb.Entry, err error) {
 	if int(lo) < len(db.entries) {
 		return nil, errors.New("some entries is compacted")
 	}
 	return
-}
-
-func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
-	db.activeMem.Put(kvs)
-	return nil
 }
 
 func (db *C2KV) PersistHardState(st pb.HardState) error {

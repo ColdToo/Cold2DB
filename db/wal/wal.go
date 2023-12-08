@@ -99,6 +99,7 @@ func (wal *WAL) rotateActiveSegment() {
 
 // Truncate truncate掉index之后的所有segment包括当前的active segment
 func (wal *WAL) Truncate(index uint64) error {
+	//todo 需要停止向active segment写入此时有没有并发问题？
 	wal.OrderSegmentList.Insert(wal.ActiveSegment)
 	wal.ActiveSegment = <-wal.SegmentPipe
 
@@ -114,6 +115,7 @@ func (wal *WAL) Truncate(index uint64) error {
 			err = seg.Fd.Truncate(int64(reader.blocksOffset))
 			if err != nil {
 				log.Errorf("Truncate segment file failed", err)
+				return err
 			}
 			break
 		}

@@ -3,11 +3,12 @@ package main
 import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/db"
+	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/log"
 	"time"
 )
 
-type KV = valuefile.KV
+type KV = marshal.KV
 
 type KvStore struct {
 	storage    db.Storage
@@ -30,6 +31,7 @@ func NewKVStore(proposeC chan<- []byte, requestTimeOut int) *KvStore {
 	return s
 }
 
+// todo 线性一致性读
 func (s *KvStore) Lookup(key []byte) ([]byte, error) {
 	return s.storage.Get(key)
 }
