@@ -1,7 +1,6 @@
 package db
 
 import (
-	"errors"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
@@ -9,18 +8,6 @@ import (
 	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
 	"os"
-)
-
-var (
-	ErrInvalidCrc = errors.New("partition: invalid crc")
-
-	ErrWriteSizeNotEqual = errors.New("partition: write size is not equal to entry size")
-
-	ErrEndOfEntry = errors.New("partition: end of entry in log file")
-
-	ErrUnsupportedIoType = errors.New("unsupported io type")
-
-	ErrUnsupportedValueLogType = errors.New("unsupported log file type")
 )
 
 const PartitionFormat = "PARTITION_%d"
@@ -119,7 +106,7 @@ func (v *ValueLog) ListenAndFlush() {
 }
 
 func (v *ValueLog) getKeyPartition(key []byte) int {
-	return int(v.hashKeyFunction(key) % uint64(v.partitionNum))
+	return int(v.hashKeyFunction(key) % uint64(v.partitionNums))
 }
 
 func (v *ValueLog) Close() error {

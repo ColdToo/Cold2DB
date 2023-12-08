@@ -24,15 +24,14 @@ type Storage interface {
 
 	PersistHardState(st pb.HardState) error
 	PersistUnstableEnts(entries []*pb.Entry) error
+	Truncate(index uint64) error
 
 	GetHardState() (pb.HardState, pb.ConfState, error)
 	Entries(lo, hi, maxSize uint64) ([]*pb.Entry, error)
 	Term(i uint64) (uint64, error)
 	AppliedIndex() uint64
-	LastIndex() uint64
 	FirstIndex() uint64
 	GetSnapshot() (pb.Snapshot, error)
-	Truncate(index uint64) error
 
 	Close()
 }
@@ -63,7 +62,7 @@ func GetStorage() (Storage, error) {
 	if C2 != nil {
 		return C2, nil
 	} else {
-		return nil, errors.New("db is no init complete")
+		return nil, code.ErrDBNotInit
 	}
 }
 
@@ -92,7 +91,7 @@ func OpenDB(dbCfg *config.DBConfig) {
 
 	C2.valueLog, err = OpenValueLog(dbCfg.ValueLogConfig, memTableFlushC, C2.wal.KVStateSegment)
 	if err != nil {
-		log.Panic("open Value log failed")
+		log.Panic("open Value log failed").Record()
 	}
 
 	go func() {
@@ -127,9 +126,6 @@ func dbCfgCheck(dbCfg *config.DBConfig) (err error) {
 	}
 	return nil
 }
-
-// ----------------- |  restore imm table |    restore mem entries     |
-// -----------persist-index----------apply-index-------------------commit-index----------stable-index-----------
 
 func (db *C2KV) restoreMemoryFromWAL() {
 	files, err := os.ReadDir(db.wal.WalDirPath)
@@ -393,10 +389,6 @@ func (db *C2KV) FirstIndex() uint64 {
 	return 0
 }
 
-func (db *C2KV) LastIndex() uint64 {
-	return 0
-}
-
 func (db *C2KV) GetSnapshot() (pb.Snapshot, error) {
 	return pb.Snapshot{}, nil
 }
@@ -405,10 +397,10 @@ func (db *C2KV) GetHardState() (pb.HardState, pb.ConfState, error) {
 	return pb.HardState{}, pb.ConfState{}, nil
 }
 
-func (db *C2KV) Close() {
-
-}
-
 func (db *C2KV) Truncate(index uint64) error {
 	return db.wal.Truncate(index)
+}
+
+func (db *C2KV) Close() {
+
 }

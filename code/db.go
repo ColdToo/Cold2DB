@@ -16,4 +16,6 @@ var (
 
 	// ErrRecordDeleted record was deleted by another caller.
 	ErrRecordDeleted = errors.New("record was deleted by another caller")
+
+	ErrDBNotInit = errors.New("db is no init complete")
 )

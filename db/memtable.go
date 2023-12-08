@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"github.com/ColdToo/Cold2DB/code"
+	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"sync"
@@ -21,17 +22,17 @@ type Memtable struct {
 	sync.RWMutex
 	sklIter  *arenaskl.Iterator
 	skl      *arenaskl.Skiplist
-	memOpt   MemOpt
+	cfg      config.MemConfig
 	maxIndex uint64
 	minIndex uint64
 }
 
-func NewMemtable(memOpt MemOpt) (*Memtable, error) {
+func NewMemtable(cfg config.MemConfig) (*Memtable, error) {
 	var sklIter = new(arenaskl.Iterator)
-	arena := arenaskl.NewArena(uint32(memOpt.memSize) + uint32(arenaskl.MaxNodeSize))
+	arena := arenaskl.NewArena(uint32(cfg.MemtableSize) + uint32(arenaskl.MaxNodeSize))
 	skl := arenaskl.NewSkiplist(arena)
 	sklIter.Init(skl)
-	table := &Memtable{memOpt: memOpt, skl: skl, sklIter: sklIter}
+	table := &Memtable{cfg: cfg, skl: skl, sklIter: sklIter}
 	return table, nil
 }
 
@@ -40,7 +41,7 @@ func (mt *Memtable) put(k, v []byte) error {
 }
 
 func (mt *Memtable) Scan(low, high []byte) (err error, kvs []*marshal.KV) {
-	//todo
+	// todo
 	// 1、找到距离low最近的一个key
 	// 2、获取该key的value
 	// 3、next移动到下一个key判断，是否小于high
