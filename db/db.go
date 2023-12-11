@@ -77,10 +77,8 @@ func OpenDB(dbCfg *config.DBConfig) {
 	C2.memtablePipe = make(chan *Memtable, dbCfg.MemConfig.MemtableNums/2)
 	C2.immtableQ = NewMemtableQueue(dbCfg.MemConfig.MemtableNums)
 	C2.flushC = memTableFlushC
-	memOpt := MemOpt{
-		memSize: dbCfg.MemConfig.MemtableSize,
-	}
-	C2.activeMem, err = NewMemtable(memOpt)
+
+	C2.activeMem, err = NewMemtable(dbCfg.MemConfig)
 	if err != nil {
 		return
 	}
@@ -96,7 +94,7 @@ func OpenDB(dbCfg *config.DBConfig) {
 
 	go func() {
 		for {
-			memtable, err := NewMemtable(memOpt)
+			memtable, err := NewMemtable(dbCfg.MemConfig)
 			if err != nil {
 				log.Panicf("create a new segment file error", err)
 			}
@@ -319,7 +317,7 @@ func (db *C2KV) Scan(lowKey []byte, highKey []byte) (err error) {
 }
 
 func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
-	kvCs := make([]chan *marshal.KV, db.activeMem.memOpt.concurrency)
+	kvCs := make([]chan *marshal.KV, db.activeMem.cfg.Concurrency)
 	var bytesCount int
 	for _, kv := range kvs {
 		bytesCount += len(kv.Key)
@@ -328,7 +326,7 @@ func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
 	}
 
 	//判断是否超出当前memtable大小，若超过获取新的memtable
-	if bytesCount+db.activeMem.Size() > db.activeMem.memOpt.memSize {
+	if bytesCount+db.activeMem.Size() > db.activeMem.cfg.MemtableSize {
 		if C2.immtableQ.size > C2.immtableQ.capacity/2 {
 			C2.flushC <- C2.immtableQ.Dequeue()
 		}

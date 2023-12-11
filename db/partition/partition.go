@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -78,8 +79,8 @@ func (p *Partition) Scan(low, high []byte) {
 
 }
 
-func (p *Partition) PersistKvs(kvs []*marshal.KV) {
-	//每次都刷新到一个新的SST文件中？还是一个SST文件可以刷新一次两次或者三次？
+func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup) {
+	//todo 每次都刷新到一个新的SST文件中？还是一个SST文件可以刷新一次两次或者三次？
 	buf := bytebufferpool.Get()
 	buf.Reset()
 	defer func() {
@@ -90,40 +91,42 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV) {
 	fid, _ := strconv.Atoi(sst.fd.Name())
 
 	indexNodes := make([]*IndexerNode, 0)
-	posChan := make(chan *IndexerNode, len(kvs))
-	var fileCurrentOffset int
 
+	var fileCurrentOffset int
 	for _, kv := range kvs {
-		vSize := len(kv.Value)
+		vSize := len(kv.VBytes)
+		value := marshal.DecodeV(kv.VBytes)
 		meta := &IndexerNode{
 			Key: kv.Key,
 			Meta: &IndexerMeta{
-				Fid:        fid,
-				Offset:     fileCurrentOffset,
-				ValueSize:  vSize,
-				valueCrc32: crc32.ChecksumIEEE(kv.Value),
-				TimeStamp:  kv.TimeStamp,
-				ExpiredAt:  kv.ExpiredAt,
+				Fid:         fid,
+				ValueOffset: fileCurrentOffset,
+				ValueSize:   vSize,
+				valueCrc32:  crc32.ChecksumIEEE(kv.VBytes),
+				TimeStamp:   value.TimeStamp,
+				ExpiredAt:   value.ExpiredAt,
 			},
 		}
 
 		if vSize <= smallValue {
-			meta.Meta.Value = kv.Value
-			posChan <- meta
+			meta.Meta.Value = kv.VBytes
 		}
 
-		fileCurrentOffset += len(kv.Value)
-		buf.Write(kv.Value)
+		fileCurrentOffset += len(kv.VBytes)
+		buf.Write(kv.VBytes)
+
+		//todo 是否需要实现为异步写入的方式？
+		indexNodes = append(indexNodes, meta)
 	}
 
 	p.indexer.Put(indexNodes)
-
 	sst.fd.Write(buf.Bytes())
 	p.oldSST = append(p.oldSST)
+	wg.Done()
 }
 
 func (p *Partition) AutoCompaction() {
-	//根据策略进行compation
+	//todo compaction策略
 	p.Compaction()
 }
 

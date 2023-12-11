@@ -319,7 +319,12 @@ func (sr *segmentReader) Next(entrySize int) {
 	sr.blocksOffset += entrySize
 }
 
-// raftStateSegment need persist status: apply index 、commit index
+// StateSegment
+// +-------+-----------+-----------+
+// |  crc  | state size|   state   |
+// +-------+-----------+-----------+
+// |----------HEADER---|---BODY----+
+
 type raftStateSegment struct {
 	Fd           *os.File
 	RaftState    pb.HardState
@@ -328,11 +333,6 @@ type raftStateSegment struct {
 	closed       bool
 }
 
-// StateSegment  will encode state into a byte slice.
-// +-------+-----------+-----------+
-// |  crc  | state size|   state   |
-// +-------+-----------+-----------+
-// |----------HEADER---|---BODY----+
 func (seg *raftStateSegment) encodeRaftStateSegment() []byte {
 	return nil
 }

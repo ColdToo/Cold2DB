@@ -8,6 +8,7 @@ import (
 	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
 	"os"
+	"sync"
 )
 
 const PartitionFormat = "PARTITION_%d"
@@ -49,7 +50,6 @@ func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable, stateSeg
 	if len(dirs) > 0 {
 		for _, dir := range dirs {
 			if dir.IsDir() {
-				//若vlog下有partition文件夹，则打开该文件夹下的partition以及所有sst文件和index文件
 				p := partition.OpenPartition(dir.Name())
 				partitions = append(partitions, p)
 			}
@@ -77,27 +77,27 @@ func (v *ValueLog) Scan(low, high []byte) error {
 func (v *ValueLog) ListenAndFlush() {
 	for {
 		mem := <-v.memFlushC
-		//获取有序kvs
 		kvs := mem.All()
-
+		lastRecords := kvs[len(kvs)-1]
 		partitionRecords := make([][]*marshal.KV, v.partitionNums)
-
-		var index uint64 //获取到该immtable中的最后一个index，刷新persist index
 		for _, record := range kvs {
 			p := v.getKeyPartition(record.Key)
 			partitionRecords[p] = append(partitionRecords[p], &record)
 		}
 
-		for i := 0; i < int(v.partitionNums); i++ {
+		wg := &sync.WaitGroup{}
+		for i := 0; i < v.partitionNums; i++ {
 			if len(partitionRecords[i]) == 0 {
 				continue
 			}
 			part := i
 
-			go v.partition[part].PersistKvs(partitionRecords[part])
+			wg.Add(1)
+			go v.partition[part].PersistKvs(partitionRecords[part], wg)
 		}
+		wg.Wait()
 
-		v.kvStateSeg.PersistIndex = index
+		v.kvStateSeg.PersistIndex = lastRecords.Value.Index
 		err := v.kvStateSeg.Flush()
 		if err != nil {
 			log.Panicf("can not flush kv state segment file %e", err)

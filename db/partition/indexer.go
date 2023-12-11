@@ -12,7 +12,6 @@ var indexBucketName = []byte("index")
 
 const (
 	indexFileSuffixName = ".INDEX"
-	metaSize            = 5 + 5 + 10
 )
 
 type Indexer interface {
@@ -36,22 +35,22 @@ type IndexerNode struct {
 	Meta *IndexerMeta
 }
 
-// IndexerMeta smaller value could be place in this struct
+// IndexerMeta
 type IndexerMeta struct {
-	Fid        int
-	Offset     int
-	ValueSize  int
-	valueCrc32 uint32
-	TimeStamp  int64
-	ExpiredAt  int64
-	Value      []byte
+	Fid         int
+	ValueOffset int
+	ValueSize   int
+	valueCrc32  uint32
+	TimeStamp   int64
+	ExpiredAt   int64
+	Value       []byte //smaller value could be place in this
 }
 
 func EncodeMeta(m *IndexerMeta) []byte {
 	valueSize := len(m.Value)
 	buf := make([]byte, 36+valueSize)
 	binary.LittleEndian.PutUint64(buf[0:8], uint64(m.Fid))
-	binary.LittleEndian.PutUint64(buf[8:16], uint64(m.Offset))
+	binary.LittleEndian.PutUint64(buf[8:16], uint64(m.ValueOffset))
 	binary.LittleEndian.PutUint64(buf[16:24], uint64(m.ValueSize))
 	binary.LittleEndian.PutUint32(buf[24:28], m.valueCrc32)
 	binary.LittleEndian.PutUint64(buf[28:36], uint64(m.TimeStamp))
@@ -62,7 +61,7 @@ func EncodeMeta(m *IndexerMeta) []byte {
 func DecodeMeta(buf []byte) *IndexerMeta {
 	m := &IndexerMeta{}
 	m.Fid = int(binary.LittleEndian.Uint64(buf[0:8]))
-	m.Offset = int(binary.LittleEndian.Uint64(buf[8:16]))
+	m.ValueOffset = int(binary.LittleEndian.Uint64(buf[8:16]))
 	m.ValueSize = int(binary.LittleEndian.Uint64(buf[16:24]))
 	m.valueCrc32 = binary.LittleEndian.Uint32(buf[24:28])
 	m.TimeStamp = int64(binary.LittleEndian.Uint64(buf[28:36]))
