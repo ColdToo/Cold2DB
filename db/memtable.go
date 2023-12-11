@@ -6,9 +6,10 @@ import (
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
 	"github.com/ColdToo/Cold2DB/db/marshal"
-	"sync"
 	"time"
 )
+
+const MB = 1024 * 1024
 
 type MemOpt struct {
 	memSize     int
@@ -16,28 +17,47 @@ type MemOpt struct {
 }
 
 type Memtable struct {
-	maxKey  []byte
-	minKey  []byte
-	CreatAt uint64
-	sync.RWMutex
 	sklIter  *arenaskl.Iterator
-	skl      *arenaskl.Skiplist
 	cfg      config.MemConfig
+	maxKey   []byte
+	minKey   []byte
 	maxIndex uint64
 	minIndex uint64
 }
 
 func NewMemtable(cfg config.MemConfig) (*Memtable, error) {
 	var sklIter = new(arenaskl.Iterator)
-	arena := arenaskl.NewArena(uint32(cfg.MemtableSize) + uint32(arenaskl.MaxNodeSize))
+	arena := arenaskl.NewArena(uint32(cfg.MemtableSize*MB) + uint32(arenaskl.MaxNodeSize))
 	skl := arenaskl.NewSkiplist(arena)
 	sklIter.Init(skl)
-	table := &Memtable{cfg: cfg, skl: skl, sklIter: sklIter}
+	table := &Memtable{cfg: cfg, sklIter: sklIter}
 	return table, nil
 }
 
 func (mt *Memtable) put(k, v []byte) error {
 	return mt.sklIter.Put(k, v)
+}
+
+func (mt *Memtable) get(key []byte) (bool, []byte) {
+	if found := mt.sklIter.Seek(key); !found {
+		return false, nil
+	}
+
+	value, err := mt.sklIter.Get(key)
+	if err == code.ErrRecordNotExists {
+		return false, nil
+	}
+	mv := marshal.DecodeV(value)
+
+	if mv.Type == marshal.TypeDelete {
+		return true, nil
+	}
+
+	if mv.ExpiredAt > 0 && mv.ExpiredAt <= time.Now().Unix() {
+		return true, nil
+	}
+
+	return false, mv.Value
 }
 
 func (mt *Memtable) Scan(low, high []byte) (err error, kvs []*marshal.KV) {
@@ -69,29 +89,7 @@ func (mt *Memtable) Scan(low, high []byte) (err error, kvs []*marshal.KV) {
 	return
 }
 
-func (mt *Memtable) Get(key []byte) (bool, []byte) {
-	if found := mt.sklIter.Seek(key); !found {
-		return false, nil
-	}
-
-	value, err := mt.sklIter.Get(key)
-	if err == code.ErrRecordNotExists {
-		return false, nil
-	}
-	mv := marshal.DecodeV(value)
-
-	if mv.Type == marshal.TypeDelete {
-		return true, nil
-	}
-
-	if mv.ExpiredAt > 0 && mv.ExpiredAt <= time.Now().Unix() {
-		return true, nil
-	}
-
-	return false, mv.Value
-}
-
-func (mt *Memtable) All() []marshal.KV {
+func (mt *Memtable) All() []*marshal.KV {
 	sklIter := mt.sklIter
 	var kvRecords []*marshal.KV
 
@@ -104,7 +102,7 @@ func (mt *Memtable) All() []marshal.KV {
 }
 
 func (mt *Memtable) Size() int {
-	return int(mt.skl.Size())
+	return mt.sklIter.Size()
 }
 
 type MemtableQueue struct {
@@ -123,7 +121,6 @@ func NewMemtableQueue(capacity int) *MemtableQueue {
 
 func (q *MemtableQueue) Enqueue(item *Memtable) {
 	if q.size == q.capacity {
-		// Resize the queue if it's full
 		newCapacity := q.capacity * 2
 		newtables := make([]*Memtable, newCapacity)
 		copy(newtables, q.tables)

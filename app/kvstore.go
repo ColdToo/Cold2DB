@@ -45,13 +45,12 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	uid := uint64(time.Now().UnixNano())
 	kv := new(KV)
 	kv.Key = key
-	kv.Id = uid
-	kv.Value = val
-	kv.ExpiredAt = expiredAt
+	kv.Data.Value = val
+	kv.Data.ExpiredAt = expiredAt
 	if delete {
-		kv.Type = valuefile.TypeDelete
+		kv.Data.Type = marshal.TypeDelete
 	}
-	buf, _ := valuefile.GobEncode(kv)
+	buf, _ := marshal.GobEncode(kv)
 	s.proposeC <- buf
 
 	sig := make(chan struct{})

@@ -11,9 +11,7 @@ type DBConfig struct {
 }
 
 type MemConfig struct {
-	// MemtableSize represents the maximum size in bytes for a memtable.
-	// It means that each memtable will occupy so much memory.
-	// Default value is 64MB.
+	// MemtableSize represents the maximum size in bytes for a memtable, Default value is 64MB. MB Unit
 	MemtableSize int
 
 	// MemtableNums represents maximum number of memtables to keep in memory before flushing.
@@ -34,4 +32,6 @@ type ValueLogConfig struct {
 	ValueLogDir string
 
 	PartitionNums int
+
+	SSTsize int
 }

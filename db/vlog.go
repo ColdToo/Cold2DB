@@ -17,16 +17,12 @@ const PartitionFormat = "PARTITION_%d"
 type ValueLog struct {
 	vlogCfg config.ValueLogConfig
 
-	memFlushC chan *Memtable //memManger的flushChn
+	memFlushC chan *Memtable
 
 	kvStateSeg *wal.KVStateSegment
 
 	partition []*partition.Partition
 
-	// value log are partitioned to several parts for concurrent writing and reading
-	partitionNums int
-
-	// hash function for sharding
 	hashKeyFunction func([]byte) uint64
 }
 
@@ -37,10 +33,10 @@ func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable, stateSeg
 	}
 
 	partitions := make([]*partition.Partition, 0)
-	lf = &ValueLog{memFlushC: tableC, kvStateSeg: stateSegment, partition: partitions, partitionNums: vlogCfg.PartitionNums}
+	lf = &ValueLog{memFlushC: tableC, kvStateSeg: stateSegment, partition: partitions, vlogCfg: vlogCfg}
 
 	if len(dirs) == 0 {
-		for i := 0; i < lf.partitionNums; i++ {
+		for i := 0; i < lf.vlogCfg.PartitionNums; i++ {
 			p := partition.OpenPartition(fmt.Sprintf(PartitionFormat, i))
 			partitions = append(partitions, p)
 		}
@@ -79,14 +75,14 @@ func (v *ValueLog) ListenAndFlush() {
 		mem := <-v.memFlushC
 		kvs := mem.All()
 		lastRecords := kvs[len(kvs)-1]
-		partitionRecords := make([][]*marshal.KV, v.partitionNums)
+		partitionRecords := make([][]*marshal.KV, v.vlogCfg.PartitionNums)
 		for _, record := range kvs {
 			p := v.getKeyPartition(record.Key)
-			partitionRecords[p] = append(partitionRecords[p], &record)
+			partitionRecords[p] = append(partitionRecords[p], record)
 		}
 
 		wg := &sync.WaitGroup{}
-		for i := 0; i < v.partitionNums; i++ {
+		for i := 0; i < v.vlogCfg.PartitionNums; i++ {
 			if len(partitionRecords[i]) == 0 {
 				continue
 			}
@@ -106,7 +102,7 @@ func (v *ValueLog) ListenAndFlush() {
 }
 
 func (v *ValueLog) getKeyPartition(key []byte) int {
-	return int(v.hashKeyFunction(key) % uint64(v.partitionNums))
+	return int(v.hashKeyFunction(key) % uint64(v.vlogCfg.PartitionNums))
 }
 
 func (v *ValueLog) Close() error {

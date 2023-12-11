@@ -28,9 +28,10 @@ type Partition struct {
 }
 
 type SST struct {
-	fd     *os.File
-	fName  string
-	offset int64
+	fd      *os.File
+	fName   string
+	offset  int64
+	SSTSize int64
 }
 
 func OpenPartition(partitionDir string) (p *Partition) {
@@ -80,7 +81,6 @@ func (p *Partition) Scan(low, high []byte) {
 }
 
 func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup) {
-	//todo 每次都刷新到一个新的SST文件中？还是一个SST文件可以刷新一次两次或者三次？
 	buf := bytebufferpool.Get()
 	buf.Reset()
 	defer func() {

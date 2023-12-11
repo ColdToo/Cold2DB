@@ -10,30 +10,22 @@ import (
 )
 
 const (
-	// ChunkHeaderSize
-	// Checksum Length  index
+	// ChunkHeaderSize Checksum Length  index
 	//    4       4       8
 	ChunkHeaderSize = 16
 
-	// RaftChunkHeaderSize
-	// Checksum Length
-	//    4       2
-	RaftChunkHeaderSize = 6
-
-	Crc32Size = 4
-	EntrySize = 4
-	IndexSize = 8
-
+	Crc32Size  = 4
+	EntrySize  = 4
+	IndexSize  = 8
 	TypeDelete = 1
 )
 
 type KV struct {
-	Key    []byte
-	Value  *Value
-	VBytes []byte
+	Key  []byte
+	Data Data
 }
 
-func GobEncode(kv KV) ([]byte, error) {
+func GobEncode(kv *KV) ([]byte, error) {
 	var buf bytes.Buffer
 	err := gob.NewEncoder(&buf).Encode(kv)
 	if err != nil {
@@ -51,8 +43,7 @@ func GobDecode(data []byte) (kv KV) {
 	return
 }
 
-type Value struct {
-	BatchId   uint64
+type Data struct {
 	Index     uint64
 	TimeStamp int64
 	ExpiredAt int64
@@ -60,11 +51,11 @@ type Value struct {
 	Value     []byte
 }
 
-func EncodeV(v *Value) []byte {
+func EncodeData(v *Data) []byte {
 	return nil
 }
 
-func DecodeV(v []byte) *Value {
+func DecodeData(v []byte) *Data {
 	return nil
 }
 
@@ -108,56 +99,3 @@ func DecodeWALEntryHeader(buf []byte) (header WalEntryHeader) {
 	header.Index = index
 	return
 }
-
-type RaftStateHeader struct {
-	HeaderSize int8
-	crc32      int32
-	StateSize  int32
-}
-
-/*
-type vLogRecord struct {
-	Value     []byte
-}
-
-// EncodeLogEntry  will encode entry into a byte slice.
-// +-------+----------+------------+-----------+---------+-------+---------+
-// |  crc  | key size | value size | expiredAt |   type  |  key  |  value  |
-// +-------+----------+------------+-----------+---------+-------+---------+
-// |---------------HEADER----------|------------------VALUE----------------|
-// |--------------------------crc check------------------------------------|
-func EncodeLogEntry(e *LogEntry) ([]byte, int) {
-	if e == nil {
-		return nil, 0
-	}
-	header := make([]byte, HeaderSize)
-	// encode header.
-	header[4] = byte(e.Type)
-	var index = 5
-	index += binary.PutVarint(header[index:], int64(len(e.Key)))
-	index += binary.PutVarint(header[index:], int64(len(e.Value)))
-	index += binary.PutVarint(header[index:], e.ExpiredAt)
-
-	var size = index + len(e.Key) + len(e.Value)
-	buf := make([]byte, size)
-	copy(buf[:index], header[:])
-	// key and value.
-	copy(buf[index:], e.Key)
-	copy(buf[index+len(e.Key):], e.Value)
-
-	// crc32.
-	crc := crc32.ChecksumIEEE(buf[4:])
-	binary.LittleEndian.PutUint32(buf[:4], crc)
-	return buf, size
-}
-
-func getEntryCrc(e *Entry, h []byte) uint32 {
-	if e == nil {
-		return 0
-	}
-	crc := crc32.ChecksumIEEE(h[:])
-	crc = crc32.Update(crc, crc32.IEEETable, e.Key)
-	crc = crc32.Update(crc, crc32.IEEETable, e.Value)
-	return crc
-}
-*/

@@ -20,6 +20,7 @@ package arenaskl
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/ColdToo/Cold2DB/code"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -259,7 +260,7 @@ func TestIteratorAdd(t *testing.T) {
 
 	// Try to add element that already exists.
 	err = it.Put([]byte("00002"), []byte("00002*"))
-	require.Equal(t, ErrRecordExists, err)
+	require.Equal(t, code.ErrRecordExists, err)
 	require.EqualValues(t, []byte("00002"), it.Value())
 
 	// Try to add element that was previously deleted.
@@ -295,7 +296,7 @@ func TestIteratorSet(t *testing.T) {
 	err = it.Set([]byte("00001c"))
 	require.Nil(t, err)
 	err = it2.Set([]byte("00001d"))
-	require.Equal(t, ErrRecordUpdated, err)
+	require.Equal(t, code.ErrRecordUpdated, err)
 	require.EqualValues(t, []byte("00001c"), it2.Value())
 	err = it2.Set([]byte("00001d"))
 	require.Nil(t, err)
@@ -308,7 +309,7 @@ func TestIteratorSet(t *testing.T) {
 	err = it.Put([]byte("00002"), []byte("00002"))
 	require.Nil(t, err)
 	err = it2.Set([]byte("00001e"))
-	require.Equal(t, ErrRecordDeleted, err)
+	require.Equal(t, code.ErrRecordDeleted, err)
 	require.EqualValues(t, "00001d", it2.Value())
 
 	require.Equal(t, 1, length(l))

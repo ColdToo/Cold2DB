@@ -296,3 +296,7 @@ func (it *Iterator) seekForBaseSplice(key []byte) (prev, next *node, found bool)
 	}
 	return
 }
+
+func (it *Iterator) Size() int {
+	return int(it.list.Size())
+}

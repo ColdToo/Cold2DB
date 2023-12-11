@@ -25,7 +25,6 @@ type Storage interface {
 	PersistHardState(st pb.HardState) error
 	PersistUnstableEnts(entries []*pb.Entry) error
 	Truncate(index uint64) error
-
 	GetHardState() (pb.HardState, pb.ConfState, error)
 	Entries(lo, hi, maxSize uint64) ([]*pb.Entry, error)
 	Term(i uint64) (uint64, error)
@@ -298,8 +297,11 @@ func (db *C2KV) restoreMemEntries() {
 
 }
 
+// kv operate
+
 func (db *C2KV) Get(key []byte) (val []byte, err error) {
-	flag, val := db.activeMem.Get(key)
+	//针对获取到的marshal kv做一些处理
+	flag, val := db.activeMem.get(key)
 	if !flag {
 		return nil, errors.New("the key is not exist")
 	}
@@ -352,6 +354,8 @@ func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
 	wg.Wait()
 	return nil
 }
+
+// raft log
 
 func (db *C2KV) Entries(lo, hi, maxSize uint64) (entries []*pb.Entry, err error) {
 	if int(lo) < len(db.entries) {

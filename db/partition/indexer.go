@@ -40,9 +40,9 @@ type IndexerMeta struct {
 	Fid         int
 	ValueOffset int
 	ValueSize   int
-	valueCrc32  uint32
 	TimeStamp   int64
 	ExpiredAt   int64
+	valueCrc32  uint32
 	Value       []byte //smaller value could be place in this
 }
 
