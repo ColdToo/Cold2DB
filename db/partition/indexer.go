@@ -1,6 +1,7 @@
 package partition
 
 import (
+	"bytes"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"go.etcd.io/bbolt"
 	"path/filepath"
@@ -31,7 +32,7 @@ type Indexer interface {
 }
 
 func NewIndexer(partitionDir string) (Indexer, error) {
-	indexer, err := bbolt.Open(filepath.Join(partitionDir, time.Now().String()+indexFileSuffixName), 0600,
+	indexer, err := bbolt.Open(filepath.Join(partitionDir, time.Now().Format("2006-01-02T15:04:05")+indexFileSuffixName), 0600,
 		&bbolt.Options{
 			NoSync:          true,
 			InitialMmapSize: 1024,
@@ -73,25 +74,50 @@ func (b *BtreeIndexer) Put(metas []*marshal.BytesKV) (err error) {
 }
 
 func (b *BtreeIndexer) Get(key []byte) (meta *marshal.BytesKV, err error) {
+	meta = &marshal.BytesKV{}
+	err = b.index.View(func(tx *bbolt.Tx) error {
+		value := tx.Bucket(indexBucketName).Get(key)
+		if value != nil {
+			meta = &marshal.BytesKV{Key: key, Value: value}
+		}
+		return nil
+	})
 	return
 }
 
 func (b *BtreeIndexer) Scan(low, high []byte) (meta []*marshal.BytesKV, err error) {
+	err = b.index.View(func(tx *bbolt.Tx) error {
+		cursor := tx.Bucket(indexBucketName).Cursor()
+		for k, v := cursor.Seek(low); k != nil && bytes.Compare(k, high) <= 0; k, v = cursor.Next() {
+			meta = append(meta, &marshal.BytesKV{Key: k, Value: v})
+		}
+		return nil
+	})
 	return
 }
 
 func (b *BtreeIndexer) Delete(key []byte) error {
-	return nil
+	return b.index.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(indexBucketName).Delete(key)
+	})
 }
 
 func (b *BtreeIndexer) DeleteBatch(keys [][]byte) error {
-	return nil
+	return b.index.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(indexBucketName)
+		for _, key := range keys {
+			if err := bucket.Delete(key); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (b *BtreeIndexer) Sync() error {
-	return nil
+	return b.index.Sync()
 }
 
 func (b *BtreeIndexer) Close() error {
-	return nil
+	return b.index.Close()
 }

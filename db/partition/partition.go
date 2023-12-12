@@ -46,7 +46,11 @@ func (s *SST) Write(buf []byte) (err error) {
 func (s *SST) Read(vSize, vOffset int64) (buf []byte, err error) {
 	s.fd.Seek(vOffset, io.SeekStart)
 	buf = make([]byte, vSize)
-	s.fd.Read(buf)
+	_, err = s.fd.Read(buf)
+	if err != nil {
+		return nil, err
+	}
+	return
 }
 
 func createSSTFileName() string {
@@ -96,12 +100,11 @@ func OpenPartition(partitionDir string) (p *Partition) {
 		p.pipeSST <- sst
 	}()
 
-	go p.AutoCompaction()
+	//go p.AutoCompaction()
 	return
 }
 
-// todo 支持在partition层就校验key是否过期避免不必要的硬盘访问
-func (p *Partition) Get(key []byte) (kv *marshal.BytesKV, err error) {
+func (p *Partition) Get(key []byte) (kv *marshal.KV, err error) {
 	//todo 根据索引在sst文件中获取值
 	indexMeta, err := p.indexer.Get(key)
 	if err != nil {
@@ -114,28 +117,43 @@ func (p *Partition) Get(key []byte) (kv *marshal.BytesKV, err error) {
 		if err != nil {
 			return nil, err
 		}
-		return &marshal.BytesKV{
-			Key:   key,
-			Value: value,
+		return &marshal.KV{
+			Key:  key,
+			Data: marshal.DecodeData(value),
 		}, nil
 	}
 
 	return nil, code.ErrCanNotFondSSTFile
 }
 
-func (p *Partition) Scan(low, high []byte) (kvs []*marshal.KV) {
+func (p *Partition) Scan(low, high []byte) (kvs []*marshal.KV, err error) {
 	//todo 根据索引在sst文件中获取值
 	indexMetas, err := p.indexer.Scan(low, high)
 	if err != nil {
 		return
 	}
+	for _, indexMeta := range indexMetas {
+		index := marshal.DecodeIndexMeta(indexMeta.Value)
+		if sst, ok := p.SSTMap[index.Fid]; ok {
+			value, err := sst.Read(index.ValueSize, index.ValueOffset)
+			if err != nil {
+				return nil, err
+			}
+			kvs = append(kvs, &marshal.KV{
+				Key:  indexMeta.Key,
+				Data: marshal.DecodeData(value),
+			})
+		}
+	}
+	return
 }
 
-func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup) {
+func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan error) {
 	buf := bytebufferpool.Get()
 	buf.Reset()
 	defer func() {
 		bytebufferpool.Put(buf)
+		wg.Done()
 	}()
 
 	//todo 每次刷盘都重新开启一个sst文件还是刷入旧文件控制旧文件的size？
@@ -152,36 +170,37 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup) {
 			ValueSize:   int64(vSize),
 			ValueCrc32:  crc32.ChecksumIEEE(kv.Data.Value),
 			TimeStamp:   kv.Data.TimeStamp,
-			ExpiredAt:   kv.Data.ExpiredAt,
 		}
 
 		if vSize <= smallValue {
 			meta.Value = kv.Data.Value
 		}
 
-		//todo 是否需要开个协程异步刷新索引？
 		indexMetas = append(indexMetas, &marshal.BytesKV{
 			Key: kv.Key, Value: marshal.EncodeIndexMeta(meta),
 		})
 
 		fileCurrentOffset += int64(len(kv.Data.Value))
-		buf.Write(kv.Data.Value)
+		if _, err := buf.Write(kv.Data.Value); err != nil {
+			errC <- err
+		}
 	}
 
-	//todo 索引更新和memtable落盘应该是一个原子操作
+	//todo 索引更新和memtable落盘应该是一个原子操作，写入的index信息应该显示提交
+	//todo 会有读写冲突
 	err := p.indexer.Put(indexMetas)
 	if err != nil {
 		return
 	}
 
-	//todo 一个value如果跨两个block，那么可能需要访问两次硬盘
+	//todo 一个value如果跨两个block，那么可能需要访问两次硬盘,后续优化vlog的文件布局
+	//todo 写入文件操作也必须是一个原子操作
 	err = sst.Write(buf.Bytes())
 	if err != nil {
 		return
 	}
 
 	p.SSTMap[int64(fid)] = sst
-	wg.Done()
 }
 
 func (p *Partition) AutoCompaction() {

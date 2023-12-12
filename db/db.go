@@ -98,14 +98,12 @@ func OpenDB(dbCfg *config.DBConfig) {
 	C2.memtablePipe = make(chan *Memtable, dbCfg.MemConfig.MemtableNums/2)
 	C2.immtableQ = NewMemtableQueue(dbCfg.MemConfig.MemtableNums)
 	C2.flushC = memTableFlushC
-
 	C2.activeMem, err = NewMemtable(dbCfg.MemConfig)
 	if err != nil {
 		return
 	}
 
 	C2.wal, err = wal.NewWal(dbCfg.WalConfig)
-
 	C2.restoreMemoryFromWAL()
 
 	C2.valueLog, err = OpenValueLog(dbCfg.ValueLogConfig, memTableFlushC, C2.wal.KVStateSegment)
@@ -177,16 +175,14 @@ func (db *C2KV) restoreMemoryFromWAL() {
 		}
 	}
 
-	// 启动两个goroutine分别将old segment file加载到Immemtble和enties中
-
 	go db.restoreMemEntries()
 
-	go db.restoreImMemTable()
+	go db.restoreImmTable()
 
 	return
 }
 
-func (db *C2KV) restoreImMemTable() {
+func (db *C2KV) restoreImmTable() {
 	persistIndex := db.wal.KVStateSegment.PersistIndex
 	appliedIndex := db.wal.RaftStateSegment.AppliedIndex
 	Node := db.wal.OrderSegmentList.Head
@@ -225,23 +221,16 @@ func (db *C2KV) restoreImMemTable() {
 					break
 				}
 
-				kv := marshal.GobDecode(ent.Data)
-				kvC <- &kv
+				kv := marshal.DecodeKV(ent.Data)
+				kvC <- kv
 				reader.Next(header.EntrySize)
 			}
 		}()
 
 		select {
 		case kv := <-kvC:
-			//todo 是否要并发刷盘
-			err := memTable.put(kv.Key, marshal.EncodeV(kv.Value))
-			if err.Error() == "memtable is full" {
-				db.immtableQ.Enqueue(memTable)
-				memTable = <-db.memtablePipe
-				memTable.put(kv.Key, marshal.EncodeV(kv.Value))
-			} else {
-				log.Panicf("read segment failed")
-			}
+			err := memTable.put(kv.Key, marshal.EncodeData(kv.Data))
+			return
 		case err := <-signalC:
 			if err != nil {
 				log.Panicf("read segment failed")
@@ -300,33 +289,43 @@ func (db *C2KV) restoreMemEntries() {
 // kv operate
 
 func (db *C2KV) Get(key []byte) (kv *marshal.KV, err error) {
-	//针对获取到的marshal kv做一些处理
 	flag, val := db.activeMem.get(key)
 	if !flag {
-		return nil, errors.New("the key is not exist")
+		return db.valueLog.Get(key)
 	}
-	//todo 若memtable找不到则查询索引
-	db.valueLog.Get(key)
-	return
+	return &marshal.KV{Key: key, Data: marshal.DecodeData(val)}, nil
 }
 
 func (db *C2KV) Scan(lowKey []byte, highKey []byte) (kvs []*marshal.KV, err error) {
-	//todo memtable和vlog分别下发扫描命令然后再聚合结果
-	// 1、获取需要扫描的memtable
-	// 2、扫描vlog
-	// 3、有没有并发问题？
-	db.valueLog.Scan(lowKey, highKey)
-	return err
+	kvChan := make(chan *marshal.KV)
+	go func() {
+		kvs, err := db.valueLog.Scan(lowKey, highKey)
+		if err != nil {
+			return
+		}
+		kvChan <- kvs...
+	}()
+
+	for _, mem := range db.immtableQ.tables {
+		kvs, err := mem.Scan(lowKey, highKey)
+		if err != nil {
+			return
+		}
+	}
+
+
+	return kvs,err
 }
 
 func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
-	kvChans := make([]chan *marshal.BytesKV, db.activeMem.cfg.Concurrency)
+	kvSlices := make([][]*marshal.BytesKV, db.activeMem.cfg.Concurrency)
 	var bytesCount int
 	for i, kv := range kvs {
+		part := i % db.activeMem.cfg.Concurrency
 		bytesCount += len(kv.Key)
 		dataBytes := marshal.EncodeData(kv.Data)
 		bytesCount += len(dataBytes)
-		//todo
+		kvSlices[part] = append(kvSlices[part], &marshal.BytesKV{Key: kv.Key, Value: dataBytes})
 	}
 
 	//判断是否超出当前memtable大小，若超过获取新的memtable
@@ -339,18 +338,17 @@ func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
 	}
 
 	wg := &sync.WaitGroup{}
-	for _, kvChan := range kvChans {
+	for _, kvSlice := range kvSlices {
 		wg.Add(1)
-		go func(kvChan chan *marshal.BytesKV) {
-			for {
-				kv := <-kvChan
+		go func(kvs []*marshal.BytesKV) {
+			for _, kv := range kvs {
 				err = db.activeMem.put(kv.Key, kv.Value)
 				if err != nil {
 					return
 				}
 			}
 			wg.Done()
-		}(kvChan)
+		}(kvSlice)
 	}
 	wg.Wait()
 	return nil

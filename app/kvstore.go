@@ -36,7 +36,6 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	kv := new(marshal.KV)
 	kv.Key = key
 	kv.Data.Value = val
-	kv.Data.ExpiredAt = expiredAt
 	kv.Data.TimeStamp = time.Now().Unix()
 	kv.ApplySig = uid
 	if delete {
@@ -58,15 +57,14 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 }
 
 func (s *KvStore) Lookup(key []byte) (*marshal.BytesKV, error) {
-	s.storage.Get(key)
-	mv := marshal.DecodeV(value)
-	if mv.Type == marshal.TypeDelete {
+	kv, err := s.storage.Get(key)
+
+	//handle error
+	if kv.Data.Type == marshal.TypeDelete {
 		return true, nil
 	}
-	if mv.ExpiredAt > 0 && mv.ExpiredAt <= time.Now().Unix() {
-		return true, nil
-	}
-	return s.storage.Get(key)
+
+	return
 }
 
 func (s *KvStore) Scan(lowKey, highKey []byte) ([]*marshal.BytesKV, error) {

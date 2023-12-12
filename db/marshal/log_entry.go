@@ -25,18 +25,17 @@ type BytesKV struct {
 type KV struct {
 	Key      []byte
 	ApplySig int64
-	Data     Data //作为value存储在跳表中
+	Data     *Data //作为value存储在跳表中
 }
 
 type Data struct {
 	Index     uint64
 	TimeStamp int64
-	ExpiredAt int64
 	Type      int8
 	Value     []byte
 }
 
-func EncodeData(v Data) []byte {
+func EncodeData(v *Data) []byte {
 	return nil
 }
 
@@ -92,17 +91,11 @@ func DecodeWALEntryHeader(buf []byte) (header WalEntryHeader) {
 	return
 }
 
-type IndexerNode struct {
-	Key  []byte
-	Meta *IndexerMeta
-}
-
 type IndexerMeta struct {
 	Fid         int64
 	ValueOffset int64
 	ValueSize   int64
 	TimeStamp   int64
-	ExpiredAt   int64
 	ValueCrc32  uint32
 	Value       []byte //smaller value could be place in this
 }

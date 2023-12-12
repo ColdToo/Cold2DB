@@ -45,7 +45,7 @@ func (mt *Memtable) get(key []byte) (bool, []byte) {
 	return true, value
 }
 
-func (mt *Memtable) Scan(low, high []byte) (err error, kvs []*marshal.BytesKV) {
+func (mt *Memtable) Scan(low, high []byte) (kvs []*marshal.BytesKV, err error) {
 	// todo
 	// 1、找到距离low最近的一个key
 	// 2、获取该key的value
@@ -53,7 +53,7 @@ func (mt *Memtable) Scan(low, high []byte) (err error, kvs []*marshal.BytesKV) {
 	// 4、读出value
 	// 5、返回
 	if found := mt.sklIter.Seek(low); !found {
-		return code.ErrRecordExists, nil
+		return nil, code.ErrRecordExists
 	}
 
 	for mt.sklIter.Valid() && bytes.Compare(mt.sklIter.Key(), high) != -1 {
@@ -95,6 +95,7 @@ func NewMemtableQueue(capacity int) *MemtableQueue {
 
 func (q *MemtableQueue) Enqueue(item *Memtable) {
 	if q.size == q.capacity {
+		//todo 弹性缓冲，此时应该不再接受写入，需要将immtable刷盘，等待memtable的数量恢复到和配置一样才能允许写入
 		newCapacity := q.capacity * 2
 		newtables := make([]*Memtable, newCapacity)
 		copy(newtables, q.tables)

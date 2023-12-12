@@ -55,22 +55,23 @@ func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable, stateSeg
 	return
 }
 
-func (v *ValueLog) Get(key []byte) ([]byte, error) {
+func (v *ValueLog) Get(key []byte) (kv *marshal.KV, err error) {
 	//查找key对应所在分区在分区中进行查找
 	p := v.getKeyPartition(key)
 	v.partition[p].Get(key)
 	return nil, nil
 }
 
-func (v *ValueLog) Scan(low, high []byte) error {
+func (v *ValueLog) Scan(low, high []byte) (kvs []*marshal.KV, err error) {
 	//todo 各个partition按照该范围进行扫描再聚合结果
 	for _, p := range v.partition {
 		p.Scan(low, high)
 	}
-	return nil
+	return nil, nil
 }
 
 func (v *ValueLog) ListenAndFlush() {
+	errC := make(chan error, 1)
 	for {
 		mem := <-v.memFlushC
 		kvs := mem.All()
@@ -88,9 +89,13 @@ func (v *ValueLog) ListenAndFlush() {
 				continue
 			}
 			wg.Add(1)
-			go v.partition[i].PersistKvs(partitionRecords[i], wg)
+			go v.partition[i].PersistKvs(partitionRecords[i], wg, errC)
 		}
 		wg.Wait()
+
+		if err := <-errC; err != nil {
+			log.Panicf("persist kvs failed %e", errC)
+		}
 
 		v.kvStateSeg.PersistIndex = lastRecords.Data.Index
 		err := v.kvStateSeg.Flush()
