@@ -1,10 +1,7 @@
 package marshal
 
 import (
-	"bytes"
 	"encoding/binary"
-	"encoding/gob"
-	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"hash/crc32"
 )
@@ -20,27 +17,15 @@ const (
 	TypeDelete = 1
 )
 
+type BytesKV struct {
+	Key   []byte
+	Value []byte
+}
+
 type KV struct {
-	Key  []byte
-	Data Data
-}
-
-func GobEncode(kv *KV) ([]byte, error) {
-	var buf bytes.Buffer
-	err := gob.NewEncoder(&buf).Encode(kv)
-	if err != nil {
-		log.Errorf("encode err:", err)
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func GobDecode(data []byte) (kv KV) {
-	err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&kv)
-	if err != nil {
-		log.Panicf("decode err:", err)
-	}
-	return
+	Key      []byte
+	ApplySig int64
+	Data     Data
 }
 
 type Data struct {
@@ -51,12 +36,20 @@ type Data struct {
 	Value     []byte
 }
 
-func EncodeData(v *Data) []byte {
+func EncodeData(v Data) []byte {
 	return nil
 }
 
 func DecodeData(v []byte) *Data {
 	return nil
+}
+
+func EncodeKV(kv *KV) ([]byte, error) {
+	return nil, nil
+}
+
+func DecodeKV(data []byte) (kv KV) {
+	return
 }
 
 // EncodeWALEntry  will encode entry into a byte slice.
@@ -84,7 +77,6 @@ func EncodeWALEntry(e *pb.Entry) ([]byte, int) {
 	binary.LittleEndian.PutUint64(buf[Crc32Size+EntrySize:], e.Index)
 	copy(buf[Crc32Size+EntrySize+IndexSize:], eBytes)
 
-	// crc32
 	crc := crc32.ChecksumIEEE(buf[Crc32Size+EntrySize+IndexSize:])
 	binary.LittleEndian.PutUint32(buf[:4], crc)
 	return buf, size

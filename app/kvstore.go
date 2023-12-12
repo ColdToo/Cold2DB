@@ -8,12 +8,10 @@ import (
 	"time"
 )
 
-type KV = marshal.KV
-
 type KvStore struct {
 	storage    db.Storage
 	proposeC   chan<- []byte
-	monitorKV  map[uint64]chan struct{}
+	monitorKV  map[int64]chan struct{}
 	ReqTimeout time.Duration
 }
 
@@ -25,36 +23,30 @@ func NewKVStore(proposeC chan<- []byte, requestTimeOut int) *KvStore {
 	s := &KvStore{
 		storage:    storage,
 		proposeC:   proposeC,
-		monitorKV:  make(map[uint64]chan struct{}),
+		monitorKV:  make(map[int64]chan struct{}),
 		ReqTimeout: time.Duration(requestTimeOut) * time.Second,
 	}
 	return s
 }
 
-// todo 线性一致性读
-func (s *KvStore) Lookup(key []byte) ([]byte, error) {
-	return s.storage.Get(key)
-}
-
-func (s *KvStore) Scan(lowKey, highKey []byte) ([][]byte, error) {
-	return nil, nil
-}
-
 func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, error) {
 	timeOutC := time.NewTimer(s.ReqTimeout)
-	uid := uint64(time.Now().UnixNano())
-	kv := new(KV)
+	// todo 重写一个获取全局递增的ID函数
+	uid := time.Now().UnixNano()
+	kv := new(marshal.KV)
 	kv.Key = key
 	kv.Data.Value = val
 	kv.Data.ExpiredAt = expiredAt
+	kv.Data.TimeStamp = time.Now().Unix()
+	kv.ApplySig = uid
 	if delete {
 		kv.Data.Type = marshal.TypeDelete
 	}
-	buf, _ := marshal.GobEncode(kv)
+	buf, _ := marshal.EncodeKV(kv)
 	s.proposeC <- buf
 
-	sig := make(chan struct{})
 	//监听该kv，当该kv被applied时返回客户端
+	sig := make(chan struct{})
 	s.monitorKV[uid] = sig
 
 	select {
@@ -65,6 +57,29 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	}
 }
 
-func (s *KvStore) BatchPropose() {
-	return
+func (s *KvStore) Lookup(key []byte) ([]byte, error) {
+	mv := marshal.DecodeV(value)
+
+	if mv.Type == marshal.TypeDelete {
+		return true, nil
+	}
+
+	if mv.ExpiredAt > 0 && mv.ExpiredAt <= time.Now().Unix() {
+		return true, nil
+	}
+	s.storage.Get(key)
+	return s.storage.Get(key)
+}
+
+func (s *KvStore) Scan(lowKey, highKey []byte) ([][]byte, error) {
+	kvs, err := s.storage.Scan(lowKey, highKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+func (s *KvStore) Put(kvs []*marshal.KV) error {
+	return s.storage.Put(kvs)
 }

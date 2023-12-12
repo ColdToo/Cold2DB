@@ -6,7 +6,6 @@ import (
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
 	"github.com/ColdToo/Cold2DB/db/marshal"
-	"time"
 )
 
 const MB = 1024 * 1024
@@ -42,25 +41,11 @@ func (mt *Memtable) get(key []byte) (bool, []byte) {
 	if found := mt.sklIter.Seek(key); !found {
 		return false, nil
 	}
-
-	value, err := mt.sklIter.Get(key)
-	if err == code.ErrRecordNotExists {
-		return false, nil
-	}
-	mv := marshal.DecodeV(value)
-
-	if mv.Type == marshal.TypeDelete {
-		return true, nil
-	}
-
-	if mv.ExpiredAt > 0 && mv.ExpiredAt <= time.Now().Unix() {
-		return true, nil
-	}
-
-	return false, mv.Value
+	value, _ := mt.sklIter.Get(key)
+	return true, value
 }
 
-func (mt *Memtable) Scan(low, high []byte) (err error, kvs []*marshal.KV) {
+func (mt *Memtable) Scan(low, high []byte) (err error, kvs []*marshal.BytesKV) {
 	// todo
 	// 1、找到距离low最近的一个key
 	// 2、获取该key的value
@@ -73,32 +58,21 @@ func (mt *Memtable) Scan(low, high []byte) (err error, kvs []*marshal.KV) {
 
 	for mt.sklIter.Valid() && bytes.Compare(mt.sklIter.Key(), high) != -1 {
 		key, value := mt.sklIter.Key(), mt.sklIter.Value()
-		mv := marshal.DecodeV(value)
-		if mv.Type == marshal.TypeDelete {
-			continue
-		}
-		if mv.ExpiredAt > 0 && mv.ExpiredAt <= time.Now().Unix() {
-			continue
-		}
-		kvs = append(kvs, &marshal.KV{
+		kvs = append(kvs, &marshal.BytesKV{
 			Key:   key,
-			Value: mv,
+			Value: value,
 		})
 		mt.sklIter.Next()
 	}
 	return
 }
 
-func (mt *Memtable) All() []*marshal.KV {
-	sklIter := mt.sklIter
-	var kvRecords []*marshal.KV
-
-	for sklIter.SeekToFirst(); sklIter.Valid(); sklIter.Next() {
-		key, valueStruct := sklIter.Key(), sklIter.Value()
-		v := marshal.DecodeV(valueStruct)
-		kvRecords = append(kvRecords, &marshal.KV{Key: key, Value: v})
+func (mt *Memtable) All() (kvs []*marshal.BytesKV) {
+	for mt.sklIter.SeekToFirst(); mt.sklIter.Valid(); mt.sklIter.Next() {
+		key, value := mt.sklIter.Key(), mt.sklIter.Value()
+		kvs = append(kvs, &marshal.BytesKV{Key: key, Value: value})
 	}
-	return nil
+	return
 }
 
 func (mt *Memtable) Size() int {

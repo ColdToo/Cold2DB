@@ -18,8 +18,8 @@ import (
 
 //go:generate mockgen -source=./db.go -destination=../mocks/db.go -package=mock
 type Storage interface {
-	Get(key []byte) (val []byte, err error)
-	Scan(lowKey []byte, highKey []byte) (err error)
+	Get(key []byte) (kv *marshal.KV, err error)
+	Scan(lowKey []byte, highKey []byte) (kvs []*marshal.KV, err error)
 	Put(kvs []*marshal.KV) error
 
 	PersistHardState(st pb.HardState) error
@@ -299,7 +299,7 @@ func (db *C2KV) restoreMemEntries() {
 
 // kv operate
 
-func (db *C2KV) Get(key []byte) (val []byte, err error) {
+func (db *C2KV) Get(key []byte) (kv *marshal.KV, err error) {
 	//针对获取到的marshal kv做一些处理
 	flag, val := db.activeMem.get(key)
 	if !flag {
@@ -309,7 +309,7 @@ func (db *C2KV) Get(key []byte) (val []byte, err error) {
 	return
 }
 
-func (db *C2KV) Scan(lowKey []byte, highKey []byte) (err error) {
+func (db *C2KV) Scan(lowKey []byte, highKey []byte) (kvs []*marshal.KV, err error) {
 	//todo memtable和vlog分别下发扫描命令然后再聚合结果
 	// 1、获取需要扫描的memtable
 	// 2、扫描vlog
@@ -319,12 +319,13 @@ func (db *C2KV) Scan(lowKey []byte, highKey []byte) (err error) {
 }
 
 func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
-	kvCs := make([]chan *marshal.KV, db.activeMem.cfg.Concurrency)
+	kvChans := make([]chan *marshal.BytesKV, db.activeMem.cfg.Concurrency)
 	var bytesCount int
-	for _, kv := range kvs {
+	for i, kv := range kvs {
 		bytesCount += len(kv.Key)
-		kv.VBytes = marshal.EncodeV(kv.Value)
-		bytesCount += len(kv.VBytes)
+		dataBytes := marshal.EncodeData(kv.Data)
+		bytesCount += len(dataBytes)
+		//todo
 	}
 
 	//判断是否超出当前memtable大小，若超过获取新的memtable
@@ -336,20 +337,19 @@ func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
 		db.activeMem = <-db.memtablePipe
 	}
 
-	//todo 并发写入active memtable 提高并发度
 	wg := &sync.WaitGroup{}
-	for _, kvC := range kvCs {
+	for _, kvChan := range kvChans {
 		wg.Add(1)
-		go func(kvC chan *marshal.KV) {
+		go func(kvChan chan *marshal.BytesKV) {
 			for {
-				kv := <-kvC
-				err = db.activeMem.put(kv.Key, kv.VBytes)
+				kv := <-kvChan
+				err = db.activeMem.put(kv.Key, kv.Value)
 				if err != nil {
 					return
 				}
 			}
 			wg.Done()
-		}(kvC)
+		}(kvChan)
 	}
 	wg.Wait()
 	return nil

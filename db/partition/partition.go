@@ -95,7 +95,7 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup) {
 	var fileCurrentOffset int
 	for _, kv := range kvs {
 		vSize := len(kv.VBytes)
-		value := marshal.DecodeV(kv.VBytes)
+		value := marshal.DecodeData(kv.Data)
 		meta := &IndexerNode{
 			Key: kv.Key,
 			Meta: &IndexerMeta{

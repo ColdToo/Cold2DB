@@ -35,7 +35,6 @@ type IndexerNode struct {
 	Meta *IndexerMeta
 }
 
-// IndexerMeta
 type IndexerMeta struct {
 	Fid         int
 	ValueOffset int
@@ -46,7 +45,7 @@ type IndexerMeta struct {
 	Value       []byte //smaller value could be place in this
 }
 
-func EncodeMeta(m *IndexerMeta) []byte {
+func EncodeIndexMeta(m *IndexerMeta) []byte {
 	valueSize := len(m.Value)
 	buf := make([]byte, 36+valueSize)
 	binary.LittleEndian.PutUint64(buf[0:8], uint64(m.Fid))
@@ -58,7 +57,7 @@ func EncodeMeta(m *IndexerMeta) []byte {
 	return buf
 }
 
-func DecodeMeta(buf []byte) *IndexerMeta {
+func DecodeIndexMeta(buf []byte) *IndexerMeta {
 	m := &IndexerMeta{}
 	m.Fid = int(binary.LittleEndian.Uint64(buf[0:8]))
 	m.ValueOffset = int(binary.LittleEndian.Uint64(buf[8:16]))
@@ -106,7 +105,7 @@ func (b *BtreeIndexer) Put(metas []*IndexerNode) (err error) {
 	return b.index.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(indexBucketName)
 		for _, meta := range metas {
-			vBytes := EncodeMeta(meta.Meta)
+			vBytes := EncodeIndexMeta(meta.Meta)
 			bucket.Put(meta.Key, vBytes)
 		}
 		return nil

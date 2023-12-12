@@ -74,6 +74,7 @@ func (v *ValueLog) ListenAndFlush() {
 	for {
 		mem := <-v.memFlushC
 		kvs := mem.All()
+		//todo 针对kvs做序列化
 		lastRecords := kvs[len(kvs)-1]
 		partitionRecords := make([][]*marshal.KV, v.vlogCfg.PartitionNums)
 		for _, record := range kvs {

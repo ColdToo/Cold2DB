@@ -185,18 +185,18 @@ func (an *AppNode) applyCommitedEntries(ents []*pb.Entry) (err error) {
 		}
 	}
 
-	var kv KV
+	var kv marshal.KV
 	kvs := make([]*marshal.KV, len(entries))
-	kvIds := make([]uint64, 0)
+	kvIds := make([]int64, 0)
 	for _, entry := range entries {
-		kv = marshal.GobDecode(entry.Data)
+		kv = marshal.DecodeKV(entry.Data)
 		kvs = append(kvs, &kv)
-		kvIds = append(kvIds, kv)
+		kvIds = append(kvIds, kv.ApplySig)
 	}
 
-	err = an.kvStore.storage.Put(kvs)
+	err = an.kvStore.Put(kvs)
 	if err != nil {
-		log.Errorf("", err)
+		log.Errorf("apply committed entries error", err)
 		return
 	}
 
@@ -204,7 +204,7 @@ func (an *AppNode) applyCommitedEntries(ents []*pb.Entry) (err error) {
 		close(an.kvStore.monitorKV[id])
 		delete(an.kvStore.monitorKV, id)
 	}
-	return nil
+	return
 }
 
 func (an *AppNode) saveEntries(ents []*pb.Entry) (err error) {
