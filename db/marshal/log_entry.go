@@ -91,6 +91,15 @@ func DecodeWALEntryHeader(buf []byte) (header WalEntryHeader) {
 	return
 }
 
+const (
+	FidOffset         = 0
+	ValueOffset       = 8
+	ValueSize         = 16
+	TimeStamp         = 24
+	ValueCrc32        = 28
+	SerializationSize = 36
+)
+
 type IndexerMeta struct {
 	Fid         int64
 	ValueOffset int64
@@ -102,24 +111,24 @@ type IndexerMeta struct {
 
 func EncodeIndexMeta(m *IndexerMeta) []byte {
 	valueSize := len(m.Value)
-	buf := make([]byte, 36+valueSize)
-	binary.LittleEndian.PutUint64(buf[0:8], uint64(m.Fid))
-	binary.LittleEndian.PutUint64(buf[8:16], uint64(m.ValueOffset))
-	binary.LittleEndian.PutUint64(buf[16:24], uint64(m.ValueSize))
-	binary.LittleEndian.PutUint32(buf[24:28], m.ValueCrc32)
-	binary.LittleEndian.PutUint64(buf[28:36], uint64(m.TimeStamp))
-	copy(buf[36:], m.Value)
+	buf := make([]byte, SerializationSize+valueSize)
+	binary.LittleEndian.PutUint64(buf[FidOffset:ValueOffset], uint64(m.Fid))
+	binary.LittleEndian.PutUint64(buf[ValueOffset:ValueSize], uint64(m.ValueOffset))
+	binary.LittleEndian.PutUint64(buf[ValueSize:TimeStamp], uint64(m.ValueSize))
+	binary.LittleEndian.PutUint32(buf[TimeStamp:ValueCrc32], m.ValueCrc32)
+	binary.LittleEndian.PutUint64(buf[ValueCrc32:SerializationSize], uint64(m.TimeStamp))
+	copy(buf[SerializationSize:], m.Value)
 	return buf
 }
 
 func DecodeIndexMeta(buf []byte) *IndexerMeta {
 	m := &IndexerMeta{}
-	m.Fid = int64(int(binary.LittleEndian.Uint64(buf[0:8])))
-	m.ValueOffset = int64(int(binary.LittleEndian.Uint64(buf[8:16])))
-	m.ValueSize = int64(int(binary.LittleEndian.Uint64(buf[16:24])))
-	m.ValueCrc32 = binary.LittleEndian.Uint32(buf[24:28])
-	m.TimeStamp = int64(binary.LittleEndian.Uint64(buf[28:36]))
-	m.Value = make([]byte, len(buf)-36)
-	copy(m.Value, buf[36:])
+	m.Fid = int64(int(binary.LittleEndian.Uint64(buf[FidOffset:ValueOffset])))
+	m.ValueOffset = int64(int(binary.LittleEndian.Uint64(buf[ValueOffset:ValueSize])))
+	m.ValueSize = int64(int(binary.LittleEndian.Uint64(buf[ValueSize:TimeStamp])))
+	m.ValueCrc32 = binary.LittleEndian.Uint32(buf[TimeStamp:ValueCrc32])
+	m.TimeStamp = int64(binary.LittleEndian.Uint64(buf[ValueCrc32:SerializationSize]))
+	m.Value = make([]byte, len(buf)-SerializationSize)
+	copy(m.Value, buf[SerializationSize:])
 	return m
 }

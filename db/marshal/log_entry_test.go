@@ -3,6 +3,7 @@ package marshal
 import (
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/stretchr/testify/assert"
+	"reflect"
 	"testing"
 )
 
@@ -59,4 +60,22 @@ func TestEncodeANdDecodeWALEntry(t *testing.T) {
 
 	entry2.Unmarshal(wEntBytes[ChunkHeaderSize : ChunkHeaderSize+header.EntrySize])
 	assert.EqualValues(t, entry1, entry2)
+}
+
+func TestIndexMetaSerialization(t *testing.T) {
+	m := &IndexerMeta{
+		Fid:         123,
+		ValueOffset: 45623232323,
+		ValueSize:   789232323,
+		TimeStamp:   1000000,
+		ValueCrc32:  987654,
+		Value:       []byte("test value 1123232"),
+	}
+
+	serialized := EncodeIndexMeta(m)
+	deserialized := DecodeIndexMeta(serialized)
+
+	if !reflect.DeepEqual(m, deserialized) {
+		t.Errorf("Serialization and deserialization do not match")
+	}
 }
