@@ -25,7 +25,7 @@ type BytesKV struct {
 type KV struct {
 	Key      []byte
 	ApplySig int64
-	Data     Data
+	Data     Data //作为value存储在跳表中
 }
 
 type Data struct {
@@ -98,9 +98,9 @@ type IndexerNode struct {
 }
 
 type IndexerMeta struct {
-	Fid         int
-	ValueOffset int
-	ValueSize   int
+	Fid         int64
+	ValueOffset int64
+	ValueSize   int64
 	TimeStamp   int64
 	ExpiredAt   int64
 	ValueCrc32  uint32
@@ -121,9 +121,9 @@ func EncodeIndexMeta(m *IndexerMeta) []byte {
 
 func DecodeIndexMeta(buf []byte) *IndexerMeta {
 	m := &IndexerMeta{}
-	m.Fid = int(binary.LittleEndian.Uint64(buf[0:8]))
-	m.ValueOffset = int(binary.LittleEndian.Uint64(buf[8:16]))
-	m.ValueSize = int(binary.LittleEndian.Uint64(buf[16:24]))
+	m.Fid = int64(int(binary.LittleEndian.Uint64(buf[0:8])))
+	m.ValueOffset = int64(int(binary.LittleEndian.Uint64(buf[8:16])))
+	m.ValueSize = int64(int(binary.LittleEndian.Uint64(buf[16:24])))
 	m.ValueCrc32 = binary.LittleEndian.Uint32(buf[24:28])
 	m.TimeStamp = int64(binary.LittleEndian.Uint64(buf[28:36]))
 	m.Value = make([]byte, len(buf)-36)

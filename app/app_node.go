@@ -185,16 +185,16 @@ func (an *AppNode) applyCommitedEntries(ents []*pb.Entry) (err error) {
 		}
 	}
 
-	var kv marshal.KV
+	var kv *marshal.KV
 	kvs := make([]*marshal.KV, len(entries))
 	kvIds := make([]int64, 0)
 	for _, entry := range entries {
 		kv = marshal.DecodeKV(entry.Data)
-		kvs = append(kvs, &kv)
+		kvs = append(kvs, kv)
 		kvIds = append(kvIds, kv.ApplySig)
 	}
 
-	err = an.kvStore.Put(kvs)
+	err = an.kvStore.Apply(kvs)
 	if err != nil {
 		log.Errorf("apply committed entries error", err)
 		return
@@ -208,11 +208,11 @@ func (an *AppNode) applyCommitedEntries(ents []*pb.Entry) (err error) {
 }
 
 func (an *AppNode) saveEntries(ents []*pb.Entry) (err error) {
-	return an.kvStore.storage.SaveEntries(ents)
+	return an.kvStore.storage.PersistUnstableEnts(ents)
 }
 
 func (an *AppNode) saveHardState(state pb.HardState) error {
-	return an.kvStore.storage.SaveHardState(state)
+	return an.kvStore.storage.PersistHardState(state)
 }
 
 // Process Rat网络层接口,网络层通过该接口与RaftNode交互

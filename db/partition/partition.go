@@ -1,10 +1,12 @@
 package partition
 
 import (
+	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db/iooperator/bufio"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/valyala/bytebufferpool"
 	"hash/crc32"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -33,12 +35,18 @@ func NewSST(fileName string) (*SST, error) {
 	}, nil
 }
 
-func (s *SST) Write([]byte) error {
-
+func (s *SST) Write(buf []byte) (err error) {
+	_, err = s.fd.Write(buf)
+	if err != nil {
+		return err
+	}
+	return
 }
 
-func (s *SST) Read(vSize, vOffset int) ([]byte, error) {
-
+func (s *SST) Read(vSize, vOffset int64) (buf []byte, err error) {
+	s.fd.Seek(vOffset, io.SeekStart)
+	buf = make([]byte, vSize)
+	s.fd.Read(buf)
 }
 
 func createSSTFileName() string {
@@ -50,14 +58,14 @@ type Partition struct {
 	dirPath string
 	pipeSST chan *SST
 	indexer Indexer
-	SSTMap  map[int]*SST
+	SSTMap  map[int64]*SST
 }
 
 func OpenPartition(partitionDir string) (p *Partition) {
 	p = &Partition{
 		dirPath: partitionDir,
 		pipeSST: make(chan *SST, 1),
-		SSTMap:  make(map[int]*SST),
+		SSTMap:  make(map[int64]*SST),
 	}
 
 	files, err := os.ReadDir(partitionDir)
@@ -76,7 +84,7 @@ func OpenPartition(partitionDir string) (p *Partition) {
 				return nil
 			}
 			fid, err := strconv.Atoi(fName)
-			p.SSTMap[fid] = sst
+			p.SSTMap[int64(fid)] = sst
 		}
 	}
 
@@ -92,24 +100,27 @@ func OpenPartition(partitionDir string) (p *Partition) {
 	return
 }
 
-// todo 在partition层就校验key是否过期？
+// todo 支持在partition层就校验key是否过期避免不必要的硬盘访问
 func (p *Partition) Get(key []byte) (kv *marshal.BytesKV, err error) {
 	//todo 根据索引在sst文件中获取值
 	indexMeta, err := p.indexer.Get(key)
 	if err != nil {
-		return nil, nil
-	}
-	//todo check
-	index := marshal.DecodeIndexMeta(indexMeta.Value)
-	sst, ok := p.SSTMap[index.Fid]
-	value, err := sst.Read(index.ValueSize, index.ValueOffset)
-	if err != nil {
 		return nil, err
 	}
-	return &marshal.BytesKV{
-		Key:   key,
-		Value: value,
-	}, nil
+	//todo check key是否过期
+	index := marshal.DecodeIndexMeta(indexMeta.Value)
+	if sst, ok := p.SSTMap[index.Fid]; ok {
+		value, err := sst.Read(index.ValueSize, index.ValueOffset)
+		if err != nil {
+			return nil, err
+		}
+		return &marshal.BytesKV{
+			Key:   key,
+			Value: value,
+		}, nil
+	}
+
+	return nil, code.ErrCanNotFondSSTFile
 }
 
 func (p *Partition) Scan(low, high []byte) (kvs []*marshal.KV) {
@@ -130,16 +141,15 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup) {
 	//todo 每次刷盘都重新开启一个sst文件还是刷入旧文件控制旧文件的size？
 	sst := <-p.pipeSST
 	fid, _ := strconv.Atoi(sst.fd.Name())
-
 	indexMetas := make([]*marshal.BytesKV, 0)
-	var fileCurrentOffset int
+	var fileCurrentOffset int64
 	for _, kv := range kvs {
 		vSize := len(kv.Data.Value)
 
 		meta := &marshal.IndexerMeta{
-			Fid:         fid,
+			Fid:         int64(fid),
 			ValueOffset: fileCurrentOffset,
-			ValueSize:   vSize,
+			ValueSize:   int64(vSize),
 			ValueCrc32:  crc32.ChecksumIEEE(kv.Data.Value),
 			TimeStamp:   kv.Data.TimeStamp,
 			ExpiredAt:   kv.Data.ExpiredAt,
@@ -154,7 +164,7 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup) {
 			Key: kv.Key, Value: marshal.EncodeIndexMeta(meta),
 		})
 
-		fileCurrentOffset += len(kv.Data.Value)
+		fileCurrentOffset += int64(len(kv.Data.Value))
 		buf.Write(kv.Data.Value)
 	}
 
@@ -170,7 +180,7 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup) {
 		return
 	}
 
-	p.SSTMap[fid] = sst
+	p.SSTMap[int64(fid)] = sst
 	wg.Done()
 }
 
