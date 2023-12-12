@@ -74,12 +74,12 @@ func (v *ValueLog) ListenAndFlush() {
 	for {
 		mem := <-v.memFlushC
 		kvs := mem.All()
-		//todo 针对kvs做序列化
-		lastRecords := kvs[len(kvs)-1]
 		partitionRecords := make([][]*marshal.KV, v.vlogCfg.PartitionNums)
+		lastRecords := marshal.DecodeKV(kvs[len(kvs)-1].Value)
+
 		for _, record := range kvs {
 			p := v.getKeyPartition(record.Key)
-			partitionRecords[p] = append(partitionRecords[p], record)
+			partitionRecords[p] = append(partitionRecords[p], marshal.DecodeKV(record.Key))
 		}
 
 		wg := &sync.WaitGroup{}
@@ -87,14 +87,12 @@ func (v *ValueLog) ListenAndFlush() {
 			if len(partitionRecords[i]) == 0 {
 				continue
 			}
-			part := i
-
 			wg.Add(1)
-			go v.partition[part].PersistKvs(partitionRecords[part], wg)
+			go v.partition[i].PersistKvs(partitionRecords[i], wg)
 		}
 		wg.Wait()
 
-		v.kvStateSeg.PersistIndex = lastRecords.Value.Index
+		v.kvStateSeg.PersistIndex = lastRecords.Data.Index
 		err := v.kvStateSeg.Flush()
 		if err != nil {
 			log.Panicf("can not flush kv state segment file %e", err)

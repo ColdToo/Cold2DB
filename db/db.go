@@ -65,6 +65,28 @@ func GetStorage() (Storage, error) {
 	}
 }
 
+func dbCfgCheck(dbCfg *config.DBConfig) (err error) {
+	if !utils.PathExist(dbCfg.DBPath) {
+		if err = os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
+			return err
+		}
+	}
+	if !utils.PathExist(dbCfg.WalConfig.WalDirPath) {
+		if err = os.MkdirAll(dbCfg.WalConfig.WalDirPath, os.ModePerm); err != nil {
+			return err
+		}
+	}
+	if !utils.PathExist(dbCfg.ValueLogConfig.ValueLogDir) {
+		if err = os.MkdirAll(dbCfg.ValueLogConfig.ValueLogDir, os.ModePerm); err != nil {
+			return err
+		}
+	}
+	if dbCfg.MemConfig.MemtableNums <= 5 || dbCfg.MemConfig.MemtableNums > 20 {
+		return code.ErrIllegalMemtableNums
+	}
+	return nil
+}
+
 func OpenDB(dbCfg *config.DBConfig) {
 	err := dbCfgCheck(dbCfg)
 	if err != nil {
@@ -100,28 +122,6 @@ func OpenDB(dbCfg *config.DBConfig) {
 			C2.memtablePipe <- memtable
 		}
 	}()
-}
-
-func dbCfgCheck(dbCfg *config.DBConfig) (err error) {
-	if !utils.PathExist(dbCfg.DBPath) {
-		if err = os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
-			return err
-		}
-	}
-	if !utils.PathExist(dbCfg.WalConfig.WalDirPath) {
-		if err = os.MkdirAll(dbCfg.WalConfig.WalDirPath, os.ModePerm); err != nil {
-			return err
-		}
-	}
-	if !utils.PathExist(dbCfg.ValueLogConfig.ValueLogDir) {
-		if err = os.MkdirAll(dbCfg.ValueLogConfig.ValueLogDir, os.ModePerm); err != nil {
-			return err
-		}
-	}
-	if dbCfg.MemConfig.MemtableNums <= 5 || dbCfg.MemConfig.MemtableNums > 20 {
-		return code.ErrIllegalMemtableNums
-	}
-	return nil
 }
 
 func (db *C2KV) restoreMemoryFromWAL() {
@@ -306,6 +306,7 @@ func (db *C2KV) Get(key []byte) (kv *marshal.KV, err error) {
 		return nil, errors.New("the key is not exist")
 	}
 	//todo 若memtable找不到则查询索引
+	db.valueLog.Get(key)
 	return
 }
 

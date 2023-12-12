@@ -48,7 +48,7 @@ func EncodeKV(kv *KV) ([]byte, error) {
 	return nil, nil
 }
 
-func DecodeKV(data []byte) (kv KV) {
+func DecodeKV(data []byte) (kv *KV) {
 	return
 }
 
@@ -90,4 +90,43 @@ func DecodeWALEntryHeader(buf []byte) (header WalEntryHeader) {
 	header.EntrySize = int(entrySize)
 	header.Index = index
 	return
+}
+
+type IndexerNode struct {
+	Key  []byte
+	Meta *IndexerMeta
+}
+
+type IndexerMeta struct {
+	Fid         int
+	ValueOffset int
+	ValueSize   int
+	TimeStamp   int64
+	ExpiredAt   int64
+	ValueCrc32  uint32
+	Value       []byte //smaller value could be place in this
+}
+
+func EncodeIndexMeta(m *IndexerMeta) []byte {
+	valueSize := len(m.Value)
+	buf := make([]byte, 36+valueSize)
+	binary.LittleEndian.PutUint64(buf[0:8], uint64(m.Fid))
+	binary.LittleEndian.PutUint64(buf[8:16], uint64(m.ValueOffset))
+	binary.LittleEndian.PutUint64(buf[16:24], uint64(m.ValueSize))
+	binary.LittleEndian.PutUint32(buf[24:28], m.ValueCrc32)
+	binary.LittleEndian.PutUint64(buf[28:36], uint64(m.TimeStamp))
+	copy(buf[36:], m.Value)
+	return buf
+}
+
+func DecodeIndexMeta(buf []byte) *IndexerMeta {
+	m := &IndexerMeta{}
+	m.Fid = int(binary.LittleEndian.Uint64(buf[0:8]))
+	m.ValueOffset = int(binary.LittleEndian.Uint64(buf[8:16]))
+	m.ValueSize = int(binary.LittleEndian.Uint64(buf[16:24]))
+	m.ValueCrc32 = binary.LittleEndian.Uint32(buf[24:28])
+	m.TimeStamp = int64(binary.LittleEndian.Uint64(buf[28:36]))
+	m.Value = make([]byte, len(buf)-36)
+	copy(m.Value, buf[36:])
+	return m
 }
