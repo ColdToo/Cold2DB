@@ -2,8 +2,9 @@ package marshal
 
 import (
 	"encoding/binary"
-	"github.com/ColdToo/Cold2DB/pb"
 	"hash/crc32"
+
+	"github.com/ColdToo/Cold2DB/pb"
 )
 
 const (
@@ -11,21 +12,19 @@ const (
 	//    4       4       8
 	ChunkHeaderSize = 16
 
-	Crc32Size  = 4
-	EntrySize  = 4
-	IndexSize  = 8
-	TypeDelete = 1
+	Crc32Size     = 4
+	EntrySize     = 4
+	IndexSize     = 8
+	TypeDelete    = 1
+	TimeStampSize = 8
+	TypeSize      = 1
+	ApplySigSize  = 8
+	KeySize       = 4
 )
 
 type BytesKV struct {
 	Key   []byte
 	Value []byte
-}
-
-type KV struct {
-	Key      []byte
-	ApplySig int64
-	Data     *Data //作为value存储在跳表中
 }
 
 type Data struct {
@@ -36,19 +35,48 @@ type Data struct {
 }
 
 func EncodeData(v *Data) []byte {
-	return nil
+	buf := make([]byte, IndexSize+TimeStampSize+TypeSize+len(v.Value))
+	binary.LittleEndian.PutUint64(buf[:IndexSize], v.Index)
+	binary.LittleEndian.PutUint64(buf[IndexSize:IndexSize+TimeStampSize], uint64(v.TimeStamp))
+	buf[IndexSize+TimeStampSize] = byte(v.Type)
+	copy(buf[IndexSize+TimeStampSize+TypeSize:], v.Value)
+	return buf
 }
 
 func DecodeData(v []byte) *Data {
-	return nil
+	data := &Data{}
+	data.Index = binary.LittleEndian.Uint64(v[:IndexSize])
+	data.TimeStamp = int64(binary.LittleEndian.Uint64(v[IndexSize : IndexSize+TimeStampSize]))
+	data.Type = int8(v[IndexSize+TimeStampSize])
+	data.Value = v[IndexSize+TimeStampSize+TypeSize:]
+	return data
 }
 
-func EncodeKV(kv *KV) ([]byte, error) {
-	return nil, nil
+type KV struct {
+	ApplySig int64
+	KeySize  int
+	Key      []byte
+	Data     *Data
+}
+
+func EncodeKV(kv *KV) []byte {
+	dataBytes := EncodeData(kv.Data) // Serialize Data struct
+	keyLen := len(kv.Key)
+	buf := make([]byte, ApplySigSize+KeySize+keyLen+len(dataBytes))
+	binary.LittleEndian.PutUint64(buf[:ApplySigSize], uint64(kv.ApplySig))
+	binary.LittleEndian.PutUint32(buf[ApplySigSize:ApplySigSize+KeySize], uint32(keyLen))
+	copy(buf[ApplySigSize+KeySize:], kv.Key)
+	copy(buf[ApplySigSize+KeySize+keyLen:], dataBytes)
+	return buf
 }
 
 func DecodeKV(data []byte) (kv *KV) {
-	return
+	kv = &KV{}
+	kv.ApplySig = int64(binary.LittleEndian.Uint64(data[:ApplySigSize]))
+	kv.KeySize = int(binary.LittleEndian.Uint32(data[ApplySigSize : ApplySigSize+KeySize]))
+	kv.Key = data[ApplySigSize+KeySize : ApplySigSize+KeySize+kv.KeySize]
+	kv.Data = DecodeData(data[ApplySigSize+KeySize+kv.KeySize:])
+	return kv
 }
 
 // EncodeWALEntry  will encode entry into a byte slice.

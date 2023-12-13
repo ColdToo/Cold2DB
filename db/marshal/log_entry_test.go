@@ -79,3 +79,33 @@ func TestIndexMetaSerialization(t *testing.T) {
 		t.Errorf("Serialization and deserialization do not match")
 	}
 }
+
+func TestEncodeDecodeData(t *testing.T) {
+	v := &Data{
+		Index:     123,
+		TimeStamp: 456,
+		Type:      1,
+		Value:     []byte("test"),
+	}
+	encodedData := EncodeData(v)
+	decodedData := DecodeData(encodedData)
+	assert.EqualValues(t, v, decodedData)
+}
+
+func TestEncodeDecodeKV(t *testing.T) {
+	kv := &KV{
+		ApplySig: 789,
+		KeySize:  len([]byte("key")),
+		Key:      []byte("key"),
+		Data: &Data{
+			Index:     123,
+			TimeStamp: 456,
+			Type:      1,
+			Value:     []byte("test"),
+		},
+	}
+	encodedKV := EncodeKV(kv)
+	decodedKV := DecodeKV(encodedKV)
+
+	assert.EqualValues(t, kv, decodedKV)
+}
