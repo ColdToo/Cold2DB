@@ -35,24 +35,42 @@ func TestMemtable_WriteRead(t *testing.T) {
 		t.Log(err)
 	}
 
-	kvs := MockKV(1000)
-	verrifyKVs := make([]KVmock, 0)
+	kvs := MockKV(10000)
+	verifyKVs := make([]KVmock, 0)
 	for _, kv := range kvs {
 		mem.put(kv.k, kv.v)
 	}
 
 	for _, kv := range kvs {
 		if flag, v := mem.get(kv.k); flag {
-			verrifyKVs = append(verrifyKVs, KVmock{k: kv.k, v: v})
+			verifyKVs = append(verifyKVs, KVmock{k: kv.k, v: v})
 		} else {
 			t.Error("can not fund k")
 		}
 	}
 
-	assert.EqualValues(t, kvs, verrifyKVs)
+	assert.EqualValues(t, kvs, verifyKVs)
 }
 
 func TestMemtable_Scan(t *testing.T) {
+	mem, err := NewMemtable(TestMemConfig)
+	if err != nil {
+		t.Log(err)
+	}
+
+	kvs := MockKV(10000)
+	verifyKVs := make([]KVmock, 0)
+	for _, kv := range kvs {
+		mem.put(kv.k, kv.v)
+	}
+
+}
+
+func TestMemtable_All(t *testing.T) {
+
+}
+
+func TestMemtable_Queue(t *testing.T) {
 
 }
 

@@ -229,7 +229,7 @@ func (db *C2KV) restoreImmTable() {
 
 		select {
 		case kv := <-kvC:
-			err := memTable.put(kv.Key, marshal.EncodeData(kv.Data))
+			memTable.put(kv.Key, marshal.EncodeData(kv.Data))
 			return
 		case err := <-signalC:
 			if err != nil {
@@ -297,13 +297,12 @@ func (db *C2KV) Get(key []byte) (kv *marshal.KV, err error) {
 }
 
 func (db *C2KV) Scan(lowKey []byte, highKey []byte) (kvs []*marshal.KV, err error) {
-	kvChan := make(chan *marshal.KV)
+	/*kvChan := make(chan *marshal.KV)
 	go func() {
 		kvs, err := db.valueLog.Scan(lowKey, highKey)
 		if err != nil {
 			return
 		}
-		kvChan <- kvs...
 	}()
 
 	for _, mem := range db.immtableQ.tables {
@@ -311,10 +310,8 @@ func (db *C2KV) Scan(lowKey []byte, highKey []byte) (kvs []*marshal.KV, err erro
 		if err != nil {
 			return
 		}
-	}
-
-
-	return kvs,err
+	}*/
+	return kvs, err
 }
 
 func (db *C2KV) Put(kvs []*marshal.KV) (err error) {

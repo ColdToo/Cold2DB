@@ -95,7 +95,7 @@ func NewMemtableQueue(capacity int) *MemtableQueue {
 
 func (q *MemtableQueue) Enqueue(item *Memtable) {
 	if q.size == q.capacity {
-		// todo 缓冲，此时应该不再接受写入，需要将immtable刷盘，等待memtable的数量恢复到和配置一样才能允许写入
+		//todo 缓冲，此时应该不再接受写入，需要将immtable刷盘，等待memtable的数量恢复到和配置一样才能允许写入
 		newCapacity := q.capacity * 2
 		newtables := make([]*Memtable, newCapacity)
 		copy(newtables, q.tables)
