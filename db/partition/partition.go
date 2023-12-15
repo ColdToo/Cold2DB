@@ -2,13 +2,14 @@ package partition
 
 import (
 	"github.com/ColdToo/Cold2DB/code"
-	"github.com/ColdToo/Cold2DB/db/iooperator/bufio"
+	"github.com/ColdToo/Cold2DB/db/iooperator"
 	"github.com/ColdToo/Cold2DB/db/marshal"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/valyala/bytebufferpool"
 	"hash/crc32"
 	"io"
-	"log"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,22 +17,22 @@ import (
 )
 
 const (
-	SSTFileSuffixName = ".SST"
-	smallValue        = 128
+	SSTFileSuffixName    = ".SST"
+	SSTFileTmpSuffixName = ".SST-TMP"
+	smallValue           = 128
 )
 
 type SST struct {
 	fd      *os.File
 	fName   string
-	offset  int64
 	SSTSize int64
 }
 
+// NewSST todo 一个value如果跨两个block，那么可能需要访问两次硬盘,后续优化vlog中数据的对齐
 func NewSST(fileName string) (*SST, error) {
 	return &SST{
-		fd:     bufio.OpenBufferedFile(fileName),
-		fName:  fileName,
-		offset: 0,
+		fd:    iooperator.OpenBufferIOFile(fileName),
+		fName: fileName,
 	}, nil
 }
 
@@ -53,15 +54,36 @@ func (s *SST) Read(vSize, vOffset int64) (buf []byte, err error) {
 	return
 }
 
-func createSSTFileName() string {
-	return time.Now().String() + SSTFileSuffixName
+func (s *SST) Close() {
+	if s.fd != nil {
+		s.fd.Close()
+	}
+}
+
+func (s *SST) Remove() {
+
+}
+
+func (s *SST) Rename(fName string) {
+	if s.fd != nil {
+		s.fd.Close()
+		os.Rename(s.fName, fName)
+	}
+}
+
+func createTmpSSTFileName(dirPath string) string {
+	return path.Join(dirPath, time.Now().String()+SSTFileTmpSuffixName)
+}
+
+func createSSTFileName(dirPath string) string {
+	return path.Join(time.Now().String() + SSTFileTmpSuffixName)
 }
 
 // Partition 一个partition文件由一个index文件和多个sst文件组成
 type Partition struct {
 	dirPath string
 	pipeSST chan *SST
-	indexer Indexer
+	indexer *BtreeIndexer
 	SSTMap  map[int64]*SST
 }
 
@@ -93,7 +115,7 @@ func OpenPartition(partitionDir string) (p *Partition) {
 	}
 
 	go func() {
-		sst, err := NewSST(createSSTFileName())
+		sst, err := NewSST(createTmpSSTFileName())
 		if err != nil {
 			return
 		}
@@ -105,12 +127,10 @@ func OpenPartition(partitionDir string) (p *Partition) {
 }
 
 func (p *Partition) Get(key []byte) (kv *marshal.KV, err error) {
-	//todo 根据索引在sst文件中获取值
 	indexMeta, err := p.indexer.Get(key)
 	if err != nil {
 		return nil, err
 	}
-	//todo check key是否过期
 	index := marshal.DecodeIndexMeta(indexMeta.Value)
 	if sst, ok := p.SSTMap[index.Fid]; ok {
 		value, err := sst.Read(index.ValueSize, index.ValueOffset)
@@ -122,12 +142,10 @@ func (p *Partition) Get(key []byte) (kv *marshal.KV, err error) {
 			Data: marshal.DecodeData(value),
 		}, nil
 	}
-
 	return nil, code.ErrCanNotFondSSTFile
 }
 
 func (p *Partition) Scan(low, high []byte) (kvs []*marshal.KV, err error) {
-	//todo 根据索引在sst文件中获取值
 	indexMetas, err := p.indexer.Scan(low, high)
 	if err != nil {
 		return
@@ -149,21 +167,28 @@ func (p *Partition) Scan(low, high []byte) (kvs []*marshal.KV, err error) {
 }
 
 func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan error) {
+	var err error
 	buf := bytebufferpool.Get()
 	buf.Reset()
 	defer func() {
 		bytebufferpool.Put(buf)
 		wg.Done()
+		if err != nil {
+			errC <- err
+		}
 	}()
 
-	//todo 每次刷盘都重新开启一个sst文件还是刷入旧文件控制旧文件的size？
 	sst := <-p.pipeSST
 	fid, _ := strconv.Atoi(sst.fd.Name())
 	indexMetas := make([]*marshal.BytesKV, 0)
 	var fileCurrentOffset int64
 	for _, kv := range kvs {
-		vSize := len(kv.Data.Value)
+		if kv.Data.Type == marshal.TypeDelete {
+			indexMetas = append(indexMetas, &marshal.BytesKV{Key: kv.Key})
+			continue
+		}
 
+		vSize := len(kv.Data.Value)
 		meta := &marshal.IndexerMeta{
 			Fid:         int64(fid),
 			ValueOffset: fileCurrentOffset,
@@ -171,35 +196,38 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan 
 			ValueCrc32:  crc32.ChecksumIEEE(kv.Data.Value),
 			TimeStamp:   kv.Data.TimeStamp,
 		}
-
 		if vSize <= smallValue {
 			meta.Value = kv.Data.Value
 		}
 
-		indexMetas = append(indexMetas, &marshal.BytesKV{
-			Key: kv.Key, Value: marshal.EncodeIndexMeta(meta),
-		})
-
+		indexMetas = append(indexMetas, &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeIndexMeta(meta)})
 		fileCurrentOffset += int64(len(kv.Data.Value))
-		if _, err := buf.Write(kv.Data.Value); err != nil {
-			errC <- err
+		if _, err = buf.Write(kv.Data.Value); err != nil {
+			return
 		}
 	}
 
-	//todo 索引更新和memtable落盘应该是一个原子操作，写入的index信息应该显示提交
-	//todo 会有读写冲突
-	err := p.indexer.Put(indexMetas)
-	if err != nil {
+	tx, err := p.indexer.StartTx()
+	if tx, err = p.indexer.StartTx(); err != nil {
+		log.Errorf("start index transaction failed", err)
 		return
 	}
-
-	//todo 一个value如果跨两个block，那么可能需要访问两次硬盘,后续优化vlog的文件布局
-	//todo 写入文件操作也必须是一个原子操作
-	err = sst.Write(buf.Bytes())
-	if err != nil {
+	if err = p.indexer.Insert(tx, indexMetas); err != nil {
+		tx.Rollback()
 		return
 	}
+	if err = sst.Write(buf.Bytes()); err != nil {
+		tx.Rollback()
+		sst.Remove()
+		log.Errorf("write sst file failed", err)
+	}
 
+	if err = tx.Commit(); err != nil {
+		tx.Rollback()
+		sst.Remove()
+		return
+	}
+	sst.Rename(createSSTFileName(p.dirPath))
 	p.SSTMap[int64(fid)] = sst
 }
 

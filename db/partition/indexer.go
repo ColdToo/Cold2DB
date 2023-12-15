@@ -15,23 +15,7 @@ const (
 	indexFileSuffixName = ".INDEX"
 )
 
-type Indexer interface {
-	Put(meta []*marshal.BytesKV) (err error)
-
-	Get(key []byte) (meta *marshal.BytesKV, err error)
-
-	Scan(low, high []byte) (meta []*marshal.BytesKV, err error)
-
-	Delete(key []byte) error
-
-	DeleteBatch(keys [][]byte) error
-
-	Sync() error
-
-	Close() (err error)
-}
-
-func NewIndexer(partitionDir string) (Indexer, error) {
+func NewIndexer(partitionDir string) (*BtreeIndexer, error) {
 	indexer, err := bbolt.Open(filepath.Join(partitionDir, time.Now().Format("2006-01-02T15:04:05")+indexFileSuffixName), 0600,
 		&bbolt.Options{
 			NoSync:          true,
@@ -63,16 +47,6 @@ type BtreeIndexer struct {
 	index *bbolt.DB
 }
 
-func (b *BtreeIndexer) Put(metas []*marshal.BytesKV) (err error) {
-	return b.index.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(indexBucketName)
-		for _, meta := range metas {
-			bucket.Put(meta.Key, meta.Value)
-		}
-		return nil
-	})
-}
-
 func (b *BtreeIndexer) Get(key []byte) (meta *marshal.BytesKV, err error) {
 	meta = &marshal.BytesKV{}
 	err = b.index.View(func(tx *bbolt.Tx) error {
@@ -96,22 +70,25 @@ func (b *BtreeIndexer) Scan(low, high []byte) (meta []*marshal.BytesKV, err erro
 	return
 }
 
-func (b *BtreeIndexer) Delete(key []byte) error {
-	return b.index.Update(func(tx *bbolt.Tx) error {
-		return tx.Bucket(indexBucketName).Delete(key)
-	})
-}
-
-func (b *BtreeIndexer) DeleteBatch(keys [][]byte) error {
-	return b.index.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(indexBucketName)
-		for _, key := range keys {
-			if err := bucket.Delete(key); err != nil {
-				return err
+func (b *BtreeIndexer) Insert(tx *bbolt.Tx, kvs []*marshal.BytesKV) (err error) {
+	txBucket := tx.Bucket(indexBucketName)
+	for _, kv := range kvs {
+		switch len(kv.Value) == 0 {
+		case true:
+			if err = txBucket.Delete(kv.Key); err != nil {
+				return
+			}
+		default:
+			if err = txBucket.Put(kv.Key, kv.Value); err != nil {
+				return
 			}
 		}
-		return nil
-	})
+	}
+	return
+}
+
+func (b *BtreeIndexer) StartTx() (tx *bbolt.Tx, err error) {
+	return b.index.Begin(true)
 }
 
 func (b *BtreeIndexer) Sync() error {
