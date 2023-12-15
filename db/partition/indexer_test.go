@@ -2,46 +2,61 @@ package partition
 
 import (
 	"github.com/ColdToo/Cold2DB/db/marshal"
-	"github.com/stretchr/testify/assert"
 	"os"
+	"reflect"
 	"testing"
 )
 
 func TestBtreeIndexer(t *testing.T) {
-	partitionDir, _ := os.Getwd()
-	indexer, err := NewIndexer(partitionDir)
+	getwd, _ := os.Getwd()
+	indexer, err := NewIndexer(getwd)
 	if err != nil {
-		t.Errorf("Error creating indexer: %v", err)
+		t.Fatal(err)
 	}
-	defer func() {
-		if err := indexer.Close(); err != nil {
-			t.Errorf("Error closing indexer: %v", err)
-		}
-	}()
+	defer indexer.Close()
 
-	// Test Put
-	metas := []*marshal.BytesKV{
-		{Key: []byte("key1"), Value: []byte("value1")},
-		{Key: []byte("key2"), Value: []byte("value2")},
+	tx, err := indexer.StartTx()
+
+	key := []byte("testKey")
+	value := []byte("testValue")
+	err = indexer.Insert(tx, []*marshal.BytesKV{{Key: key, Value: value}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	err = indexer.Put(metas)
-	assert.NoError(t, err, "Put should not return an error")
 
-	// Test Get
-	meta, err := indexer.Get([]byte("key1"))
-	assert.NoError(t, err, "Get should not return an error")
-	assert.Equal(t, []byte("value1"), meta.Value, "Retrieved value should match")
+	low := []byte("a")
+	high := []byte("z")
+	kvs := []*marshal.BytesKV{
+		{Key: []byte("b"), Value: []byte("value1")},
+		{Key: []byte("c"), Value: []byte("value2")},
+		{Key: []byte("d"), Value: []byte("value3")},
+	}
+	err = indexer.Insert(tx, kvs)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	// Test Scan
-	scanResult, err := indexer.Scan([]byte("key1"), []byte("key2"))
-	assert.NoError(t, err, "Scan should not return an error")
-	assert.Len(t, scanResult, 2, "Scan result length should be 2")
+	tx.Commit()
 
-	// Test Delete
-	err = indexer.Delete([]byte("key1"))
-	assert.NoError(t, err, "Delete should not return an error")
+	metaList, err := indexer.Scan(low, high)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedMetaList := []*marshal.BytesKV{
+		{Key: []byte("b"), Value: []byte("value1")},
+		{Key: []byte("c"), Value: []byte("value2")},
+		{Key: []byte("d"), Value: []byte("value3")},
+	}
 
-	// Test Sync
-	err = indexer.Sync()
-	assert.NoError(t, err, "Sync should not return an error")
+	meta, err := indexer.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(meta, &marshal.BytesKV{Key: key, Value: value}) {
+		t.Errorf("Get() returned unexpected value, expected: %v, got: %v", &marshal.BytesKV{Key: key, Value: value}, meta)
+	}
+
+	if !reflect.DeepEqual(metaList, expectedMetaList) {
+		t.Errorf("Scan() returned unexpected value, expected: %v, got: %v", expectedMetaList, metaList)
+	}
 }

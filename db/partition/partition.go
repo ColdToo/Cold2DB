@@ -115,7 +115,7 @@ func OpenPartition(partitionDir string) (p *Partition) {
 	}
 
 	go func() {
-		sst, err := NewSST(createTmpSSTFileName())
+		sst, err := NewSST(createTmpSSTFileName(p.dirPath))
 		if err != nil {
 			return
 		}

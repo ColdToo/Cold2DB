@@ -2,10 +2,11 @@ package partition
 
 import (
 	"bytes"
-	"github.com/ColdToo/Cold2DB/db/marshal"
-	"go.etcd.io/bbolt"
 	"path/filepath"
 	"time"
+
+	"github.com/ColdToo/Cold2DB/db/marshal"
+	"go.etcd.io/bbolt"
 )
 
 // bucket name for bolt db to store index data
