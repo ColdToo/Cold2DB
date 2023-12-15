@@ -2,7 +2,7 @@ package code
 
 import "errors"
 
-var ErrIllegalMemtableNums = errors.New("requested index is unavailable due to compaction")
+var ErrIllegalMemTableNums = errors.New("requested index is unavailable due to compaction")
 
 var (
 	// ErrRecordExists record with this key already exists.

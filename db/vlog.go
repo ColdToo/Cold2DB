@@ -17,7 +17,7 @@ const PartitionFormat = "PARTITION_%d"
 type ValueLog struct {
 	vlogCfg config.ValueLogConfig
 
-	memFlushC chan *Memtable
+	memFlushC chan *MemTable
 
 	kvStateSeg *wal.KVStateSegment
 
@@ -26,7 +26,7 @@ type ValueLog struct {
 	hashKeyFunction func([]byte) uint64
 }
 
-func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *Memtable, stateSegment *wal.KVStateSegment) (lf *ValueLog, err error) {
+func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *MemTable, stateSegment *wal.KVStateSegment) (lf *ValueLog, err error) {
 	dirs, err := os.ReadDir(vlogCfg.ValueLogDir)
 	if err != nil {
 		log.Panicf("open wal dir failed", err)

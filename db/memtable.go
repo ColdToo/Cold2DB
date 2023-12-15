@@ -15,7 +15,7 @@ type MemOpt struct {
 	concurrency int
 }
 
-type Memtable struct {
+type MemTable struct {
 	sklIter  *arenaskl.Iterator
 	cfg      config.MemConfig
 	maxKey   []byte
@@ -24,20 +24,20 @@ type Memtable struct {
 	minIndex uint64
 }
 
-func NewMemtable(cfg config.MemConfig) (*Memtable, error) {
+func NewMemTable(cfg config.MemConfig) (*MemTable, error) {
 	var sklIter = new(arenaskl.Iterator)
-	arena := arenaskl.NewArena(uint32(cfg.MemtableSize*MB) + uint32(arenaskl.MaxNodeSize))
+	arena := arenaskl.NewArena(uint32(cfg.MemTableSize*MB) + uint32(arenaskl.MaxNodeSize))
 	skl := arenaskl.NewSkiplist(arena)
 	sklIter.Init(skl)
-	table := &Memtable{cfg: cfg, sklIter: sklIter}
+	table := &MemTable{cfg: cfg, sklIter: sklIter}
 	return table, nil
 }
 
-func (mt *Memtable) put(k, v []byte) error {
+func (mt *MemTable) put(k, v []byte) error {
 	return mt.sklIter.Put(k, v)
 }
 
-func (mt *Memtable) get(key []byte) (bool, []byte) {
+func (mt *MemTable) get(key []byte) (bool, []byte) {
 	if found := mt.sklIter.Seek(key); !found {
 		return false, nil
 	}
@@ -45,7 +45,7 @@ func (mt *Memtable) get(key []byte) (bool, []byte) {
 	return true, value
 }
 
-func (mt *Memtable) Scan(low, high []byte) (kvs []*marshal.BytesKV, err error) {
+func (mt *MemTable) Scan(low, high []byte) (kvs []*marshal.BytesKV, err error) {
 	// todo
 	// 1、找到距离low最近的一个key
 	// 2、获取该key的value
@@ -67,7 +67,7 @@ func (mt *Memtable) Scan(low, high []byte) (kvs []*marshal.BytesKV, err error) {
 	return
 }
 
-func (mt *Memtable) All() (kvs []*marshal.BytesKV) {
+func (mt *MemTable) All() (kvs []*marshal.BytesKV) {
 	for mt.sklIter.SeekToFirst(); mt.sklIter.Valid(); mt.sklIter.Next() {
 		key, value := mt.sklIter.Key(), mt.sklIter.Value()
 		kvs = append(kvs, &marshal.BytesKV{Key: key, Value: value})
@@ -75,29 +75,29 @@ func (mt *Memtable) All() (kvs []*marshal.BytesKV) {
 	return
 }
 
-func (mt *Memtable) Size() int {
+func (mt *MemTable) Size() int {
 	return mt.sklIter.Size()
 }
 
-type MemtableQueue struct {
-	tables   []*Memtable
+type MemTableQueue struct {
+	tables   []*MemTable
 	size     int
 	capacity int
 }
 
-func NewMemtableQueue(capacity int) *MemtableQueue {
-	return &MemtableQueue{
-		tables:   make([]*Memtable, capacity),
+func NewMemTableQueue(capacity int) *MemTableQueue {
+	return &MemTableQueue{
+		tables:   make([]*MemTable, capacity),
 		size:     0,
 		capacity: capacity,
 	}
 }
 
-func (q *MemtableQueue) Enqueue(item *Memtable) {
+func (q *MemTableQueue) Enqueue(item *MemTable) {
 	if q.size == q.capacity {
-		//todo 缓冲，此时应该不再接受写入，需要将immtable刷盘，等待memtable的数量恢复到和配置一样才能允许写入
+		//todo 缓冲，此时应该不再接受写入，需要将immtable刷盘，等待memTable的数量恢复到和配置一样才能允许写入
 		newCapacity := q.capacity * 2
-		newtables := make([]*Memtable, newCapacity)
+		newtables := make([]*MemTable, newCapacity)
 		copy(newtables, q.tables)
 		q.tables = newtables
 		q.capacity = newCapacity
@@ -106,7 +106,7 @@ func (q *MemtableQueue) Enqueue(item *Memtable) {
 	q.size++
 }
 
-func (q *MemtableQueue) Dequeue() *Memtable {
+func (q *MemTableQueue) Dequeue() *MemTable {
 	if q.size == 0 {
 		panic("Queue is empty")
 	}

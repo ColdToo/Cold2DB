@@ -40,13 +40,13 @@ var C2 *C2KV
 type C2KV struct {
 	dbCfg *config.DBConfig
 
-	activeMem *Memtable
+	activeMem *MemTable
 
-	immtableQ *MemtableQueue
+	immtableQ *MemTableQueue
 
-	flushC chan *Memtable
+	flushC chan *MemTable
 
-	memtablePipe chan *Memtable
+	memTablePipe chan *MemTable
 
 	wal *wal.WAL
 
@@ -81,8 +81,8 @@ func dbCfgCheck(dbCfg *config.DBConfig) (err error) {
 			return err
 		}
 	}
-	if dbCfg.MemConfig.MemtableNums <= 5 || dbCfg.MemConfig.MemtableNums > 20 {
-		return code.ErrIllegalMemtableNums
+	if dbCfg.MemConfig.MemTableNums <= 5 || dbCfg.MemConfig.MemTableNums > 20 {
+		return code.ErrIllegalMemTableNums
 	}
 	return nil
 }
@@ -94,11 +94,11 @@ func OpenDB(dbCfg *config.DBConfig) {
 	}
 
 	C2 = new(C2KV)
-	memTableFlushC := make(chan *Memtable, dbCfg.MemConfig.MemtableNums-1)
-	C2.memtablePipe = make(chan *Memtable, dbCfg.MemConfig.MemtableNums/2)
-	C2.immtableQ = NewMemtableQueue(dbCfg.MemConfig.MemtableNums)
+	memTableFlushC := make(chan *MemTable, dbCfg.MemConfig.MemTableNums-1)
+	C2.memTablePipe = make(chan *MemTable, dbCfg.MemConfig.MemTableNums/2)
+	C2.immtableQ = NewMemTableQueue(dbCfg.MemConfig.MemTableNums)
 	C2.flushC = memTableFlushC
-	C2.activeMem, err = NewMemtable(dbCfg.MemConfig)
+	C2.activeMem, err = NewMemTable(dbCfg.MemConfig)
 	if err != nil {
 		return
 	}
@@ -113,11 +113,11 @@ func OpenDB(dbCfg *config.DBConfig) {
 
 	go func() {
 		for {
-			memtable, err := NewMemtable(dbCfg.MemConfig)
+			memTable, err := NewMemTable(dbCfg.MemConfig)
 			if err != nil {
 				log.Panicf("create a new segment file error", err)
 			}
-			C2.memtablePipe <- memtable
+			C2.memTablePipe <- memTable
 		}
 	}()
 }
@@ -189,7 +189,7 @@ func (db *C2KV) restoreImmTable() {
 
 	kvC := make(chan *marshal.KV, 1000)
 	signalC := make(chan error)
-	memTable := <-db.memtablePipe
+	memTable := <-db.memTablePipe
 
 	//先定位要读取的segment
 	for Node != nil {
@@ -325,13 +325,13 @@ func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
 		kvSlices[part] = append(kvSlices[part], &marshal.BytesKV{Key: kv.Key, Value: dataBytes})
 	}
 
-	//判断是否超出当前memtable大小，若超过获取新的memtable
-	if bytesCount+db.activeMem.Size() > db.activeMem.cfg.MemtableSize {
+	//判断是否超出当前memTable大小，若超过获取新的memTable
+	if bytesCount+db.activeMem.Size() > db.activeMem.cfg.MemTableSize {
 		if C2.immtableQ.size > C2.immtableQ.capacity/2 {
 			C2.flushC <- C2.immtableQ.Dequeue()
 		}
 		db.immtableQ.Enqueue(db.activeMem)
-		db.activeMem = <-db.memtablePipe
+		db.activeMem = <-db.memTablePipe
 	}
 
 	wg := &sync.WaitGroup{}

@@ -11,14 +11,14 @@ type DBConfig struct {
 }
 
 type MemConfig struct {
-	// MemtableSize represents the maximum size in bytes for a memtable, Default value is 64MB. MB Unit
-	MemtableSize int
+	// MemTableSize represents the maximum size in bytes for a memtable, Default value is 64MB. MB Unit
+	MemTableSize int
 
-	// MemtableNums represents maximum number of memtables to keep in memory before flushing.
+	// MemTableNums represents maximum number of memtables to keep in memory before flushing.
 	// Default value is 5.
-	MemtableNums int
+	MemTableNums int
 
-	// 写入memtable并发度
+	// 写入memTable并发度
 	Concurrency int
 }
 
