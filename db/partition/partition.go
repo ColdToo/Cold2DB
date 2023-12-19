@@ -6,6 +6,7 @@ import (
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/valyala/bytebufferpool"
+	"go.etcd.io/bbolt"
 	"hash/crc32"
 	"io"
 	"os"
@@ -168,6 +169,7 @@ func (p *Partition) Scan(low, high []byte) (kvs []*marshal.KV, err error) {
 
 func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan error) {
 	var err error
+	var tx *bbolt.Tx
 	buf := bytebufferpool.Get()
 	buf.Reset()
 	defer func() {
@@ -180,11 +182,11 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan 
 
 	sst := <-p.pipeSST
 	fid, _ := strconv.Atoi(sst.fd.Name())
-	indexMetas := make([]*marshal.BytesKV, 0)
+	ops := make([]*Op, 0)
 	var fileCurrentOffset int64
 	for _, kv := range kvs {
 		if kv.Data.Type == marshal.TypeDelete {
-			indexMetas = append(indexMetas, &marshal.BytesKV{Key: kv.Key})
+			ops = append(ops, &Op{Insert, &marshal.BytesKV{Key: kv.Key, Value: kv.Data.Value}})
 			continue
 		}
 
@@ -200,19 +202,18 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan 
 			meta.Value = kv.Data.Value
 		}
 
-		indexMetas = append(indexMetas, &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeIndexMeta(meta)})
+		ops = append(ops, &Op{op: Insert, kv: &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeIndexMeta(meta)}})
 		fileCurrentOffset += int64(len(kv.Data.Value))
 		if _, err = buf.Write(kv.Data.Value); err != nil {
 			return
 		}
 	}
 
-	tx, err := p.indexer.StartTx()
 	if tx, err = p.indexer.StartTx(); err != nil {
 		log.Errorf("start index transaction failed", err)
 		return
 	}
-	if err = p.indexer.Insert(tx, indexMetas); err != nil {
+	if err = p.indexer.Execute(tx, ops); err != nil {
 		tx.Rollback()
 		return
 	}
@@ -221,7 +222,6 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan 
 		sst.Remove()
 		log.Errorf("write sst file failed", err)
 	}
-
 	if err = tx.Commit(); err != nil {
 		tx.Rollback()
 		sst.Remove()

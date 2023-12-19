@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/ColdToo/Cold2DB/code"
-	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft"
@@ -47,8 +46,7 @@ type Transport struct {
 	LocalID   types.ID // 本地节点的ID
 	ClusterID types.ID
 
-	Raft        RaftTransport
-	Snapshotter *db.SnapShotter
+	Raft RaftTransport
 
 	// ErrorC is used to report detected critical errors,
 	ErrorC chan error

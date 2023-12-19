@@ -48,12 +48,23 @@ type BtreeIndexer struct {
 	index *bbolt.DB
 }
 
+type Op struct {
+	op int8
+	kv *marshal.BytesKV
+}
+
+const (
+	Insert = 1
+	Delete = 2
+)
+
 func (b *BtreeIndexer) Get(key []byte) (meta *marshal.BytesKV, err error) {
 	meta = &marshal.BytesKV{}
+	meta.Key = key
 	err = b.index.View(func(tx *bbolt.Tx) error {
 		value := tx.Bucket(indexBucketName).Get(key)
 		if value != nil {
-			meta = &marshal.BytesKV{Key: key, Value: value}
+			meta.Value = value
 		}
 		return nil
 	})
@@ -63,24 +74,34 @@ func (b *BtreeIndexer) Get(key []byte) (meta *marshal.BytesKV, err error) {
 func (b *BtreeIndexer) Scan(low, high []byte) (meta []*marshal.BytesKV, err error) {
 	err = b.index.View(func(tx *bbolt.Tx) error {
 		cursor := tx.Bucket(indexBucketName).Cursor()
-		for k, v := cursor.Seek(low); k != nil && bytes.Compare(k, high) <= 0; k, v = cursor.Next() {
+		k, v := cursor.Seek(low)
+		if k != nil && bytes.Compare(k, low) >= 0 {
 			meta = append(meta, &marshal.BytesKV{Key: k, Value: v})
 		}
+
+		for bytes.Compare(k, high) <= 0 {
+			k, v = cursor.Next()
+			if k == nil {
+				break
+			}
+			meta = append(meta, &marshal.BytesKV{Key: k, Value: v})
+		}
+
 		return nil
 	})
 	return
 }
 
-func (b *BtreeIndexer) Insert(tx *bbolt.Tx, kvs []*marshal.BytesKV) (err error) {
+func (b *BtreeIndexer) Execute(tx *bbolt.Tx, ops []*Op) (err error) {
 	txBucket := tx.Bucket(indexBucketName)
-	for _, kv := range kvs {
-		switch len(kv.Value) == 0 {
-		case true:
-			if err = txBucket.Delete(kv.Key); err != nil {
+	for _, op := range ops {
+		switch op.op {
+		case Delete:
+			if err = txBucket.Delete(op.kv.Key); err != nil {
 				return
 			}
-		default:
-			if err = txBucket.Put(kv.Key, kv.Value); err != nil {
+		case Insert:
+			if err = txBucket.Put(op.kv.Key, op.kv.Value); err != nil {
 				return
 			}
 		}

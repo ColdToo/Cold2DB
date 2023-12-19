@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestBtreeIndexer(t *testing.T) {
+func TestBtreeIndexer_Get(t *testing.T) {
 	getwd, _ := os.Getwd()
 	indexer, err := NewIndexer(getwd)
 	if err != nil {
@@ -19,23 +19,43 @@ func TestBtreeIndexer(t *testing.T) {
 
 	key := []byte("testKey")
 	value := []byte("testValue")
-	err = indexer.Insert(tx, []*marshal.BytesKV{{Key: key, Value: value}})
+	ops := make([]*Op, 0) //(Insert, &marshal.BytesKV{Key: key, Value: value})
+	ops = append(ops, &Op{Insert, &marshal.BytesKV{Key: key, Value: value}})
+
+	err = indexer.Execute(tx, ops)
 	if err != nil {
 		t.Fatal(err)
 	}
+	tx.Commit()
 
+	meta, err := indexer.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(meta, &marshal.BytesKV{Key: key, Value: value}) {
+		t.Errorf("Get() returned unexpected value, expected: %v, got: %v", &marshal.BytesKV{Key: key, Value: value}, meta)
+	}
+}
+
+func TestBtreeIndexer_Scan(t *testing.T) {
+	getwd, _ := os.Getwd()
+	indexer, err := NewIndexer(getwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer indexer.Close()
+
+	tx, err := indexer.StartTx()
 	low := []byte("a")
 	high := []byte("z")
-	kvs := []*marshal.BytesKV{
-		{Key: []byte("b"), Value: []byte("value1")},
-		{Key: []byte("c"), Value: []byte("value2")},
-		{Key: []byte("d"), Value: []byte("value3")},
-	}
-	err = indexer.Insert(tx, kvs)
+	ops := make([]*Op, 0)
+	ops = append(ops, &Op{Insert, &marshal.BytesKV{Key: []byte("b"), Value: []byte("value1")}})
+	ops = append(ops, &Op{Insert, &marshal.BytesKV{Key: []byte("c"), Value: []byte("value2")}})
+	ops = append(ops, &Op{Insert, &marshal.BytesKV{Key: []byte("d"), Value: []byte("value3")}})
+	err = indexer.Execute(tx, ops)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	tx.Commit()
 
 	metaList, err := indexer.Scan(low, high)
@@ -47,16 +67,45 @@ func TestBtreeIndexer(t *testing.T) {
 		{Key: []byte("c"), Value: []byte("value2")},
 		{Key: []byte("d"), Value: []byte("value3")},
 	}
+	if !reflect.DeepEqual(metaList, expectedMetaList) {
+		t.Errorf("Scan() returned unexpected value, expected: %v, got: %v", expectedMetaList, metaList)
+	}
+}
+
+func TestBtreeIndexer_Delete(t *testing.T) {
+	getwd, _ := os.Getwd()
+	indexer, err := NewIndexer(getwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer indexer.Close()
+
+	tx, err := indexer.StartTx()
+	key := []byte("testKey")
+	value := []byte("testValue")
+	ops := make([]*Op, 0)
+	ops = append(ops, &Op{Insert, &marshal.BytesKV{Key: key, Value: value}})
+	err = indexer.Execute(tx, ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.Commit()
+
+	tx, err = indexer.StartTx()
+	ops = make([]*Op, 0)
+	ops = append(ops, &Op{Delete, &marshal.BytesKV{Key: key, Value: value}})
+	err = indexer.Execute(tx, ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.Commit()
 
 	meta, err := indexer.Get(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(meta, &marshal.BytesKV{Key: key, Value: value}) {
-		t.Errorf("Get() returned unexpected value, expected: %v, got: %v", &marshal.BytesKV{Key: key, Value: value}, meta)
-	}
 
-	if !reflect.DeepEqual(metaList, expectedMetaList) {
-		t.Errorf("Scan() returned unexpected value, expected: %v, got: %v", expectedMetaList, metaList)
+	if meta.Value != nil {
+		t.Error("value should nil")
 	}
 }
