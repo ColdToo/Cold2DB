@@ -77,5 +77,27 @@ func TestPartition_PersistKvs(t *testing.T) {
 	wg.Add(1)
 	p.PersistKvs(MB67MB, wg, errC)
 	wg.Wait()
+	//todo monitor error
+}
 
+func TestPartition_Get(t *testing.T) {
+	CreatPartitionDir(partitionDir1)
+	errC := make(chan error, 1)
+	p := OpenPartition(partitionDir1)
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	p.AutoCompaction()
+	wg.Wait()
+	//todo monitor error
+}
+
+func TestPartition_Scan(t *testing.T) {
+	CreatPartitionDir(partitionDir1)
+	errC := make(chan error, 1)
+	p := OpenPartition(partitionDir1)
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	p.AutoCompaction()
+	wg.Wait()
+	//todo monitor error
 }
