@@ -119,7 +119,7 @@ func OpenPartition(partitionDir string) (p *Partition) {
 		fName := file.Name()
 		switch {
 		case strings.HasSuffix(fName, indexFileSuffixName):
-			p.indexer, err = NewIndexer(file.Name(), fName)
+			p.indexer, err = NewIndexer(p.dirPath, fName)
 		case strings.HasSuffix(fName, SSTFileSuffixName):
 			sst, err := OpenSST(createSSTFileName(p.dirPath, OldSST, fName))
 			if err != nil {
@@ -134,7 +134,7 @@ func OpenPartition(partitionDir string) (p *Partition) {
 	}
 
 	go func() {
-		sst, err := OpenSST(createSSTFileName(p.dirPath, NewSST, None))
+		sst, err := OpenSST(createSSTFileName(p.dirPath, TmpSST, None))
 		if err != nil {
 			return
 		}

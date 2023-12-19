@@ -1,16 +1,10 @@
 package wal
 
 import (
-	"fmt"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
-
-func TestCreateEntries(t *testing.T) {
-	_, bytesCount := MarshalWALEntries(CreateEntries(5000, 250))
-	fmt.Printf(CreatEntriesFmt, 1, 10, ConvertSize(bytesCount))
-}
 
 func TestWAL_Truncate(t *testing.T) {
 	truncateIndex := uint64(25000)

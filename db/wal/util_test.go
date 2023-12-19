@@ -7,6 +7,7 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 	"math/rand"
 	"os"
+	"testing"
 	"time"
 )
 
@@ -81,6 +82,11 @@ func ConvertSize(size int) string {
 		i++
 	}
 	return fmt.Sprintf("%.f", float64(size)) + units[i]
+}
+
+func TestCreateEntries(t *testing.T) {
+	_, bytesCount := MarshalWALEntries(CreateEntries(5000, 250))
+	fmt.Printf(CreatEntriesFmt, 1, 10, ConvertSize(bytesCount))
 }
 
 func MarshalWALEntries(entries1 []*pb.Entry) (data []byte, bytesCount int) {
