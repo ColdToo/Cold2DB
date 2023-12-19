@@ -43,7 +43,6 @@ func TestSegmentReader_Block4(t *testing.T) {
 	segment := MockSegmentWrite(Entries20)
 	reader := NewSegmentReader(segment)
 	ents := make([]*pb.Entry, 0)
-	//确保读出的数据正确
 	assert.EqualValues(t, segment.blocks, reader.blocks)
 	for {
 		header, err := reader.ReadHeader()

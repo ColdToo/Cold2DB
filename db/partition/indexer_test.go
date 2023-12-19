@@ -5,11 +5,12 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestBtreeIndexer_Get(t *testing.T) {
 	getwd, _ := os.Getwd()
-	indexer, err := NewIndexer(getwd)
+	indexer, err := NewIndexer(getwd, time.Now().Format("2006-01-02T15:04:05")+indexFileSuffixName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +40,7 @@ func TestBtreeIndexer_Get(t *testing.T) {
 
 func TestBtreeIndexer_Scan(t *testing.T) {
 	getwd, _ := os.Getwd()
-	indexer, err := NewIndexer(getwd)
+	indexer, err := NewIndexer(getwd, time.Now().Format("2006-01-02T15:04:05")+indexFileSuffixName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestBtreeIndexer_Scan(t *testing.T) {
 
 func TestBtreeIndexer_Delete(t *testing.T) {
 	getwd, _ := os.Getwd()
-	indexer, err := NewIndexer(getwd)
+	indexer, err := NewIndexer(getwd, time.Now().Format("2006-01-02T15:04:05")+indexFileSuffixName)
 	if err != nil {
 		t.Fatal(err)
 	}

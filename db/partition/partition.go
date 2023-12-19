@@ -5,13 +5,13 @@ import (
 	"github.com/ColdToo/Cold2DB/db/iooperator"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/log"
+	"github.com/google/uuid"
 	"github.com/valyala/bytebufferpool"
 	"go.etcd.io/bbolt"
 	"hash/crc32"
 	"io"
 	"os"
 	"path"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +21,10 @@ const (
 	SSTFileSuffixName    = ".SST"
 	SSTFileTmpSuffixName = ".SST-TMP"
 	smallValue           = 128
+	OldSST               = 1
+	NewSST               = 2
+	TmpSST               = 3
+	None                 = ""
 )
 
 type SST struct {
@@ -29,11 +33,11 @@ type SST struct {
 	SSTSize int64
 }
 
-// NewSST todo 一个value如果跨两个block，那么可能需要访问两次硬盘,后续优化vlog中数据的对齐
-func NewSST(fileName string) (*SST, error) {
+// OpenSST todo 一个value如果跨两个block，那么可能需要访问两次硬盘,后续优化vlog中数据的对齐
+func OpenSST(filePath string) (*SST, error) {
 	return &SST{
-		fd:    iooperator.OpenBufferIOFile(fileName),
-		fName: fileName,
+		fd:    iooperator.OpenBufferIOFile(filePath),
+		fName: filePath,
 	}, nil
 }
 
@@ -46,7 +50,10 @@ func (s *SST) Write(buf []byte) (err error) {
 }
 
 func (s *SST) Read(vSize, vOffset int64) (buf []byte, err error) {
-	s.fd.Seek(vOffset, io.SeekStart)
+	_, err = s.fd.Seek(vOffset, io.SeekStart)
+	if err != nil {
+		return nil, err
+	}
 	buf = make([]byte, vSize)
 	_, err = s.fd.Read(buf)
 	if err != nil {
@@ -62,22 +69,30 @@ func (s *SST) Close() {
 }
 
 func (s *SST) Remove() {
-
+	os.RemoveAll(s.fName)
 }
 
 func (s *SST) Rename(fName string) {
-	if s.fd != nil {
-		s.fd.Close()
-		os.Rename(s.fName, fName)
+	if s.fd == nil {
+		log.Panicf("fd is nil")
 	}
+	s.fd.Close()
+	os.Rename(s.fName, fName)
+	s.fd = iooperator.OpenBufferIOFile(fName)
+	s.fName = fName
 }
 
-func createTmpSSTFileName(dirPath string) string {
-	return path.Join(dirPath, time.Now().String()+SSTFileTmpSuffixName)
-}
-
-func createSSTFileName(dirPath string) string {
-	return path.Join(time.Now().String() + SSTFileTmpSuffixName)
+func createSSTFileName(partitionDirPath string, Flag int, fileName string) string {
+	switch Flag {
+	case TmpSST:
+		return path.Join(partitionDirPath, uuid.New().String()+SSTFileTmpSuffixName)
+	case NewSST:
+		return path.Join(partitionDirPath, uuid.New().String()+SSTFileSuffixName)
+	case OldSST:
+		return path.Join(partitionDirPath, fileName)
+	default:
+		return ""
+	}
 }
 
 // Partition 一个partition文件由一个index文件和多个sst文件组成
@@ -85,14 +100,14 @@ type Partition struct {
 	dirPath string
 	pipeSST chan *SST
 	indexer *BtreeIndexer
-	SSTMap  map[int64]*SST
+	SSTMap  map[uint64]*SST
 }
 
 func OpenPartition(partitionDir string) (p *Partition) {
 	p = &Partition{
 		dirPath: partitionDir,
 		pipeSST: make(chan *SST, 1),
-		SSTMap:  make(map[int64]*SST),
+		SSTMap:  make(map[uint64]*SST),
 	}
 
 	files, err := os.ReadDir(partitionDir)
@@ -104,26 +119,29 @@ func OpenPartition(partitionDir string) (p *Partition) {
 		fName := file.Name()
 		switch {
 		case strings.HasSuffix(fName, indexFileSuffixName):
-			p.indexer, err = NewIndexer(file.Name())
+			p.indexer, err = NewIndexer(file.Name(), fName)
 		case strings.HasSuffix(fName, SSTFileSuffixName):
-			sst, err := NewSST(fName)
+			sst, err := OpenSST(createSSTFileName(p.dirPath, OldSST, fName))
 			if err != nil {
 				return nil
 			}
-			fid, err := strconv.Atoi(fName)
-			p.SSTMap[int64(fid)] = sst
+			p.SSTMap[uint64(sst.fd.Fd())] = sst
 		}
 	}
 
+	if p.indexer == nil {
+		p.indexer, err = NewIndexer(p.dirPath, time.Now().Format("2006-01-02T15:04:05")+indexFileSuffixName)
+	}
+
 	go func() {
-		sst, err := NewSST(createTmpSSTFileName(p.dirPath))
+		sst, err := OpenSST(createSSTFileName(p.dirPath, NewSST, None))
 		if err != nil {
 			return
 		}
 		p.pipeSST <- sst
 	}()
 
-	//go p.AutoCompaction()
+	go p.AutoCompaction()
 	return
 }
 
@@ -181,7 +199,6 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan 
 	}()
 
 	sst := <-p.pipeSST
-	fid, _ := strconv.Atoi(sst.fd.Name())
 	ops := make([]*Op, 0)
 	var fileCurrentOffset int64
 	for _, kv := range kvs {
@@ -192,7 +209,7 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan 
 
 		vSize := len(kv.Data.Value)
 		meta := &marshal.IndexerMeta{
-			Fid:         int64(fid),
+			Fid:         uint64(sst.fd.Fd()),
 			ValueOffset: fileCurrentOffset,
 			ValueSize:   int64(vSize),
 			ValueCrc32:  crc32.ChecksumIEEE(kv.Data.Value),
@@ -227,8 +244,10 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan 
 		sst.Remove()
 		return
 	}
-	sst.Rename(createSSTFileName(p.dirPath))
-	p.SSTMap[int64(fid)] = sst
+	oldFd := uint64(sst.fd.Fd())
+	sst.Rename(createSSTFileName(p.dirPath, NewSST, None))
+	delete(p.SSTMap, oldFd)
+	p.SSTMap[uint64(sst.fd.Fd())] = sst
 }
 
 func (p *Partition) AutoCompaction() {
