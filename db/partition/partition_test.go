@@ -1,6 +1,8 @@
 package partition
 
 import (
+	"github.com/ColdToo/Cold2DB/db/marshal"
+	"github.com/stretchr/testify/assert"
 	"os"
 	"path/filepath"
 	"sync"
@@ -70,34 +72,66 @@ func TestPartition_OpenOld(t *testing.T) {
 }
 
 func TestPartition_PersistKvs(t *testing.T) {
-	CreatPartitionDir(partitionDir1)
+	CreatPartitionDirIfNotExist(partitionDir1)
 	errC := make(chan error, 1)
+	go func() {
+		for {
+			select {
+			case err := <-errC:
+				if err != nil {
+					t.Error(err)
+				}
+			}
+		}
+	}()
 	p := OpenPartition(partitionDir1)
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
-	p.PersistKvs(MB67MB, wg, errC)
+	p.PersistKvs(_67MBKVs, wg, errC)
 	wg.Wait()
-	//todo monitor error
+	os.RemoveAll(partitionDir1)
 }
 
 func TestPartition_Get(t *testing.T) {
-	CreatPartitionDir(partitionDir1)
-	errC := make(chan error, 1)
-	p := OpenPartition(partitionDir1)
-	wg := &sync.WaitGroup{}
-	wg.Add(1)
-	p.AutoCompaction()
-	wg.Wait()
-	//todo monitor error
+	persisitKVs := _27KBKVsNoDelOp
+	p := MockPartitionPersistKVs(partitionDir3, persisitKVs)
+
+	index := createRandomIndex(1, 100)
+	kv := _27KBKVsNoDelOp[index]
+	kvRecive, err := p.Get(kv.Key)
+	if err != nil {
+		t.Error(err)
+	}
+	assert.EqualValues(t, kv.Key, kvRecive.Key)
+	assert.EqualValues(t, kv.Data.Value, kvRecive.Data.Value)
+	os.RemoveAll(partitionDir2)
 }
 
 func TestPartition_Scan(t *testing.T) {
-	CreatPartitionDir(partitionDir1)
-	errC := make(chan error, 1)
-	p := OpenPartition(partitionDir1)
-	wg := &sync.WaitGroup{}
-	wg.Add(1)
-	p.AutoCompaction()
-	wg.Wait()
-	//todo monitor error
+	persistKVs := _27KBKVsNoDelOp
+	p := MockPartitionPersistKVs(partitionDir3, persistKVs)
+
+	min := minIndex
+	max := len(persistKVs) - 1
+	kvs := make([]marshal.BytesKV, 0)
+	lowIndex := createRandomIndex(min, max)
+	lowKey := persistKVs[lowIndex].Key
+	highKey := persistKVs[max].Key
+	for lowIndex <= max {
+		kv := _27KBKVsNoDelOp[lowIndex]
+		kvs = append(kvs, marshal.BytesKV{Key: kv.Key, Value: kv.Data.Value})
+		lowIndex++
+	}
+
+	kvsScan, err := p.Scan(lowKey, highKey)
+	if err != nil {
+		return
+	}
+
+	kvsVerify := make([]marshal.BytesKV, 0)
+	for _, kv := range kvsScan {
+		kvsVerify = append(kvsVerify, marshal.BytesKV{Key: kv.Key, Value: kv.Data.Value})
+	}
+	assert.EqualValues(t, kvs, kvsVerify)
+	os.RemoveAll(partitionDir3)
 }

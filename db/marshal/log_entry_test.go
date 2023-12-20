@@ -7,33 +7,6 @@ import (
 	"testing"
 )
 
-var entries = []*pb.Entry{
-	{
-		Term:  1,
-		Index: 1,
-		Type:  pb.EntryNormal,
-		Data:  []byte("hello world"),
-	},
-	{
-		Term:  2,
-		Index: 2,
-		Type:  pb.EntryNormal,
-		Data:  []byte("hello world"),
-	},
-	{
-		Term:  3,
-		Index: 3,
-		Type:  pb.EntryNormal,
-		Data:  []byte("hello world"),
-	},
-	{
-		Term:  4,
-		Index: 4,
-		Type:  pb.EntryNormal,
-		Data:  []byte("hello world"),
-	},
-}
-
 func MarshalWALEntries(entries1 []*pb.Entry) (data []byte, bytesCount int) {
 	data = make([]byte, 0)
 	for _, e := range entries1 {
@@ -62,7 +35,7 @@ func TestEncodeANdDecodeWALEntry(t *testing.T) {
 	assert.EqualValues(t, entry1, entry2)
 }
 
-func TestIndexMetaSerialization(t *testing.T) {
+func TestIndexMetaEncodeDecode(t *testing.T) {
 	m := &IndexerMeta{
 		Fid:         123,
 		ValueOffset: 45623232323,

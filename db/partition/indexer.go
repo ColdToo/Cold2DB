@@ -57,11 +57,11 @@ type Op struct {
 }
 
 func (b *BtreeIndexer) Get(key []byte) (meta *marshal.BytesKV, err error) {
-	meta = &marshal.BytesKV{}
-	meta.Key = key
 	err = b.index.View(func(tx *bbolt.Tx) error {
 		value := tx.Bucket(indexBucketName).Get(key)
 		if value != nil {
+			meta = new(marshal.BytesKV)
+			meta.Key = key
 			meta.Value = value
 		}
 		return nil
@@ -76,7 +76,6 @@ func (b *BtreeIndexer) Scan(low, high []byte) (meta []*marshal.BytesKV, err erro
 		if k != nil && bytes.Compare(k, low) >= 0 {
 			meta = append(meta, &marshal.BytesKV{Key: k, Value: v})
 		}
-
 		for bytes.Compare(k, high) <= 0 {
 			k, v = cursor.Next()
 			if k == nil {
@@ -84,7 +83,6 @@ func (b *BtreeIndexer) Scan(low, high []byte) (meta []*marshal.BytesKV, err erro
 			}
 			meta = append(meta, &marshal.BytesKV{Key: k, Value: v})
 		}
-
 		return nil
 	})
 	return

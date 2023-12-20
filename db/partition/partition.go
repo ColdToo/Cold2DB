@@ -158,7 +158,7 @@ func (p *Partition) Get(key []byte) (kv *marshal.KV, err error) {
 		}
 		return &marshal.KV{
 			Key:  key,
-			Data: marshal.DecodeData(value),
+			Data: &marshal.Data{TimeStamp: index.TimeStamp, Value: value},
 		}, nil
 	}
 	return nil, code.ErrCanNotFondSSTFile
@@ -178,7 +178,7 @@ func (p *Partition) Scan(low, high []byte) (kvs []*marshal.KV, err error) {
 			}
 			kvs = append(kvs, &marshal.KV{
 				Key:  indexMeta.Key,
-				Data: marshal.DecodeData(value),
+				Data: &marshal.Data{TimeStamp: index.TimeStamp, Value: value},
 			})
 		}
 	}
@@ -203,7 +203,7 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan 
 	var fileCurrentOffset int64
 	for _, kv := range kvs {
 		if kv.Data.Type == marshal.TypeDelete {
-			ops = append(ops, &Op{Insert, &marshal.BytesKV{Key: kv.Key, Value: kv.Data.Value}})
+			ops = append(ops, &Op{Delete, &marshal.BytesKV{Key: kv.Key, Value: kv.Data.Value}})
 			continue
 		}
 
@@ -215,9 +215,11 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan 
 			ValueCrc32:  crc32.ChecksumIEEE(kv.Data.Value),
 			TimeStamp:   kv.Data.TimeStamp,
 		}
-		if vSize <= smallValue {
-			meta.Value = kv.Data.Value
-		}
+
+		//todo 小value直接存储在叶子节点中
+		//if vSize <= smallValue {
+		//	meta.Value = kv.Data.Value
+		//}
 
 		ops = append(ops, &Op{op: Insert, kv: &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeIndexMeta(meta)}})
 		fileCurrentOffset += int64(len(kv.Data.Value))
