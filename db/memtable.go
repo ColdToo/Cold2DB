@@ -6,6 +6,7 @@ import (
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/arenaskl"
 	"github.com/ColdToo/Cold2DB/db/marshal"
+	"sync"
 )
 
 const MB = 1024 * 1024
@@ -16,7 +17,7 @@ type MemOpt struct {
 }
 
 type MemTable struct {
-	sklIter  *arenaskl.Iterator
+	skl      *arenaskl.Skiplist
 	cfg      config.MemConfig
 	maxKey   []byte
 	minKey   []byte
@@ -25,58 +26,91 @@ type MemTable struct {
 }
 
 func NewMemTable(cfg config.MemConfig) (*MemTable, error) {
-	var sklIter = new(arenaskl.Iterator)
 	arena := arenaskl.NewArena(uint32(cfg.MemTableSize*MB) + uint32(arenaskl.MaxNodeSize))
 	skl := arenaskl.NewSkiplist(arena)
-	sklIter.Init(skl)
-	table := &MemTable{cfg: cfg, sklIter: sklIter}
+	table := &MemTable{cfg: cfg, skl: skl}
 	return table, nil
 }
 
-func (mt *MemTable) put(k, v []byte) error {
-	return mt.sklIter.Put(k, v)
+func (mt *MemTable) newSklIter() *arenaskl.Iterator {
+	var sklIter = new(arenaskl.Iterator)
+	sklIter.Init(mt.skl)
+	return sklIter
 }
 
-func (mt *MemTable) get(key []byte) (bool, []byte) {
-	if found := mt.sklIter.Seek(key); !found {
+func (mt *MemTable) ConcurrentPut(kvBytes []*marshal.BytesKV) error {
+	parts := make([][]*marshal.BytesKV, mt.cfg.Concurrency)
+	//todo 优化:避免使用append追加
+	//subPartSize := len(kvBytes) / mt.cfg.Concurrency
+	//subpart := make([]*marshal.BytesKV, subPartSize)
+	for i, kv := range kvBytes {
+		part := i % mt.cfg.Concurrency
+		parts[part] = append(parts[part], kv)
+	}
+
+	errC := make(chan error)
+	wg := &sync.WaitGroup{}
+	for _, part := range parts {
+		wg.Add(1)
+		go func(kvs []*marshal.BytesKV) {
+			for _, kv := range kvs {
+				sklIter := mt.newSklIter()
+				err := sklIter.Put(kv.Key, kv.Value)
+				if err != nil {
+					errC <- err
+					return
+				}
+			}
+			wg.Done()
+		}(part)
+	}
+	wg.Wait()
+
+	return nil
+}
+
+func (mt *MemTable) Get(key []byte) (bool, []byte) {
+	sklIter := mt.newSklIter()
+	if found := sklIter.Seek(key); !found {
 		return false, nil
 	}
-	value, _ := mt.sklIter.Get(key)
+	value, _ := sklIter.Get(key)
 	return true, value
 }
 
 func (mt *MemTable) Scan(low, high []byte) (kvs []*marshal.BytesKV, err error) {
-	// todo
-	// 1、找到距离low最近的一个key
-	// 2、获取该key的value
-	// 3、next移动到下一个key判断，是否小于high
-	// 4、读出value
-	// 5、返回
-	if found := mt.sklIter.Seek(low); !found {
+	sklIter := mt.newSklIter()
+	if found := sklIter.Seek(low); !found {
 		return nil, code.ErrRecordExists
 	}
 
-	for mt.sklIter.Valid() && bytes.Compare(mt.sklIter.Key(), high) != -1 {
-		key, value := mt.sklIter.Key(), mt.sklIter.Value()
+	for sklIter.Valid() && bytes.Compare(sklIter.Key(), high) != -1 {
+		key, value := sklIter.Key(), sklIter.Value()
 		kvs = append(kvs, &marshal.BytesKV{
 			Key:   key,
 			Value: value,
 		})
-		mt.sklIter.Next()
+		sklIter.Next()
 	}
 	return
 }
 
 func (mt *MemTable) All() (kvs []*marshal.BytesKV) {
-	for mt.sklIter.SeekToFirst(); mt.sklIter.Valid(); mt.sklIter.Next() {
-		key, value := mt.sklIter.Key(), mt.sklIter.Value()
-		kvs = append(kvs, &marshal.BytesKV{Key: key, Value: value})
+	sklIter := mt.newSklIter()
+	sklIter.SeekToFirst()
+	for sklIter.Valid() {
+		key, value := sklIter.Key(), sklIter.Value()
+		kvs = append(kvs, &marshal.BytesKV{
+			Key:   key,
+			Value: value,
+		})
+		sklIter.Next()
 	}
 	return
 }
 
-func (mt *MemTable) Size() int {
-	return mt.sklIter.Size()
+func (mt *MemTable) Size() int64 {
+	return int64(mt.skl.Size())
 }
 
 type MemTableQueue struct {
@@ -95,7 +129,7 @@ func NewMemTableQueue(capacity int) *MemTableQueue {
 
 func (q *MemTableQueue) Enqueue(item *MemTable) {
 	if q.size == q.capacity {
-		//todo 缓冲，此时应该不再接受写入，需要将immtable刷盘，等待memTable的数量恢复到和配置一样才能允许写入
+		//todo 缓冲，memtable队列短暂扩容后此时应该不再接受写入，需要将immtable刷盘，等待memTable的数量恢复到和配置一样才能允许写入
 		newCapacity := q.capacity * 2
 		newtables := make([]*MemTable, newCapacity)
 		copy(newtables, q.tables)

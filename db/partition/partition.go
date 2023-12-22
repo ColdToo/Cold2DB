@@ -239,7 +239,7 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan 
 	if err = sst.Write(buf.Bytes()); err != nil {
 		tx.Rollback()
 		sst.Remove()
-		log.Errorf("write sst file failed", err)
+		return
 	}
 	if err = tx.Commit(); err != nil {
 		tx.Rollback()

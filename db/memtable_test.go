@@ -1,97 +1,119 @@
 package db
 
 import (
+	"github.com/ColdToo/Cold2DB/db/Mock"
+	"github.com/ColdToo/Cold2DB/db/marshal"
+	"github.com/stretchr/testify/require"
 	"reflect"
-	"strconv"
 	"testing"
 
 	"github.com/ColdToo/Cold2DB/config"
-	"github.com/stretchr/testify/assert"
 )
 
 var TestMemConfig = config.MemConfig{
 	MemTableSize: 64,
-	MemTableNums: 10,
-	Concurrency:  5,
+	MemTableNums: 5,
+	Concurrency:  3,
 }
 
-type KVmock struct {
-	k []byte
-	v []byte
-}
-
-func MockKV(size int) (kvList []KVmock) {
-	for i := 0; i < size; i++ {
-		k := []byte(strconv.Itoa(i))
-		v := []byte(strconv.Itoa(i))
-		kv := KVmock{k, v}
-		kvList = append(kvList, kv)
-	}
-	return
-}
-
-func TestMemTable_WriteRead(t *testing.T) {
+func TestMemTable_Get(t *testing.T) {
 	mem, err := NewMemTable(TestMemConfig)
 	if err != nil {
 		t.Log(err)
 	}
 
-	kvs := MockKV(10000)
-	verifyKVs := make([]KVmock, 0)
+	kvs := Mock.OneKV
 	for _, kv := range kvs {
-		mem.put(kv.k, kv.v)
+		sklIter := mem.newSklIter()
+		sklIter.Put(kv.Key, marshal.EncodeData(kv.Data))
 	}
 
-	for _, kv := range kvs {
-		if flag, v := mem.get(kv.k); flag {
-			verifyKVs = append(verifyKVs, KVmock{k: kv.k, v: v})
-		} else {
-			t.Error("can not fund k")
-		}
-	}
+	kv, _ := mem.Get(kvs[0].Key)
 
-	assert.EqualValues(t, kvs, verifyKVs)
+	reflect.DeepEqual(kvs, kv)
 }
 
 func TestMemTable_Scan(t *testing.T) {
+	//获取验证集
+	kvs := Mock.KVS_RAND_35MB_HASDEL_UQKey
+	min := 0
+	max := len(kvs) - 1
+	verifyKvs := make([]*marshal.KV, 0)
+	lowIndex := Mock.CreateRandomIndex(min, max)
+	lowKey := kvs[lowIndex].Key
+	highKey := kvs[max].Key
+	for lowIndex <= max {
+		kv := kvs[lowIndex]
+		verifyKvs = append(verifyKvs, kv)
+		lowIndex++
+	}
+
 	mem, err := NewMemTable(TestMemConfig)
 	if err != nil {
 		t.Log(err)
 	}
-
-	//todo
-	//1、low < min key  &&   high > max key
-	//2、low > min key  &&   high < max key
-	kvs := MockKV(10000)
+	//获取测试集
+	sklIter := mem.newSklIter()
 	for _, kv := range kvs {
-		mem.put(kv.k, kv.v)
+		sklIter.Put(kv.Key, marshal.EncodeData(kv.Data))
+	}
+	allKvs, _ := mem.Scan(lowKey, highKey)
+	reKvs := make([]*marshal.KV, 0)
+	for _, kv := range allKvs {
+		reKvs = append(reKvs, &marshal.KV{Key: kv.Key, KeySize: len(kv.Key), Data: marshal.DecodeData(kv.Value)})
 	}
 
-	low := []byte(strconv.Itoa(-1))
-	high := []byte(strconv.Itoa(20000))
-
-	scanKvs, err := mem.Scan(low, high)
-	if err != nil {
-		return
-	}
-
-	reflect.DeepEqual(kvs, scanKvs)
-
+	reflect.DeepEqual(kvs, allKvs)
 }
 
 func TestMemTable_All(t *testing.T) {
+	kvs := Mock.KVS_RAND_35MB_HASDEL_UQKey
+	bytesKvs := make([]*marshal.BytesKV, 0)
+	for _, kv := range kvs {
+		bytesKvs = append(bytesKvs, &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeData(kv.Data)})
+	}
+
 	mem, err := NewMemTable(TestMemConfig)
 	if err != nil {
 		t.Log(err)
 	}
+	mem.ConcurrentPut(bytesKvs)
 
-	kvs := MockKV(10000)
-	for _, kv := range kvs {
-		mem.put(kv.k, kv.v)
-	}
 	allKvs := mem.All()
+	verifyKvs := make([]marshal.KV, 0)
+	for _, kv := range allKvs {
+		verifyKvs = append(verifyKvs, marshal.KV{Key: kv.Key, KeySize: len(kv.Key), Data: marshal.DecodeData(kv.Value)})
+	}
 
 	reflect.DeepEqual(kvs, allKvs)
+}
+
+func TestMemTable_All1(t *testing.T) {
+	mem, err := NewMemTable(TestMemConfig)
+	if err != nil {
+		t.Log(err)
+	}
+	it := mem.newSklIter()
+
+	kvs := Mock.KVS_RAND_35MB_HASDEL_UQKey
+	bytesKvs := make([]*marshal.BytesKV, 0)
+	for _, kv := range kvs {
+		bytesKvs = append(bytesKvs, &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeData(kv.Data)})
+	}
+
+	for _, kv := range bytesKvs {
+		err := it.Put(kv.Key, kv.Value)
+		if err != nil {
+			t.Log(err)
+		}
+	}
+
+	for _, kv := range kvs {
+		if it.Seek(kv.Key) {
+			data := marshal.DecodeData(it.Value())
+			require.EqualValues(t, kv.Data, data)
+		}
+	}
 }
 
 func TestMemTable_Queue(t *testing.T) {

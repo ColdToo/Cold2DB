@@ -28,9 +28,9 @@ type BytesKV struct {
 }
 
 type Data struct {
-	Index     uint64
-	TimeStamp int64
-	Type      int8
+	Index     uint64 //用于数据刷入到vlog时记录persist index
+	TimeStamp int64  //记录数据时间
+	Type      int8   //记录时删除还是插入
 	Value     []byte
 }
 
@@ -53,8 +53,8 @@ func DecodeData(v []byte) *Data {
 }
 
 type KV struct {
-	ApplySig int64
-	KeySize  int
+	ApplySig int64 //该条记录是否被应用
+	KeySize  int   //主要用于kv的序列化
 	Key      []byte
 	Data     *Data
 }

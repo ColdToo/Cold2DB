@@ -1,6 +1,8 @@
 package db
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
@@ -8,10 +10,13 @@ import (
 	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/ColdToo/Cold2DB/log"
 	"os"
+	"path"
+	"strings"
 	"sync"
 )
 
 const PartitionFormat = "PARTITION_%d"
+const Partition = "PARTITION"
 
 // ValueLog is an abstraction of a disk file, entry`s read and write will go through it.
 type ValueLog struct {
@@ -21,50 +26,52 @@ type ValueLog struct {
 
 	kvStateSeg *wal.KVStateSegment
 
-	partition []*partition.Partition
-
-	hashKeyFunction func([]byte) uint64
+	partitions []*partition.Partition
 }
 
-func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *MemTable, stateSegment *wal.KVStateSegment) (lf *ValueLog, err error) {
+func OpenValueLog(vlogCfg config.ValueLogConfig, tableC chan *MemTable, stateSegment *wal.KVStateSegment) (vlog *ValueLog, err error) {
 	dirs, err := os.ReadDir(vlogCfg.ValueLogDir)
 	if err != nil {
 		log.Panicf("open wal dir failed", err)
 	}
 
 	partitions := make([]*partition.Partition, 0)
-	lf = &ValueLog{memFlushC: tableC, kvStateSeg: stateSegment, partition: partitions, vlogCfg: vlogCfg}
+	vlog = &ValueLog{memFlushC: tableC, kvStateSeg: stateSegment, vlogCfg: vlogCfg}
 
 	if len(dirs) == 0 {
-		for i := 0; i < lf.vlogCfg.PartitionNums; i++ {
-			p := partition.OpenPartition(fmt.Sprintf(PartitionFormat, i))
+		for i := 1; i <= vlog.vlogCfg.PartitionNums; i++ {
+			partitionDir := path.Join(vlogCfg.ValueLogDir, fmt.Sprintf(PartitionFormat, i))
+			if err = os.Mkdir(partitionDir, 0755); err != nil {
+				log.Panicf("create partition dir failed", err)
+			}
+			p := partition.OpenPartition(partitionDir)
 			partitions = append(partitions, p)
 		}
 	}
 
-	//若vlog下有partition文件夹，则打开该文件夹下的partition以及所有sst文件和index文件
 	if len(dirs) > 0 {
 		for _, dir := range dirs {
-			if dir.IsDir() {
-				p := partition.OpenPartition(dir.Name())
+			if dir.IsDir() && strings.Contains(dir.Name(), Partition) {
+				p := partition.OpenPartition(path.Join(vlogCfg.ValueLogDir, dir.Name()))
 				partitions = append(partitions, p)
 			}
 		}
 	}
 
+	vlog.partitions = partitions
 	return
 }
 
 func (v *ValueLog) Get(key []byte) (kv *marshal.KV, err error) {
 	//查找key对应所在分区在分区中进行查找
 	p := v.getKeyPartition(key)
-	v.partition[p].Get(key)
+	v.partitions[p].Get(key)
 	return nil, nil
 }
 
 func (v *ValueLog) Scan(low, high []byte) (kvs []*marshal.KV, err error) {
 	//todo 各个partition按照该范围进行扫描再聚合结果
-	for _, p := range v.partition {
+	for _, p := range v.partitions {
 		p.Scan(low, high)
 	}
 	return nil, nil
@@ -76,11 +83,16 @@ func (v *ValueLog) ListenAndFlush() {
 		mem := <-v.memFlushC
 		kvs := mem.All()
 		partitionRecords := make([][]*marshal.KV, v.vlogCfg.PartitionNums)
-		lastRecords := marshal.DecodeKV(kvs[len(kvs)-1].Value)
+		last := kvs[len(kvs)-1]
+		lastRecords := marshal.DecodeKV(last.Value)
 
 		for _, record := range kvs {
 			p := v.getKeyPartition(record.Key)
-			partitionRecords[p] = append(partitionRecords[p], marshal.DecodeKV(record.Key))
+			kv := new(marshal.KV)
+			kv.Key = record.Key
+			kv.KeySize = len(record.Key)
+			kv.Data = marshal.DecodeData(record.Value)
+			partitionRecords[p] = append(partitionRecords[p], kv)
 		}
 
 		wg := &sync.WaitGroup{}
@@ -89,14 +101,16 @@ func (v *ValueLog) ListenAndFlush() {
 				continue
 			}
 			wg.Add(1)
-			go v.partition[i].PersistKvs(partitionRecords[i], wg, errC)
+			go v.partitions[i].PersistKvs(partitionRecords[i], wg, errC)
 		}
 		wg.Wait()
 
+		//todo 若有错误其他协程也应该立即停止
 		if err := <-errC; err != nil {
-			log.Panicf("persist kvs failed %e", errC)
+			log.Errorf("persist kvs failed %e", errC)
 		}
 
+		//todo 索引刷新成功、vlog刷新成功、persistIndex刷新成功应该是一个原子操作
 		v.kvStateSeg.PersistIndex = lastRecords.Data.Index
 		err := v.kvStateSeg.Flush()
 		if err != nil {
@@ -106,7 +120,8 @@ func (v *ValueLog) ListenAndFlush() {
 }
 
 func (v *ValueLog) getKeyPartition(key []byte) int {
-	return int(v.hashKeyFunction(key) % uint64(v.vlogCfg.PartitionNums))
+	hash := sha256.Sum256(key)
+	return int(binary.BigEndian.Uint64(hash[:]) % uint64(v.vlogCfg.PartitionNums))
 }
 
 func (v *ValueLog) Close() error {

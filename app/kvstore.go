@@ -41,7 +41,7 @@ func (s *KvStore) Propose(key, val []byte, delete bool, expiredAt int64) (bool, 
 	if delete {
 		kv.Data.Type = marshal.TypeDelete
 	}
-	buf, _ := marshal.EncodeKV(kv)
+	buf := marshal.EncodeKV(kv)
 	s.proposeC <- buf
 
 	//监听该kv，当该kv被applied时返回客户端

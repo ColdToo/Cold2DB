@@ -12,7 +12,6 @@ import (
 	"github.com/ColdToo/Cold2DB/utils"
 	"os"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -189,7 +188,7 @@ func (db *C2KV) restoreImmTable() {
 
 	kvC := make(chan *marshal.KV, 1000)
 	signalC := make(chan error)
-	memTable := <-db.memTablePipe
+	//memTable := <-db.memTablePipe
 
 	//先定位要读取的segment
 	for Node != nil {
@@ -228,8 +227,8 @@ func (db *C2KV) restoreImmTable() {
 		}()
 
 		select {
-		case kv := <-kvC:
-			memTable.put(kv.Key, marshal.EncodeData(kv.Data))
+		case _ = <-kvC:
+			//memTable.put(kv.Key, marshal.EncodeData(kv.Data))
 			return
 		case err := <-signalC:
 			if err != nil {
@@ -289,7 +288,7 @@ func (db *C2KV) restoreMemEntries() {
 // kv operate
 
 func (db *C2KV) Get(key []byte) (kv *marshal.KV, err error) {
-	flag, val := db.activeMem.get(key)
+	flag, val := db.activeMem.Get(key)
 	if !flag {
 		return db.valueLog.Get(key)
 	}
@@ -315,14 +314,12 @@ func (db *C2KV) Scan(lowKey []byte, highKey []byte) (kvs []*marshal.KV, err erro
 }
 
 func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
-	kvSlices := make([][]*marshal.BytesKV, db.activeMem.cfg.Concurrency)
-	var bytesCount int
+	kvBytes := make([]*marshal.BytesKV, len(kvs))
+	var bytesCount int64
 	for i, kv := range kvs {
-		part := i % db.activeMem.cfg.Concurrency
-		bytesCount += len(kv.Key)
 		dataBytes := marshal.EncodeData(kv.Data)
-		bytesCount += len(dataBytes)
-		kvSlices[part] = append(kvSlices[part], &marshal.BytesKV{Key: kv.Key, Value: dataBytes})
+		bytesCount += int64(len(dataBytes) + len(kv.Key))
+		kvBytes[i] = &marshal.BytesKV{Key: kv.Key, Value: dataBytes}
 	}
 
 	//判断是否超出当前memTable大小，若超过获取新的memTable
@@ -333,22 +330,7 @@ func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
 		db.immtableQ.Enqueue(db.activeMem)
 		db.activeMem = <-db.memTablePipe
 	}
-
-	wg := &sync.WaitGroup{}
-	for _, kvSlice := range kvSlices {
-		wg.Add(1)
-		go func(kvs []*marshal.BytesKV) {
-			for _, kv := range kvs {
-				err = db.activeMem.put(kv.Key, kv.Value)
-				if err != nil {
-					return
-				}
-			}
-			wg.Done()
-		}(kvSlice)
-	}
-	wg.Wait()
-	return nil
+	return db.activeMem.ConcurrentPut(kvBytes)
 }
 
 // raft log

@@ -21,6 +21,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/code"
+	"github.com/ColdToo/Cold2DB/db/Mock"
+	"github.com/ColdToo/Cold2DB/db/marshal"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -538,5 +540,75 @@ func BenchmarkReadWriteMap(b *testing.B) {
 				}
 			})
 		})
+	}
+}
+
+func TestBasicWrite(t *testing.T) {
+	l := NewSkiplist(NewArena(100 * arenaSize))
+
+	var it Iterator
+	it.Init(l)
+
+	kvs := Mock.KVS_RAND_35MB_HASDEL_UQKey
+	bytesKvs := make([]*marshal.BytesKV, 0)
+	for _, kv := range kvs {
+		bytesKvs = append(bytesKvs, &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeData(kv.Data)})
+	}
+
+	for _, kv := range bytesKvs {
+		err := it.Put(kv.Key, kv.Value)
+		if err != nil {
+			t.Log(err)
+		}
+	}
+
+	for _, kv := range kvs {
+		if it.Seek(kv.Key) {
+			data := marshal.DecodeData(it.Value())
+			require.EqualValues(t, kv.Data, data)
+		}
+	}
+}
+
+func TestBasicConcurrentWrite(t *testing.T) {
+	l := NewSkiplist(NewArena(100 * arenaSize))
+
+	kvs := Mock.KVS_RAND_35MB_HASDEL_UQKey
+	bytesKvs := make([]*marshal.BytesKV, 0)
+	for _, kv := range kvs {
+		bytesKvs = append(bytesKvs, &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeData(kv.Data)})
+	}
+
+	parts := make([][]*marshal.BytesKV, 10)
+	for i, kv := range bytesKvs {
+		part := i % 10
+		parts[part] = append(parts[part], kv)
+	}
+
+	wg := &sync.WaitGroup{}
+	for _, part := range parts {
+		wg.Add(1)
+		go func(kvs []*marshal.BytesKV) {
+			var it Iterator
+			it.Init(l)
+			for _, kv := range kvs {
+				err := it.Put(kv.Key, kv.Value)
+				if err != nil {
+					t.Log(err)
+					return
+				}
+			}
+			wg.Done()
+		}(part)
+	}
+	wg.Wait()
+
+	var it Iterator
+	it.Init(l)
+	for _, kv := range kvs {
+		if it.Seek(kv.Key) {
+			data := marshal.DecodeData(it.Value())
+			require.EqualValues(t, kv.Data, data)
+		}
 	}
 }
