@@ -129,7 +129,7 @@ const (
 )
 
 type IndexerMeta struct {
-	Fid         uint64
+	SSTid       uint64
 	ValueOffset int64
 	ValueSize   int64
 	TimeStamp   int64
@@ -140,7 +140,7 @@ type IndexerMeta struct {
 func EncodeIndexMeta(m *IndexerMeta) []byte {
 	valueSize := len(m.Value)
 	buf := make([]byte, SerializationSize+valueSize)
-	binary.LittleEndian.PutUint64(buf[FidOffset:ValueOffset], m.Fid)
+	binary.LittleEndian.PutUint64(buf[FidOffset:ValueOffset], m.SSTid)
 	binary.LittleEndian.PutUint64(buf[ValueOffset:ValueSize], uint64(m.ValueOffset))
 	binary.LittleEndian.PutUint64(buf[ValueSize:TimeStamp], uint64(m.ValueSize))
 	binary.LittleEndian.PutUint32(buf[TimeStamp:ValueCrc32], m.ValueCrc32)
@@ -151,7 +151,7 @@ func EncodeIndexMeta(m *IndexerMeta) []byte {
 
 func DecodeIndexMeta(buf []byte) *IndexerMeta {
 	m := &IndexerMeta{}
-	m.Fid = binary.LittleEndian.Uint64(buf[FidOffset:ValueOffset])
+	m.SSTid = binary.LittleEndian.Uint64(buf[FidOffset:ValueOffset])
 	m.ValueOffset = int64(int(binary.LittleEndian.Uint64(buf[ValueOffset:ValueSize])))
 	m.ValueSize = int64(int(binary.LittleEndian.Uint64(buf[ValueSize:TimeStamp])))
 	m.ValueCrc32 = binary.LittleEndian.Uint32(buf[TimeStamp:ValueCrc32])

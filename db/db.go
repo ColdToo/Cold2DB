@@ -43,7 +43,7 @@ type C2KV struct {
 
 	immtableQ *MemTableQueue
 
-	flushC chan *MemTable
+	memFlushC chan *MemTable
 
 	memTablePipe chan *MemTable
 
@@ -64,59 +64,50 @@ func GetStorage() (Storage, error) {
 	}
 }
 
-func dbCfgCheck(dbCfg *config.DBConfig) (err error) {
+func dbCfgCheck(dbCfg *config.DBConfig) {
+	var err error
 	if !utils.PathExist(dbCfg.DBPath) {
 		if err = os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
-			return err
+			log.Panicf("", err)
 		}
 	}
 	if !utils.PathExist(dbCfg.WalConfig.WalDirPath) {
 		if err = os.MkdirAll(dbCfg.WalConfig.WalDirPath, os.ModePerm); err != nil {
-			return err
+			log.Panicf("", err)
 		}
 	}
 	if !utils.PathExist(dbCfg.ValueLogConfig.ValueLogDir) {
 		if err = os.MkdirAll(dbCfg.ValueLogConfig.ValueLogDir, os.ModePerm); err != nil {
-			return err
+			log.Panicf("", err)
 		}
 	}
 	if dbCfg.MemConfig.MemTableNums <= 5 || dbCfg.MemConfig.MemTableNums > 20 {
-		return code.ErrIllegalMemTableNums
+		log.Panicf("", code.ErrIllegalMemTableNums)
 	}
-	return nil
 }
 
-func OpenDB(dbCfg *config.DBConfig) {
-	err := dbCfgCheck(dbCfg)
-	if err != nil {
-		log.Panic("check db cfg failed")
-	}
+func OpenKVStorage(dbCfg *config.DBConfig) {
+	dbCfgCheck(dbCfg)
 
 	C2 = new(C2KV)
-	memTableFlushC := make(chan *MemTable, dbCfg.MemConfig.MemTableNums-1)
-	C2.memTablePipe = make(chan *MemTable, dbCfg.MemConfig.MemTableNums/2)
+	var err error
+	memFlushC := make(chan *MemTable, dbCfg.MemConfig.MemTableNums)
+	C2.memTablePipe = make(chan *MemTable, dbCfg.MemConfig.MemtablePipeSize)
 	C2.immtableQ = NewMemTableQueue(dbCfg.MemConfig.MemTableNums)
-	C2.flushC = memTableFlushC
-	C2.activeMem, err = NewMemTable(dbCfg.MemConfig)
-	if err != nil {
-		return
+	C2.activeMem = NewMemTable(dbCfg.MemConfig)
+	C2.memFlushC = memFlushC
+
+	if C2.wal, err = wal.NewWal(dbCfg.WalConfig); err != nil {
+		log.Panicf("open wal failed", err)
 	}
-
-	C2.wal, err = wal.NewWal(dbCfg.WalConfig)
 	C2.restoreMemoryFromWAL()
-
-	C2.valueLog, err = OpenValueLog(dbCfg.ValueLogConfig, memTableFlushC, C2.wal.KVStateSegment)
-	if err != nil {
-		log.Panic("open Value log failed").Record()
+	if C2.valueLog, err = OpenValueLog(dbCfg.ValueLogConfig, memFlushC, C2.wal.KVStateSegment); err != nil {
+		log.Panicf("open Value log failed", err)
 	}
 
 	go func() {
 		for {
-			memTable, err := NewMemTable(dbCfg.MemConfig)
-			if err != nil {
-				log.Panicf("create a new segment file error", err)
-			}
-			C2.memTablePipe <- memTable
+			C2.memTablePipe <- NewMemTable(dbCfg.MemConfig)
 		}
 	}()
 }
@@ -288,7 +279,7 @@ func (db *C2KV) restoreMemEntries() {
 // kv operate
 
 func (db *C2KV) Get(key []byte) (kv *marshal.KV, err error) {
-	flag, val := db.activeMem.Get(key)
+	val, flag := db.activeMem.Get(key)
 	if !flag {
 		return db.valueLog.Get(key)
 	}
@@ -325,7 +316,7 @@ func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
 	//判断是否超出当前memTable大小，若超过获取新的memTable
 	if bytesCount+db.activeMem.Size() > db.activeMem.cfg.MemTableSize {
 		if C2.immtableQ.size > C2.immtableQ.capacity/2 {
-			C2.flushC <- C2.immtableQ.Dequeue()
+			C2.memFlushC <- C2.immtableQ.Dequeue()
 		}
 		db.immtableQ.Enqueue(db.activeMem)
 		db.activeMem = <-db.memTablePipe

@@ -25,11 +25,11 @@ type MemTable struct {
 	minIndex uint64
 }
 
-func NewMemTable(cfg config.MemConfig) (*MemTable, error) {
+func NewMemTable(cfg config.MemConfig) *MemTable {
 	arena := arenaskl.NewArena(uint32(cfg.MemTableSize*MB) + uint32(arenaskl.MaxNodeSize))
 	skl := arenaskl.NewSkiplist(arena)
 	table := &MemTable{cfg: cfg, skl: skl}
-	return table, nil
+	return table
 }
 
 func (mt *MemTable) newSklIter() *arenaskl.Iterator {
@@ -69,13 +69,13 @@ func (mt *MemTable) ConcurrentPut(kvBytes []*marshal.BytesKV) error {
 	return nil
 }
 
-func (mt *MemTable) Get(key []byte) (bool, []byte) {
+func (mt *MemTable) Get(key []byte) ([]byte, bool) {
 	sklIter := mt.newSklIter()
 	if found := sklIter.Seek(key); !found {
-		return false, nil
+		return nil, false
 	}
 	value, _ := sklIter.Get(key)
-	return true, value
+	return value, true
 }
 
 func (mt *MemTable) Scan(low, high []byte) (kvs []*marshal.BytesKV, err error) {

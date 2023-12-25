@@ -3,7 +3,6 @@ package db
 import (
 	"github.com/ColdToo/Cold2DB/db/Mock"
 	"github.com/ColdToo/Cold2DB/db/marshal"
-	"github.com/stretchr/testify/require"
 	"reflect"
 	"testing"
 
@@ -13,33 +12,15 @@ import (
 var TestMemConfig = config.MemConfig{
 	MemTableSize: 64,
 	MemTableNums: 5,
-	Concurrency:  3,
-}
-
-func TestMemTable_Get(t *testing.T) {
-	mem, err := NewMemTable(TestMemConfig)
-	if err != nil {
-		t.Log(err)
-	}
-
-	kvs := Mock.OneKV
-	for _, kv := range kvs {
-		sklIter := mem.newSklIter()
-		sklIter.Put(kv.Key, marshal.EncodeData(kv.Data))
-	}
-
-	kv, _ := mem.Get(kvs[0].Key)
-
-	reflect.DeepEqual(kvs, kv)
+	Concurrency:  8,
 }
 
 func TestMemTable_Scan(t *testing.T) {
 	//获取验证集
 	kvs := Mock.KVS_RAND_35MB_HASDEL_UQKey
-	min := 0
 	max := len(kvs) - 1
 	verifyKvs := make([]*marshal.KV, 0)
-	lowIndex := Mock.CreateRandomIndex(min, max)
+	lowIndex := Mock.CreateRandomIndex(max)
 	lowKey := kvs[lowIndex].Key
 	highKey := kvs[max].Key
 	for lowIndex <= max {
@@ -48,10 +29,7 @@ func TestMemTable_Scan(t *testing.T) {
 		lowIndex++
 	}
 
-	mem, err := NewMemTable(TestMemConfig)
-	if err != nil {
-		t.Log(err)
-	}
+	mem := NewMemTable(TestMemConfig)
 	//获取测试集
 	sklIter := mem.newSklIter()
 	for _, kv := range kvs {
@@ -73,10 +51,7 @@ func TestMemTable_All(t *testing.T) {
 		bytesKvs = append(bytesKvs, &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeData(kv.Data)})
 	}
 
-	mem, err := NewMemTable(TestMemConfig)
-	if err != nil {
-		t.Log(err)
-	}
+	mem := NewMemTable(TestMemConfig)
 	mem.ConcurrentPut(bytesKvs)
 
 	allKvs := mem.All()
@@ -86,34 +61,6 @@ func TestMemTable_All(t *testing.T) {
 	}
 
 	reflect.DeepEqual(kvs, allKvs)
-}
-
-func TestMemTable_All1(t *testing.T) {
-	mem, err := NewMemTable(TestMemConfig)
-	if err != nil {
-		t.Log(err)
-	}
-	it := mem.newSklIter()
-
-	kvs := Mock.KVS_RAND_35MB_HASDEL_UQKey
-	bytesKvs := make([]*marshal.BytesKV, 0)
-	for _, kv := range kvs {
-		bytesKvs = append(bytesKvs, &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeData(kv.Data)})
-	}
-
-	for _, kv := range bytesKvs {
-		err := it.Put(kv.Key, kv.Value)
-		if err != nil {
-			t.Log(err)
-		}
-	}
-
-	for _, kv := range kvs {
-		if it.Seek(kv.Key) {
-			data := marshal.DecodeData(it.Value())
-			require.EqualValues(t, kv.Data, data)
-		}
-	}
 }
 
 func TestMemTable_Queue(t *testing.T) {
@@ -138,4 +85,34 @@ func TestMemTable_Queue(t *testing.T) {
 	if queue.size != 2 {
 		t.Errorf("Expected queue size to be 2 after dequeue, but got %d", queue.size)
 	}
+}
+
+func TestMemTable_Get(t *testing.T) {
+	kv := Mock.OneKV
+	mem := NewMemTable(TestMemConfig)
+	sklIter := mem.newSklIter()
+	err := sklIter.Put(kv.Key, marshal.EncodeData(kv.Data))
+	if err != nil {
+		t.Error(err)
+	}
+	vByte, flag := mem.Get(kv.Key)
+	if !flag {
+		t.Error("should found")
+	}
+	data1 := marshal.DecodeData(vByte)
+	reflect.DeepEqual(kv.Data, data1)
+
+	data1.Index = 111
+	data1.Type = 1
+	data1.Value = []byte("111111111111111111111111111111111111111111111111111")
+	err = sklIter.Put(kv.Key, marshal.EncodeData(data1))
+	if err != nil {
+		t.Error(err)
+	}
+	vByte, flag = mem.Get(kv.Key)
+	if !flag {
+		t.Error("should found")
+	}
+	data2 := marshal.DecodeData(vByte)
+	reflect.DeepEqual(data1, data2)
 }

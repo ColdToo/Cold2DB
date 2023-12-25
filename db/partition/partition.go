@@ -28,6 +28,7 @@ const (
 )
 
 type SST struct {
+	Id      uint64
 	fd      *os.File
 	fName   string
 	SSTSize int64
@@ -36,6 +37,7 @@ type SST struct {
 // OpenSST todo 一个value如果跨两个block，那么可能需要访问两次硬盘,后续优化vlog中数据的对齐
 func OpenSST(filePath string) (*SST, error) {
 	return &SST{
+		Id:    uint64(uuid.New().ID()),
 		fd:    iooperator.OpenBufferIOFile(filePath),
 		fName: filePath,
 	}, nil
@@ -125,7 +127,7 @@ func OpenPartition(partitionDir string) (p *Partition) {
 			if err != nil {
 				return nil
 			}
-			p.SSTMap[uint64(sst.fd.Fd())] = sst
+			p.SSTMap[sst.Id] = sst
 		}
 	}
 
@@ -151,7 +153,7 @@ func (p *Partition) Get(key []byte) (kv *marshal.KV, err error) {
 		return nil, err
 	}
 	index := marshal.DecodeIndexMeta(indexMeta.Value)
-	if sst, ok := p.SSTMap[index.Fid]; ok {
+	if sst, ok := p.SSTMap[index.SSTid]; ok {
 		value, err := sst.Read(index.ValueSize, index.ValueOffset)
 		if err != nil {
 			return nil, err
@@ -171,7 +173,7 @@ func (p *Partition) Scan(low, high []byte) (kvs []*marshal.KV, err error) {
 	}
 	for _, indexMeta := range indexMetas {
 		index := marshal.DecodeIndexMeta(indexMeta.Value)
-		if sst, ok := p.SSTMap[index.Fid]; ok {
+		if sst, ok := p.SSTMap[index.SSTid]; ok {
 			value, err := sst.Read(index.ValueSize, index.ValueOffset)
 			if err != nil {
 				return nil, err
@@ -209,7 +211,7 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan 
 
 		vSize := len(kv.Data.Value)
 		meta := &marshal.IndexerMeta{
-			Fid:         uint64(sst.fd.Fd()),
+			SSTid:       sst.Id,
 			ValueOffset: fileCurrentOffset,
 			ValueSize:   int64(vSize),
 			ValueCrc32:  crc32.ChecksumIEEE(kv.Data.Value),
@@ -246,10 +248,9 @@ func (p *Partition) PersistKvs(kvs []*marshal.KV, wg *sync.WaitGroup, errC chan 
 		sst.Remove()
 		return
 	}
-	oldFd := uint64(sst.fd.Fd())
+
 	sst.Rename(createSSTFileName(p.dirPath, NewSST, None))
-	delete(p.SSTMap, oldFd)
-	p.SSTMap[uint64(sst.fd.Fd())] = sst
+	p.SSTMap[sst.Id] = sst
 }
 
 func (p *Partition) AutoCompaction() {

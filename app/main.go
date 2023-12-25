@@ -10,7 +10,7 @@ import (
 func main() {
 	config.InitConfig()
 	log.InitLog(config.GetZapConf())
-	db.OpenDB(config.GetDBConf())
+	db.OpenKVStorage(config.GetDBConf())
 
 	localIpAddr, localId, nodes := config.GetLocalInfo()
 	raftConfig := config.GetRaftConf()

@@ -2,6 +2,7 @@ package partition
 
 import (
 	"bytes"
+	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"go.etcd.io/bbolt"
 	"os"
@@ -63,8 +64,9 @@ func (b *BtreeIndexer) Get(key []byte) (meta *marshal.BytesKV, err error) {
 			meta = new(marshal.BytesKV)
 			meta.Key = key
 			meta.Value = value
+			return nil
 		}
-		return nil
+		return code.ErrRecordNotExists
 	})
 	return
 }

@@ -73,6 +73,41 @@ func TestBtreeIndexer_Scan(t *testing.T) {
 	}
 }
 
+func TestBtreeIndexer_ScanKV(t *testing.T) {
+	getwd, _ := os.Getwd()
+	indexer, err := NewIndexer(getwd, time.Now().Format("2006-01-02T15:04:05")+indexFileSuffixName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer indexer.Close()
+
+	tx, err := indexer.StartTx()
+	low := []byte("a")
+	high := []byte("z")
+	ops := make([]*Op, 0)
+	ops = append(ops, &Op{Insert, &marshal.BytesKV{Key: []byte("b"), Value: []byte("value1")}})
+	ops = append(ops, &Op{Insert, &marshal.BytesKV{Key: []byte("c"), Value: []byte("value2")}})
+	ops = append(ops, &Op{Insert, &marshal.BytesKV{Key: []byte("d"), Value: []byte("value3")}})
+	err = indexer.Execute(tx, ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.Commit()
+
+	metaList, err := indexer.Scan(low, high)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedMetaList := []*marshal.BytesKV{
+		{Key: []byte("b"), Value: []byte("value1")},
+		{Key: []byte("c"), Value: []byte("value2")},
+		{Key: []byte("d"), Value: []byte("value3")},
+	}
+	if !reflect.DeepEqual(metaList, expectedMetaList) {
+		t.Errorf("Scan() returned unexpected value, expected: %v, got: %v", expectedMetaList, metaList)
+	}
+}
+
 func TestBtreeIndexer_Delete(t *testing.T) {
 	getwd, _ := os.Getwd()
 	indexer, err := NewIndexer(getwd, time.Now().Format("2006-01-02T15:04:05")+indexFileSuffixName)

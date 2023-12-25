@@ -20,6 +20,8 @@ type MemConfig struct {
 
 	// 写入memTable并发度
 	Concurrency int
+
+	MemtablePipeSize int
 }
 
 type WalConfig struct {

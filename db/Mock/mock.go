@@ -3,6 +3,7 @@ package Mock
 import (
 	"bytes"
 	"fmt"
+	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/db/partition"
 	"github.com/google/uuid"
@@ -17,29 +18,34 @@ import (
 
 const CreatKVsFmt = "create KVs nums %d, data valLen %d, bytes count %s"
 const PartitionFormat = "PARTITION_%d"
-const minIndex = 0
 
-var filePath, _ = os.Getwd()
-var partitionDir1 = path.Join(filePath, fmt.Sprintf(PartitionFormat, 1))
-var partitionDir2 = path.Join(filePath, fmt.Sprintf(PartitionFormat, 2))
-var partitionDir3 = path.Join(filePath, fmt.Sprintf(PartitionFormat, 3))
+var FilePath, _ = os.Getwd()
+var VlogPath = path.Join(FilePath, "VLOG")
+var VlogCfg = config.ValueLogConfig{ValueLogDir: VlogPath, PartitionNums: 3}
+var partitionDir1 = path.Join(FilePath, fmt.Sprintf(PartitionFormat, 1))
+var partitionDir2 = path.Join(FilePath, fmt.Sprintf(PartitionFormat, 2))
+var partitionDir3 = path.Join(FilePath, fmt.Sprintf(PartitionFormat, 3))
 var _67MBKVs = CreateSortKVs(250000, 250, true)
 var _27KBKVsNoDelOp = CreateSortKVs(100, 250, false)
 var _67MBKVsNoDelOp = CreateSortKVs(250000, 250, true)
 var KVs67MB = CreateSortKVs(250000, 250, true)
 var KVs27KBNoDelOp = CreateSortKVs(100, 250, false)
-var OneKV = CreateSortKVs(1, 250, false)
+var OneKV = CreateSortKVs(1, 250, false)[0]
 
 var KVS_RAND_27KB_HASDEL_UQKey = CreateRandKVs(100, 250, true)
 var KVS_SORT_27KB_NODEL_UQKey = CreateSortKVs(100, 250, false)
+var KVS_SORT_27KB_HASDEL_UQKey = CreateSortKVs(100, 250, false)
 var KVS_RAND_35MB_HASDEL_UQKey = CreateRandKVs(125000, 250, true)
+var KVS_RAND_35MB_NODEL_UQKey = CreateRandKVs(125000, 250, false)
 
 func CreateRandKVs(num int, valLen int, hasDelete bool) []*marshal.KV {
 	kvs := make([]*marshal.KV, 0)
 	for i := 0; i < num; i++ {
+		key := genUniqueKey()
 		kv := &marshal.KV{
-			ApplySig: 1,
+			ApplySig: 0,
 			Key:      genUniqueKey(),
+			KeySize:  len(key),
 			Data: &marshal.Data{
 				Index:     uint64(i),
 				TimeStamp: time.Now().Unix(),
@@ -101,10 +107,9 @@ func genUniqueKey() []byte {
 	return []byte(uuid.New().String())
 }
 
-func CreateRandomIndex(min, max int) int {
+func CreateRandomIndex(max int) int {
 	rand.Seed(time.Now().UnixNano()) // 设置随机数种子
-	randomNumber := rand.Intn(max-min+1) + min
-	return randomNumber
+	return rand.Intn(max)
 }
 
 func MockPartitionPersistKVs(partitionDir string, persistKVs []*marshal.KV) *partition.Partition {
@@ -136,4 +141,20 @@ func ConvertSize(size int) string {
 		i++
 	}
 	return fmt.Sprintf("%.f", float64(size)) + units[i]
+}
+
+func KVsTransToByteKVs(kvs []*marshal.KV) []*marshal.BytesKV {
+	bytesKvs := make([]*marshal.BytesKV, 0)
+	for _, kv := range kvs {
+		bytesKvs = append(bytesKvs, &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeData(kv.Data)})
+	}
+	return bytesKvs
+}
+
+func CreateValueLogDirIfNotExist(vlogDir string) {
+	if _, err := os.Stat(vlogDir); err != nil {
+		if err := os.Mkdir(vlogDir, 0755); err != nil {
+			println(err)
+		}
+	}
 }

@@ -404,7 +404,6 @@ type KVStateSegment struct {
 	lock         sync.Mutex
 	Fd           *os.File
 	PersistIndex uint64
-	AppliedIndex uint64
 	Blocks       []byte
 	closed       bool
 }
