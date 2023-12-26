@@ -35,11 +35,6 @@ func TestMemTable_Scan(t *testing.T) {
 		sklIter.Put(kv.Key, marshal.EncodeData(kv.Data))
 	}
 	allKvs, _ := mem.Scan(lowKey, highKey)
-	reKvs := make([]*marshal.KV, 0)
-	for _, kv := range allKvs {
-		reKvs = append(reKvs, &marshal.KV{Key: kv.Key, KeySize: len(kv.Key), Data: marshal.DecodeData(kv.Value)})
-	}
-
 	reflect.DeepEqual(kvs, allKvs)
 }
 

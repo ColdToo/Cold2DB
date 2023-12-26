@@ -10,6 +10,7 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/utils"
 	"os"
+	"sync"
 )
 
 //go:generate mockgen -source=./db.go -destination=../mocks/db.go -package=mock
@@ -175,7 +176,7 @@ func (db *C2KV) restoreImmTable() {
 func (db *C2KV) restoreMemEntries() {
 	appliedIndex := db.wal.RaftStateSegment.AppliedIndex
 
-	//locate the read position of segment
+	//find the read position of segment
 	Node := db.wal.OrderSegmentList.Head
 	for Node != nil {
 		if appliedIndex >= Node.Seg.Index && appliedIndex <= Node.Next.Seg.Index {
@@ -208,11 +209,9 @@ func (db *C2KV) restoreMemEntries() {
 		}
 
 		db.entries = append(db.entries, ents...)
-		//todo 更新offset
 		Node = Node.Next
 	}
 	return
-
 }
 
 // kv operate
@@ -225,22 +224,30 @@ func (db *C2KV) Get(key []byte) (kv *marshal.KV, err error) {
 	return &marshal.KV{Key: key, Data: marshal.DecodeData(val)}, nil
 }
 
-func (db *C2KV) Scan(lowKey []byte, highKey []byte) (kvs []*marshal.KV, err error) {
-	/*kvChan := make(chan *marshal.KV)
+func (db *C2KV) Scan(lowKey []byte, highKey []byte) ([]*marshal.KV, error) {
+	kvSlice := make([]*marshal.KV, 0)
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
 	go func() {
 		kvs, err := db.valueLog.Scan(lowKey, highKey)
 		if err != nil {
 			return
 		}
+		kvSlice = append(kvSlice, kvs...)
+		wg.Done()
 	}()
 
+	var memsKvs []*marshal.KV
 	for _, mem := range db.immtableQ.tables {
-		kvs, err := mem.Scan(lowKey, highKey)
+		memKvs, err := mem.Scan(lowKey, highKey)
 		if err != nil {
-			return
+			return nil, err
 		}
-	}*/
-	return kvs, err
+		memsKvs = append(memsKvs, memKvs...)
+	}
+	wg.Wait()
+	kvSlice = append(kvSlice, memsKvs...)
+	return kvSlice, nil
 }
 
 func (db *C2KV) Put(kvs []*marshal.KV) (err error) {

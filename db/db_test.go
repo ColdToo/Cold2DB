@@ -23,16 +23,6 @@ var MockDBCfg = &config.DBConfig{
 	},
 }
 
-func TestKVStorage_dbCfgCheck(t *testing.T) {
-	dbCfgCheck(MockDBCfg)
-}
-
-func TestKVStorage_restoreMemoryFromWAL(t *testing.T) {
-	C2KV := MockKVStorage(MockDBCfg)
-	C2KV.PersistUnstableEnts(Mock.Entries61MB)
-	C2KV.restoreMemoryFromWAL()
-}
-
 func MockKVStorage(dbCfg *config.DBConfig) (C2 *C2KV) {
 	dbCfgCheck(dbCfg)
 	C2 = new(C2KV)
@@ -49,4 +39,33 @@ func MockKVStorage(dbCfg *config.DBConfig) (C2 *C2KV) {
 		println(err)
 	}
 	return
+}
+
+func TestKVStorage_dbCfgCheck(t *testing.T) {
+	dbCfgCheck(MockDBCfg)
+}
+
+func TestKVStorage_PersistUnstableEnts(t *testing.T) {
+	entSlices := Mock.ENTS_5GROUP_5000NUMS_250LENGTH
+	C2KV := MockKVStorage(MockDBCfg)
+	for _, ents := range entSlices {
+		if err := C2KV.PersistUnstableEnts(ents); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+func TestKVStorage_Put(t *testing.T) {
+	C2KV := MockKVStorage(MockDBCfg)
+	C2KV.Put(Mock.KVS_RAND_35MB_HASDEL_UQKey)
+}
+
+func TestKVStorage_Scan(t *testing.T) {
+	C2KV := MockKVStorage(MockDBCfg)
+	C2KV.Put(Mock.KVS_RAND_35MB_HASDEL_UQKey)
+}
+
+func TestKVStorage_Get(t *testing.T) {
+	C2KV := MockKVStorage(MockDBCfg)
+	C2KV.Put(Mock.KVS_RAND_35MB_HASDEL_UQKey)
 }

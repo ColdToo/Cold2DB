@@ -1,12 +1,8 @@
 package Mock
 
 import (
-	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/pb"
-	"math/rand"
-	"os"
-	"time"
 )
 
 const CreatEntriesFmt = "create entries nums %d, data length %d, bytes count %s"
@@ -16,18 +12,7 @@ var Entries133MB = CreateEntries(500000, 250)
 var Entries1MB = CreateEntries(5000, 250)
 var Entries5 = CreateEntries(5, 250)
 var Entries20 = CreateEntries(40, 250)
-
-var TestWalDirPath, _ = os.Getwd()
-
-var TestWALConfig64 = config.WalConfig{
-	WalDirPath:  TestWalDirPath,
-	SegmentSize: 64,
-}
-
-var TestWALConfig1 = config.WalConfig{
-	WalDirPath:  TestWalDirPath,
-	SegmentSize: 1,
-}
+var ENTS_5GROUP_5000NUMS_250LENGTH = CreateEntriesSlice(5, 5000, 250)
 
 func CreateEntries(num int, length int) []*pb.Entry {
 	entries := make([]*pb.Entry, num)
@@ -41,6 +26,25 @@ func CreateEntries(num int, length int) []*pb.Entry {
 		entries[i] = entry
 	}
 	return entries
+}
+
+func CreateEntriesSlice(groupNum, num int, length int) [][]*pb.Entry {
+	groupEntries := make([][]*pb.Entry, groupNum)
+	entries := make([]*pb.Entry, num*groupNum)
+	for i := 0; i < num*groupNum; i++ {
+		entry := &pb.Entry{
+			Term:  uint64(i + 1),
+			Index: uint64(i + 1),
+			Type:  pb.EntryNormal,
+			Data:  genKVBytes(length),
+		}
+		entries[i] = entry
+	}
+
+	for i := 0; i < groupNum; i++ {
+		groupEntries[i] = entries[i*num : (i+1)*num]
+	}
+	return groupEntries
 }
 
 func SplitEntries(interval int, entries []*pb.Entry) [][]*pb.Entry {
@@ -58,15 +62,6 @@ func SplitEntries(interval int, entries []*pb.Entry) [][]*pb.Entry {
 		}
 	}
 	return totalEntries
-}
-
-func generateData(length int) []byte {
-	rand.Seed(time.Now().UnixNano())
-	data := make([]byte, length)
-	for i := 0; i < length; i++ {
-		data[i] = 'a'
-	}
-	return data
 }
 
 func genKVBytes(length int) []byte {

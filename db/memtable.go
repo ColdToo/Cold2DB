@@ -78,7 +78,7 @@ func (mt *MemTable) Get(key []byte) ([]byte, bool) {
 	return value, true
 }
 
-func (mt *MemTable) Scan(low, high []byte) (kvs []*marshal.BytesKV, err error) {
+func (mt *MemTable) Scan(low, high []byte) (kvs []*marshal.KV, err error) {
 	sklIter := mt.newSklIter()
 	if found := sklIter.Seek(low); !found {
 		return nil, code.ErrRecordExists
@@ -86,10 +86,7 @@ func (mt *MemTable) Scan(low, high []byte) (kvs []*marshal.BytesKV, err error) {
 
 	for sklIter.Valid() && bytes.Compare(sklIter.Key(), high) != -1 {
 		key, value := sklIter.Key(), sklIter.Value()
-		kvs = append(kvs, &marshal.BytesKV{
-			Key:   key,
-			Value: value,
-		})
+		kvs = append(kvs, &marshal.KV{Key: key, KeySize: len(key), Data: marshal.DecodeData(value)})
 		sklIter.Next()
 	}
 	return

@@ -98,7 +98,6 @@ func TestValueLog_Scan(t *testing.T) {
 		vlog.Delete()
 	}()
 
-	//验证集
 	verifyKvs := make([]*marshal.KV, 0)
 	lowIndex := Mock.CreateRandomIndex(max)
 	lowKey := kvs[lowIndex].Key

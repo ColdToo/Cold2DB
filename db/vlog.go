@@ -105,12 +105,25 @@ func (v *ValueLog) Get(key []byte) (kv *marshal.KV, err error) {
 }
 
 func (v *ValueLog) Scan(low, high []byte) (kvs []*marshal.KV, err error) {
+	KvsC := make(chan []*marshal.KV, v.vlogCfg.PartitionNums)
+	errC := make(chan error, 1)
+	wg := &sync.WaitGroup{}
 	for _, p := range v.partitions {
-		partKvs, err := p.Scan(low, high)
-		if err != nil {
-			return nil, err
-		}
-		kvs = append(kvs, partKvs...)
+		wg.Add(1)
+		go func(p *partition.Partition, wg *sync.WaitGroup) {
+			partKvs, err := p.Scan(low, high)
+			//todo handle err
+			if err != nil {
+				errC <- err
+			}
+			KvsC <- partKvs
+			wg.Done()
+		}(p, wg)
+	}
+	wg.Wait()
+	close(KvsC)
+	for kvSlice := range KvsC {
+		kvs = append(kvs, kvSlice...)
 	}
 	return
 }
