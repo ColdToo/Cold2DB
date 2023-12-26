@@ -20,6 +20,10 @@ const CreatKVsFmt = "create KVs nums %d, data valLen %d, bytes count %s"
 const PartitionFormat = "PARTITION_%d"
 
 var FilePath, _ = os.Getwd()
+var DBPath = fmt.Sprintf("%s/C2KV", FilePath)
+var WALPath = fmt.Sprintf("%s/WAL", DBPath)
+var ValueLogPath = fmt.Sprintf("%s/VLOG", DBPath)
+
 var VlogPath = path.Join(FilePath, "VLOG")
 var VlogCfg = config.ValueLogConfig{ValueLogDir: VlogPath, PartitionNums: 3}
 var partitionDir1 = path.Join(FilePath, fmt.Sprintf(PartitionFormat, 1))
@@ -31,12 +35,32 @@ var _67MBKVsNoDelOp = CreateSortKVs(250000, 250, true)
 var KVs67MB = CreateSortKVs(250000, 250, true)
 var KVs27KBNoDelOp = CreateSortKVs(100, 250, false)
 var OneKV = CreateSortKVs(1, 250, false)[0]
-
+var SingleKV_DELTE = CreateSingleKV(250, false)
+var SingleKV = CreateSingleKV(250, false)
 var KVS_RAND_27KB_HASDEL_UQKey = CreateRandKVs(100, 250, true)
 var KVS_SORT_27KB_NODEL_UQKey = CreateSortKVs(100, 250, false)
 var KVS_SORT_27KB_HASDEL_UQKey = CreateSortKVs(100, 250, false)
 var KVS_RAND_35MB_HASDEL_UQKey = CreateRandKVs(125000, 250, true)
 var KVS_RAND_35MB_NODEL_UQKey = CreateRandKVs(125000, 250, false)
+
+func CreateSingleKV(valLen int, Delete bool) *marshal.KV {
+	key := genUniqueKey()
+	kv := &marshal.KV{
+		ApplySig: 0,
+		Key:      key,
+		KeySize:  len(key),
+		Data: &marshal.Data{
+			Index:     uint64(1),
+			TimeStamp: time.Now().Unix(),
+			Type:      0,
+			Value:     genRanByte(valLen),
+		},
+	}
+	if Delete {
+		kv.Data.Type = marshal.TypeDelete
+	}
+	return kv
+}
 
 func CreateRandKVs(num int, valLen int, hasDelete bool) []*marshal.KV {
 	kvs := make([]*marshal.KV, 0)

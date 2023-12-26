@@ -2,7 +2,6 @@ package db
 
 import (
 	"errors"
-	"fmt"
 	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
@@ -11,8 +10,6 @@ import (
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/utils"
 	"os"
-	"strings"
-	"time"
 )
 
 //go:generate mockgen -source=./db.go -destination=../mocks/db.go -package=mock
@@ -64,43 +61,46 @@ func GetStorage() (Storage, error) {
 	}
 }
 
-func dbCfgCheck(dbCfg *config.DBConfig) {
-	var err error
+func dbCfgCheck(dbCfg *config.DBConfig) (err error) {
 	if !utils.PathExist(dbCfg.DBPath) {
 		if err = os.MkdirAll(dbCfg.DBPath, os.ModePerm); err != nil {
-			log.Panicf("", err)
+			return
 		}
 	}
 	if !utils.PathExist(dbCfg.WalConfig.WalDirPath) {
 		if err = os.MkdirAll(dbCfg.WalConfig.WalDirPath, os.ModePerm); err != nil {
-			log.Panicf("", err)
+			return
 		}
 	}
 	if !utils.PathExist(dbCfg.ValueLogConfig.ValueLogDir) {
 		if err = os.MkdirAll(dbCfg.ValueLogConfig.ValueLogDir, os.ModePerm); err != nil {
-			log.Panicf("", err)
+			return
 		}
 	}
-	if dbCfg.MemConfig.MemTableNums <= 5 || dbCfg.MemConfig.MemTableNums > 20 {
-		log.Panicf("", code.ErrIllegalMemTableNums)
-	}
+	return nil
 }
 
 func OpenKVStorage(dbCfg *config.DBConfig) {
-	dbCfgCheck(dbCfg)
-
-	C2 = new(C2KV)
 	var err error
-	memFlushC := make(chan *MemTable, dbCfg.MemConfig.MemTableNums)
-	C2.memTablePipe = make(chan *MemTable, dbCfg.MemConfig.MemtablePipeSize)
-	C2.immtableQ = NewMemTableQueue(dbCfg.MemConfig.MemTableNums)
+	if err = dbCfgCheck(dbCfg); err != nil {
+		log.Panicf("db config check failed", err)
+	}
+	C2 = new(C2KV)
+	memFlushC := make(chan *MemTable, dbCfg.MemTableNums)
+	C2.memTablePipe = make(chan *MemTable, dbCfg.MemTablePipeSize)
+	C2.immtableQ = NewMemTableQueue(dbCfg.MemTableNums)
 	C2.activeMem = NewMemTable(dbCfg.MemConfig)
 	C2.memFlushC = memFlushC
-
 	if C2.wal, err = wal.NewWal(dbCfg.WalConfig); err != nil {
 		log.Panicf("open wal failed", err)
 	}
-	C2.restoreMemoryFromWAL()
+
+	if C2.wal.OrderSegmentList.Head != nil {
+		go C2.restoreMemEntries()
+
+		go C2.restoreImmTable()
+	}
+
 	if C2.valueLog, err = OpenValueLog(dbCfg.ValueLogConfig, memFlushC, C2.wal.KVStateSegment); err != nil {
 		log.Panicf("open Value log failed", err)
 	}
@@ -110,66 +110,6 @@ func OpenKVStorage(dbCfg *config.DBConfig) {
 			C2.memTablePipe <- NewMemTable(dbCfg.MemConfig)
 		}
 	}()
-}
-
-func (db *C2KV) restoreMemoryFromWAL() {
-	files, err := os.ReadDir(db.wal.WalDirPath)
-	if err != nil {
-		log.Panicf("open wal dir failed", err)
-	}
-	if len(files) == 0 {
-		return
-	}
-
-	var id uint64
-	for _, file := range files {
-		fName := file.Name()
-		if strings.HasSuffix(fName, wal.SegSuffix) {
-			_, err = fmt.Sscanf(fName, "%d.SEG", &id)
-			if err != nil {
-				log.Panicf("can not scan file")
-			}
-			segmentFile, err := wal.OpenOldSegmentFile(db.wal.WalDirPath, id)
-			if err != nil {
-				log.Panicf("open segment file failed")
-			}
-			//根据segment文件名中的index对segment进行排序
-			db.wal.OrderSegmentList.Insert(segmentFile)
-		}
-
-		if strings.HasSuffix(fName, wal.RaftSuffix) {
-			db.wal.RaftStateSegment, err = wal.OpenRaftStateSegment(db.wal.WalDirPath, file.Name())
-			if err != nil {
-				return
-			}
-		}
-		if strings.HasSuffix(fName, wal.KVSuffix) {
-			db.wal.KVStateSegment, err = wal.OpenKVStateSegment(db.wal.WalDirPath, file.Name())
-			if err != nil {
-				return
-			}
-		}
-	}
-
-	if db.wal.RaftStateSegment == nil {
-		db.wal.RaftStateSegment, err = wal.OpenRaftStateSegment(db.wal.WalDirPath, time.Now().String())
-		if err != nil {
-			return
-		}
-	}
-
-	if db.wal.KVStateSegment == nil {
-		db.wal.KVStateSegment, err = wal.OpenKVStateSegment(db.wal.WalDirPath, time.Now().String())
-		if err != nil {
-			return
-		}
-	}
-
-	go db.restoreMemEntries()
-
-	go db.restoreImmTable()
-
-	return
 }
 
 func (db *C2KV) restoreImmTable() {
@@ -313,7 +253,6 @@ func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
 		kvBytes[i] = &marshal.BytesKV{Key: kv.Key, Value: dataBytes}
 	}
 
-	//判断是否超出当前memTable大小，若超过获取新的memTable
 	if bytesCount+db.activeMem.Size() > db.activeMem.cfg.MemTableSize {
 		if C2.immtableQ.size > C2.immtableQ.capacity/2 {
 			C2.memFlushC <- C2.immtableQ.Dequeue()

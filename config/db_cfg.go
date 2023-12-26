@@ -8,20 +8,20 @@ type DBConfig struct {
 	ValueLogConfig ValueLogConfig
 
 	WalConfig WalConfig
-}
 
-type MemConfig struct {
-	// MemTableSize represents the maximum size in bytes for a memtable, Default value is 64MB. MB Unit
-	MemTableSize int64
-
-	// MemTableNums represents maximum number of memtables to keep in memory before flushing.
 	// Default value is 5.
 	MemTableNums int
 
+	// pre allocate  default value is 1
+	MemTablePipeSize int
+}
+
+type MemConfig struct {
+	// Default value is 64MB. MB Unit
+	MemTableSize int64
+
 	// 写入memTable并发度
 	Concurrency int
-
-	MemtablePipeSize int
 }
 
 type WalConfig struct {

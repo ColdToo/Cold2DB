@@ -149,7 +149,7 @@ func (seg *segment) Flush() (err error) {
 	return
 }
 
-func (seg *segment) Size() int {
+func (seg *segment) AllocatedSize() int {
 	return seg.blockNums * Block4096
 }
 

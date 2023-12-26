@@ -11,7 +11,6 @@ import (
 
 var TestMemConfig = config.MemConfig{
 	MemTableSize: 64,
-	MemTableNums: 5,
 	Concurrency:  8,
 }
 

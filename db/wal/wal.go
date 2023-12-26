@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"fmt"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/log"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -36,8 +38,6 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 	}
 
 	segmentPipe := make(chan *segment, 5)
-
-	// segment pipeline boosts the throughput of the WAL.
 	go func() {
 		for {
 			acSegment, err = NewSegmentFile(config.WalDirPath, config.SegmentSize)
@@ -56,11 +56,55 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 		SegmentPipe:      segmentPipe,
 	}
 
+	files, err := os.ReadDir(wal.WalDirPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var id uint64
+	for _, file := range files {
+		fName := file.Name()
+		if strings.HasSuffix(fName, SegSuffix) {
+			if _, err = fmt.Sscanf(fName, "%d.SEG", &id); err != nil {
+				return nil, err
+			}
+			segmentFile, err := OpenOldSegmentFile(wal.WalDirPath, id)
+			if err != nil {
+				return nil, err
+			}
+			wal.OrderSegmentList.Insert(segmentFile)
+		}
+
+		if strings.HasSuffix(fName, RaftSuffix) {
+			if wal.RaftStateSegment, err = OpenRaftStateSegment(wal.WalDirPath, file.Name()); err != nil {
+				return nil, err
+			}
+		}
+		if strings.HasSuffix(fName, KVSuffix) {
+			if wal.KVStateSegment, err = OpenKVStateSegment(wal.WalDirPath, file.Name()); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if wal.RaftStateSegment == nil {
+		wal.RaftStateSegment, err = OpenRaftStateSegment(wal.WalDirPath, time.Now().String())
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if wal.KVStateSegment == nil {
+		wal.KVStateSegment, err = OpenKVStateSegment(wal.WalDirPath, time.Now().String())
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return wal, nil
 }
 
 func (wal *WAL) Write(entries []*pb.Entry) error {
-	//segment文件应该尽量均匀，若此次entries太大那么直接写入新的segment文件中
 	data := make([]byte, 0)
 	bytesCount := 0
 
@@ -81,7 +125,7 @@ func (wal *WAL) Write(entries []*pb.Entry) error {
 func (wal *WAL) activeSegmentIsFull(delta int) bool {
 	//应尽可能使segment大小均匀，这样查找能提高查找某个entry的效率
 	//active segment size 是根据目前已分配的block数量来计算的，而不是实际数据占用空间
-	actSegSize := wal.ActiveSegment.Size()
+	actSegSize := wal.ActiveSegment.AllocatedSize()
 	totalSize := actSegSize + delta
 
 	// 1、total size > wal.segmentSize
@@ -91,7 +135,6 @@ func (wal *WAL) activeSegmentIsFull(delta int) bool {
 }
 
 func (wal *WAL) rotateActiveSegment() {
-	//从active pipeline获取已经创建好的pipeline
 	newSegment := <-wal.SegmentPipe
 	wal.OrderSegmentList.Insert(wal.ActiveSegment)
 	wal.ActiveSegment = newSegment
