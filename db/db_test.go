@@ -3,7 +3,9 @@ package db
 import (
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db/Mock"
+	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/db/wal"
+	"reflect"
 	"testing"
 )
 
@@ -27,6 +29,7 @@ func MockKVStorage(dbCfg *config.DBConfig) (C2 *C2KV) {
 	dbCfgCheck(dbCfg)
 	C2 = new(C2KV)
 	var err error
+	C2.dbCfg = dbCfg
 	memFlushC := make(chan *MemTable, dbCfg.MemTableNums)
 	C2.memTablePipe = make(chan *MemTable, dbCfg.MemTablePipeSize)
 	C2.immtableQ = NewMemTableQueue(dbCfg.MemTableNums)
@@ -38,6 +41,11 @@ func MockKVStorage(dbCfg *config.DBConfig) (C2 *C2KV) {
 	if C2.valueLog, err = OpenValueLog(dbCfg.ValueLogConfig, memFlushC, C2.wal.KVStateSegment); err != nil {
 		println(err)
 	}
+	go func() {
+		for {
+			C2.memTablePipe <- NewMemTable(dbCfg.MemConfig)
+		}
+	}()
 	return
 }
 
@@ -55,17 +63,54 @@ func TestKVStorage_PersistUnstableEnts(t *testing.T) {
 	}
 }
 
-func TestKVStorage_Put(t *testing.T) {
+func TestKVStorage_RestoreMemFromWAL(t *testing.T) {
 	C2KV := MockKVStorage(MockDBCfg)
-	C2KV.Put(Mock.KVS_RAND_35MB_HASDEL_UQKey)
+	PersisitIndex := 5665
+	ApplyIndex := 11123
+	C2KV.wal.KVStateSegment.PersistIndex = uint64(PersisitIndex)
+	C2KV.wal.RaftStateSegment.AppliedIndex = uint64(ApplyIndex)
+	C2KV.restoreMemEntries()
+	C2KV.restoreImmTable()
 }
 
-func TestKVStorage_Scan(t *testing.T) {
+func TestKVStorage_KVOperate_GET(t *testing.T) {
+	kvs := Mock.KVS_RAND_27KB_HASDEL_UQKey
 	C2KV := MockKVStorage(MockDBCfg)
-	C2KV.Put(Mock.KVS_RAND_35MB_HASDEL_UQKey)
+	err := C2KV.Put(kvs)
+	if err != nil {
+		t.Error(err)
+	}
+	//获取验证集
+	max := len(kvs) - 1
+	Index := Mock.CreateRandomIndex(max)
+	kv := kvs[Index]
+	reKv, err := C2KV.Get(kv.Key)
+	if err != nil {
+		t.Error(err)
+	}
+	reflect.DeepEqual(kv.Data, reKv.Data)
 }
 
-func TestKVStorage_Get(t *testing.T) {
+func TestKVStorage_KVOperate_SCAN(t *testing.T) {
+	kvs := Mock.KVS_RAND_27KB_HASDEL_UQKey
 	C2KV := MockKVStorage(MockDBCfg)
-	C2KV.Put(Mock.KVS_RAND_35MB_HASDEL_UQKey)
+	err := C2KV.Put(kvs)
+	if err != nil {
+		t.Error(err)
+	}
+
+	//获取验证集
+	max := len(kvs) - 1
+	verifyKvs := make([]*marshal.KV, 0)
+	lowIndex := Mock.CreateRandomIndex(max)
+	lowKey := kvs[lowIndex].Key
+	highKey := kvs[max].Key
+	for lowIndex <= max {
+		kv := kvs[lowIndex]
+		verifyKvs = append(verifyKvs, kv)
+		lowIndex++
+	}
+
+	allKvs, _ := C2KV.Scan(lowKey, highKey)
+	reflect.DeepEqual(verifyKvs, allKvs)
 }

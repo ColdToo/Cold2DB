@@ -89,13 +89,12 @@ func TestMemTable_Get(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	vByte, flag := mem.Get(kv.Key)
+	kv1, flag := mem.Get(kv.Key)
 	if !flag {
 		t.Error("should found")
 	}
-	data1 := marshal.DecodeData(vByte)
-	reflect.DeepEqual(kv.Data, data1)
-
+	reflect.DeepEqual(kv.Data, kv1.Data)
+	data1 := kv1.Data
 	data1.Index = 111
 	data1.Type = 1
 	data1.Value = []byte("111111111111111111111111111111111111111111111111111")
@@ -103,10 +102,9 @@ func TestMemTable_Get(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	vByte, flag = mem.Get(kv.Key)
+	kv2, flag := mem.Get(kv.Key)
 	if !flag {
 		t.Error("should found")
 	}
-	data2 := marshal.DecodeData(vByte)
-	reflect.DeepEqual(data1, data2)
+	reflect.DeepEqual(data1, kv2.Data)
 }

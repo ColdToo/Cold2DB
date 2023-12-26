@@ -201,6 +201,7 @@ func (db *C2KV) restoreMemEntries() {
 			}
 
 			if header.Index < appliedIndex {
+				reader.Next(header.EntrySize)
 				continue
 			}
 
@@ -217,11 +218,11 @@ func (db *C2KV) restoreMemEntries() {
 // kv operate
 
 func (db *C2KV) Get(key []byte) (kv *marshal.KV, err error) {
-	val, flag := db.activeMem.Get(key)
+	kv, flag := db.activeMem.Get(key)
 	if !flag {
 		return db.valueLog.Get(key)
 	}
-	return &marshal.KV{Key: key, Data: marshal.DecodeData(val)}, nil
+	return kv, nil
 }
 
 func (db *C2KV) Scan(lowKey []byte, highKey []byte) ([]*marshal.KV, error) {
@@ -245,6 +246,11 @@ func (db *C2KV) Scan(lowKey []byte, highKey []byte) ([]*marshal.KV, error) {
 		}
 		memsKvs = append(memsKvs, memKvs...)
 	}
+	activeMemKvs, err := db.activeMem.Scan(lowKey, highKey)
+	if err != nil {
+		return nil, err
+	}
+	memsKvs = append(memsKvs, activeMemKvs...)
 	wg.Wait()
 	kvSlice = append(kvSlice, memsKvs...)
 	return kvSlice, nil
@@ -260,8 +266,8 @@ func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
 	}
 
 	if bytesCount+db.activeMem.Size() > db.activeMem.cfg.MemTableSize {
-		if C2.immtableQ.size > C2.immtableQ.capacity/2 {
-			C2.memFlushC <- C2.immtableQ.Dequeue()
+		if db.immtableQ.size > db.immtableQ.capacity/2 {
+			db.memFlushC <- db.immtableQ.Dequeue()
 		}
 		db.immtableQ.Enqueue(db.activeMem)
 		db.activeMem = <-db.memTablePipe

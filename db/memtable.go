@@ -26,14 +26,15 @@ type MemTable struct {
 }
 
 func NewMemTable(cfg config.MemConfig) *MemTable {
-	arena := arenaskl.NewArena(uint32(cfg.MemTableSize*MB) + uint32(arenaskl.MaxNodeSize))
+	cfg.MemTableSize = cfg.MemTableSize * MB
+	arena := arenaskl.NewArena(uint32(cfg.MemTableSize) + uint32(arenaskl.MaxNodeSize))
 	skl := arenaskl.NewSkiplist(arena)
 	table := &MemTable{cfg: cfg, skl: skl}
 	return table
 }
 
 func (mt *MemTable) newSklIter() *arenaskl.Iterator {
-	var sklIter = new(arenaskl.Iterator)
+	sklIter := new(arenaskl.Iterator)
 	sklIter.Init(mt.skl)
 	return sklIter
 }
@@ -69,13 +70,13 @@ func (mt *MemTable) ConcurrentPut(kvBytes []*marshal.BytesKV) error {
 	return nil
 }
 
-func (mt *MemTable) Get(key []byte) ([]byte, bool) {
+func (mt *MemTable) Get(key []byte) (*marshal.KV, bool) {
 	sklIter := mt.newSklIter()
 	if found := sklIter.Seek(key); !found {
 		return nil, false
 	}
 	value, _ := sklIter.Get(key)
-	return value, true
+	return &marshal.KV{Key: key, Data: marshal.DecodeData(value)}, true
 }
 
 func (mt *MemTable) Scan(low, high []byte) (kvs []*marshal.KV, err error) {
@@ -118,7 +119,7 @@ type MemTableQueue struct {
 
 func NewMemTableQueue(capacity int) *MemTableQueue {
 	return &MemTableQueue{
-		tables:   make([]*MemTable, capacity),
+		tables:   make([]*MemTable, 0),
 		size:     0,
 		capacity: capacity,
 	}

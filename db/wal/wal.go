@@ -88,14 +88,14 @@ func NewWal(config config.WalConfig) (*WAL, error) {
 	}
 
 	if wal.RaftStateSegment == nil {
-		wal.RaftStateSegment, err = OpenRaftStateSegment(wal.WalDirPath, time.Now().String())
+		wal.RaftStateSegment, err = OpenRaftStateSegment(wal.WalDirPath, time.Now().String()+RaftSuffix)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	if wal.KVStateSegment == nil {
-		wal.KVStateSegment, err = OpenKVStateSegment(wal.WalDirPath, time.Now().String())
+		wal.KVStateSegment, err = OpenKVStateSegment(wal.WalDirPath, time.Now().String()+KVSuffix)
 		if err != nil {
 			return nil, err
 		}
