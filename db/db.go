@@ -95,9 +95,8 @@ func OpenKVStorage(dbCfg *config.DBConfig) {
 		log.Panicf("open wal failed", err)
 	}
 
-	if C2.wal.OrderSegmentList.Head != nil {
+	if C2.wal.OrderSegmentList.Head == nil {
 		go C2.restoreMemEntries()
-
 		go C2.restoreImmTable()
 	}
 
