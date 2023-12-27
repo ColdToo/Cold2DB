@@ -121,7 +121,8 @@ func (db *C2KV) restoreImMemTable() {
 	Node := db.wal.OrderSegmentList.Head
 	kvC := make(chan *marshal.KV, 1000)
 	var bytesCount int64
-	signalC := make(chan error)
+	errC := make(chan error)
+	signalC := make(chan any)
 	memTable := <-db.memTablePipe
 
 	for Node != nil {
@@ -132,25 +133,28 @@ func (db *C2KV) restoreImMemTable() {
 	}
 
 	go func() {
-	ExitLoop:
+	Loop:
 		for Node != nil {
 			Seg := Node.Seg
 			reader := wal.NewSegmentReader(Seg)
 			for {
 				header, err := reader.ReadHeader()
+				if err != nil {
+					if err.Error() == "EOF" {
+						break
+					}
+					log.Panicf("read header failed", err)
+				}
 				if header.Index < persistIndex {
 					reader.Next(header.EntrySize)
 					continue
 				}
 				if header.Index > appliedIndex {
-					break ExitLoop
+					break Loop
 				}
 
 				ent, err := reader.ReadEntry(header)
 				if err != nil {
-					if err.Error() == "EOF" {
-						break
-					}
 					log.Panicf("read entry failed", err)
 				}
 				kv := marshal.DecodeKV(ent.Data)
@@ -159,6 +163,8 @@ func (db *C2KV) restoreImMemTable() {
 			}
 			Node = Node.Next
 		}
+		close(signalC)
+		close(kvC)
 	}()
 
 	for {
@@ -167,12 +173,22 @@ func (db *C2KV) restoreImMemTable() {
 			dataBytes := marshal.EncodeData(kv.Data)
 			bytesCount += int64(len(dataBytes) + len(kv.Key))
 			db.maybeRotateMemTable(bytesCount)
-			err := memTable.Put(&marshal.BytesKV{Key: kv.Key, Value: dataBytes})
-			if err != nil {
+			if err := memTable.Put(&marshal.BytesKV{Key: kv.Key, Value: dataBytes}); err != nil {
 				return
 			}
-		case err := <-signalC:
+		case err := <-errC:
 			log.Panicf("read kv failed", err)
+			return
+		case <-signalC:
+			for kv := range kvC {
+				dataBytes := marshal.EncodeData(kv.Data)
+				bytesCount += int64(len(dataBytes) + len(kv.Key))
+				db.maybeRotateMemTable(bytesCount)
+				if err := memTable.Put(&marshal.BytesKV{Key: kv.Key, Value: dataBytes}); err != nil {
+					return
+				}
+			}
+			return
 		}
 	}
 }
@@ -195,6 +211,12 @@ ExitLoop:
 		reader := wal.NewSegmentReader(Seg)
 		for {
 			header, err := reader.ReadHeader()
+			if err != nil {
+				if err.Error() == "EOF" {
+					break
+				}
+				log.Panicf("read header failed", err)
+			}
 			if header.Index < appliedIndex {
 				reader.Next(header.EntrySize)
 				continue
@@ -206,9 +228,6 @@ ExitLoop:
 
 			ent, err := reader.ReadEntry(header)
 			if err != nil {
-				if err.Error() == "EOF" {
-					break
-				}
 				log.Panicf("read entry failed", err)
 			}
 

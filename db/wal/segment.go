@@ -280,9 +280,9 @@ func (sr *segmentReader) ReadHeader() (eHeader marshal.WalEntryHeader, err error
 	eHeader = marshal.DecodeWALEntryHeader(buf)
 
 	if eHeader.IsEmpty() {
-		//当前blocks已经读空，需要判断下一个block是否能读出数据若为空则返回EOF
-		//算出当前的指针位于blocks中的第几个块
-		//若为blocks中的最后一个块返回eof,若不为最后一个块则移动指针到下一个块读取header
+		//当前block已经读空，需要判断下一个block是否能读出数据若为空则返回EOF
+		//算出当前的blocksOffset位于blocks中的第几个块若为blocks中的最后一个块返回eof,
+		//若不为最后一个块则移动指针到下一个块读取header
 		blockNums := sr.blocksOffset / Block4096
 		if remain := sr.blocksOffset % Block4096; remain > 0 {
 			blockNums++
