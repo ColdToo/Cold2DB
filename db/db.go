@@ -96,9 +96,9 @@ func OpenKVStorage(dbCfg *config.DBConfig) {
 		log.Panicf("open wal failed", err)
 	}
 
-	if C2.wal.OrderSegmentList.Head == nil {
+	if C2.wal.OrderSegmentList.Head != nil {
 		go C2.restoreMemEntries()
-		go C2.restoreImmTable()
+		go C2.restoreImMemTable()
 	}
 
 	if C2.valueLog, err = OpenValueLog(dbCfg.ValueLogConfig, memFlushC, C2.wal.KVStateSegment); err != nil {
@@ -112,97 +112,104 @@ func OpenKVStorage(dbCfg *config.DBConfig) {
 	}()
 }
 
-func (db *C2KV) restoreImmTable() {
+//persistIndex............AppliedIndex.....committedIndex.......stableIndex......
+//    |_________imm-table_________|___________ entries______________|
+
+func (db *C2KV) restoreImMemTable() {
 	persistIndex := db.wal.KVStateSegment.PersistIndex
 	appliedIndex := db.wal.RaftStateSegment.AppliedIndex
 	Node := db.wal.OrderSegmentList.Head
-
 	kvC := make(chan *marshal.KV, 1000)
+	var bytesCount int64
 	signalC := make(chan error)
-	//memTable := <-db.memTablePipe
+	memTable := <-db.memTablePipe
 
-	//先定位要读取的segment
 	for Node != nil {
-		if persistIndex >= Node.Seg.Index && persistIndex <= Node.Next.Seg.Index {
+		if Node.Seg.Index <= persistIndex && Node.Next.Seg.Index > persistIndex {
 			break
 		}
 		Node = Node.Next
 	}
 
-	for Node != nil {
-		Seg := Node.Seg
-		reader := wal.NewSegmentReader(Seg)
-
-		go func() {
+	go func() {
+	ExitLoop:
+		for Node != nil {
+			Seg := Node.Seg
+			reader := wal.NewSegmentReader(Seg)
 			for {
 				header, err := reader.ReadHeader()
+				if header.Index < persistIndex {
+					reader.Next(header.EntrySize)
+					continue
+				}
+				if header.Index > appliedIndex {
+					break ExitLoop
+				}
+
 				ent, err := reader.ReadEntry(header)
 				if err != nil {
 					if err.Error() == "EOF" {
 						break
-					} else {
-						log.Panicf("read header failed", err)
 					}
+					log.Panicf("read entry failed", err)
 				}
-				if header.Index < persistIndex {
-					continue
-				}
-				if header.Index == appliedIndex {
-					break
-				}
-
 				kv := marshal.DecodeKV(ent.Data)
 				kvC <- kv
 				reader.Next(header.EntrySize)
 			}
-		}()
+			Node = Node.Next
+		}
+	}()
 
+	for {
 		select {
-		case _ = <-kvC:
-			//memTable.put(kv.Key, marshal.EncodeData(kv.Data))
-			return
-		case err := <-signalC:
+		case kv := <-kvC:
+			dataBytes := marshal.EncodeData(kv.Data)
+			bytesCount += int64(len(dataBytes) + len(kv.Key))
+			db.maybeRotateMemTable(bytesCount)
+			err := memTable.Put(&marshal.BytesKV{Key: kv.Key, Value: dataBytes})
 			if err != nil {
-				log.Panicf("read segment failed")
-			} else if err.Error() == "EOF" {
-				Node = Node.Next
-				continue
+				return
 			}
+		case err := <-signalC:
+			log.Panicf("read kv failed", err)
 		}
 	}
-	return
 }
 
 func (db *C2KV) restoreMemEntries() {
 	appliedIndex := db.wal.RaftStateSegment.AppliedIndex
-
-	//find the read position of segment
+	committedIndex := db.wal.RaftStateSegment.CommittedIndex
 	Node := db.wal.OrderSegmentList.Head
 	for Node != nil {
-		if appliedIndex >= Node.Seg.Index && appliedIndex <= Node.Next.Seg.Index {
+		if Node.Seg.Index <= appliedIndex && Node.Next.Seg.Index >= appliedIndex {
 			break
 		}
 		Node = Node.Next
 	}
 
+ExitLoop:
 	for Node != nil {
 		ents := make([]*pb.Entry, 0)
 		Seg := Node.Seg
 		reader := wal.NewSegmentReader(Seg)
 		for {
 			header, err := reader.ReadHeader()
+			if header.Index < appliedIndex {
+				reader.Next(header.EntrySize)
+				continue
+			}
+			if header.Index > committedIndex {
+				//todo 是否应该truncate掉committedIndex之后的日志？
+				break ExitLoop
+			}
+
 			ent, err := reader.ReadEntry(header)
 			if err != nil {
 				if err.Error() == "EOF" {
 					break
-				} else {
-					log.Panicf("read header failed", err)
 				}
-			}
-
-			if header.Index < appliedIndex {
-				reader.Next(header.EntrySize)
-				continue
+				log.Panicf("read entry failed", err)
 			}
 
 			ents = append(ents, ent)
@@ -264,7 +271,11 @@ func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
 		bytesCount += int64(len(dataBytes) + len(kv.Key))
 		kvBytes[i] = &marshal.BytesKV{Key: kv.Key, Value: dataBytes}
 	}
+	db.maybeRotateMemTable(bytesCount)
+	return db.activeMem.ConcurrentPut(kvBytes)
+}
 
+func (db *C2KV) maybeRotateMemTable(bytesCount int64) {
 	if bytesCount+db.activeMem.Size() > db.activeMem.cfg.MemTableSize {
 		if db.immtableQ.size > db.immtableQ.capacity/2 {
 			db.memFlushC <- db.immtableQ.Dequeue()
@@ -272,7 +283,6 @@ func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
 		db.immtableQ.Enqueue(db.activeMem)
 		db.activeMem = <-db.memTablePipe
 	}
-	return db.activeMem.ConcurrentPut(kvBytes)
 }
 
 // raft log

@@ -39,6 +39,15 @@ func (mt *MemTable) newSklIter() *arenaskl.Iterator {
 	return sklIter
 }
 
+func (mt *MemTable) Put(kv *marshal.BytesKV) error {
+	sklIter := mt.newSklIter()
+	err := sklIter.Put(kv.Key, kv.Value)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (mt *MemTable) ConcurrentPut(kvBytes []*marshal.BytesKV) error {
 	parts := make([][]*marshal.BytesKV, mt.cfg.Concurrency)
 	//todo 优化:避免使用append追加

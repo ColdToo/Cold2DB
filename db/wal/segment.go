@@ -326,11 +326,12 @@ func (sr *segmentReader) Next(entrySize int) {
 // |----------HEADER---|---BODY----+
 
 type raftStateSegment struct {
-	Fd           *os.File
-	RaftState    pb.HardState
-	AppliedIndex uint64
-	Blocks       []byte
-	closed       bool
+	Fd             *os.File
+	RaftState      pb.HardState
+	AppliedIndex   uint64
+	CommittedIndex uint64
+	Blocks         []byte
+	closed         bool
 }
 
 func (seg *raftStateSegment) encodeRaftStateSegment() []byte {
