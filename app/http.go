@@ -55,12 +55,12 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == GET:
-		v, err := ioutil.ReadAll(r.Body)
-		if v, err = h.store.Lookup(v); err != nil {
-			http.Error(w, "Failed to GET", http.StatusNotFound)
-		} else {
-			w.Write(v)
-		}
+		//v, err := ioutil.ReadAll(r.Body)
+		//if v, err = h.store.Lookup(v); err != nil {
+		//	http.Error(w, "Failed to GET", http.StatusNotFound)
+		//} else {
+		//	w.Write(v)
+		//}
 
 	case r.Method == PUT:
 		v, err := ioutil.ReadAll(r.Body)

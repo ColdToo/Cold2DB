@@ -17,7 +17,7 @@ type AppNode struct {
 	peers   []config.Node
 
 	kvStore   *KvStore
-	raftNode  raft.RaftLayer
+	raftNode  raft.RaftNode
 	transport transport.Transporter
 
 	proposeC    chan []byte        // 提议 (k,v) channel
@@ -25,7 +25,7 @@ type AppNode struct {
 	kvHTTPStopC chan struct{}      // 关闭http服务器的信号 channel
 }
 
-func StartAppNode(localId uint64, nodes []config.Node, proposeC chan []byte, confChangeC chan pb.ConfChange,
+func StartAppNode(localId uint64, nodes []config.Peer, proposeC chan []byte, confChangeC chan pb.ConfChange,
 	kvHTTPStopC chan struct{}, kvStore *KvStore, raftConfig *config.RaftConfig, localIp string) {
 	an := &AppNode{
 		localId:     localId,
@@ -37,28 +37,20 @@ func StartAppNode(localId uint64, nodes []config.Node, proposeC chan []byte, con
 		kvHTTPStopC: kvHTTPStopC,
 	}
 
+	var err error
 	// 完成当前节点与集群中其他节点之间的网络连接
 	an.servePeerRaft()
 	// 启动Raft算法层
-	an.startRaftNode(raftConfig)
-	// 启动一个goroutine,处理appLayer与raftLayer的交互
+	an.raftNode, err = raft.StartRaftNode(raftConfig, kvStore.storage)
+	if err != nil {
+		log.Fatalf("start raft node err", err)
+	}
+	// 启动一个goroutine,处理appNode与raftNode的交互
 	go an.serveRaftNode()
-	// 启动一个goroutine,处理节点变更以及日志提议
+	// 启动一个goroutine,处理客户端请求的节点变更以及日志提议
 	go an.servePropCAndConfC()
 
 	return
-}
-
-func (an *AppNode) startRaftNode(config *config.RaftConfig) {
-	opts := &raft.RaftOpts{
-		ID:            an.localId,
-		Storage:       an.kvStore.storage,
-		ElectionTick:  config.ElectionTick,
-		HeartbeatTick: config.HeartbeatTick,
-		Peers:         an.peers,
-	}
-
-	an.raftNode = raft.StartRaftNode(opts)
 }
 
 func (an *AppNode) servePeerRaft() {

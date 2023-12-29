@@ -3,6 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/Cold2DB.iml" filepath="$PROJECT_DIR$/.idea/Cold2DB.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../etcd/.idea/etcd.iml" filepath="$PROJECT_DIR$/../etcd/.idea/etcd.iml" />
     </modules>
   </component>
 </project>

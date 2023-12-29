@@ -37,7 +37,7 @@ func TestEncodeANdDecodeWALEntry(t *testing.T) {
 
 func TestIndexMetaEncodeDecode(t *testing.T) {
 	m := &IndexerMeta{
-		Fid:         123,
+		SSTid:       123,
 		ValueOffset: 45623232323,
 		ValueSize:   789232323,
 		TimeStamp:   1000000,

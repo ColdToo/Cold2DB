@@ -26,9 +26,10 @@ type Log interface {
 	HasNextApplyEnts() bool
 	AppendEntries(ents []pb.Entry)
 	Entries(low, high uint64) (ents []*pb.Entry, err error)
+	lastTerm() uint64
 }
 
-type RaftLog struct {
+type raftLog struct {
 	first uint64
 
 	applied uint64
@@ -51,20 +52,30 @@ type RaftLog struct {
 	storage db.Storage
 }
 
-func newRaftLog(storage db.Storage, maxNextEntsSize uint64) Log {
+func newRaftLog(storage db.Storage, maxNextEntsSize uint64) (r *raftLog) {
+	r = &raftLog{
+		storage:         storage,
+		maxNextEntsSize: maxNextEntsSize,
+	}
 	firstIndex := storage.FirstIndex()
+	lastIndex := storage.LastIndex()
 	appliedIndex := storage.AppliedIndex()
-	emptyEntS := make([]*pb.Entry, 0)
-	return &RaftLog{storage: storage, first: firstIndex, applied: appliedIndex, unstableEnts: emptyEntS, maxNextEntsSize: maxNextEntsSize}
+	r.offset = lastIndex + 1
+	// Initialize our committed and applied pointers to the time of the last compaction.
+	r.committed = firstIndex - 1
+	if appliedIndex == 0 {
+		r.applied = firstIndex - 1
+	}
+	return
 }
 
 // FirstIndex 返回未压缩日志的索引
-func (l *RaftLog) firstIndex() uint64 {
+func (l *raftLog) firstIndex() uint64 {
 	//在raft初始化时storage此时还未有已经持久化的raftlog日志此时应该返回unstable中的最后一条日志
 	return l.storage.FirstIndex()
 }
 
-func (l *RaftLog) lastIndex() uint64 {
+func (l *raftLog) lastIndex() uint64 {
 	if lenth := len(l.unstableEnts); lenth != 0 {
 		return l.offset + uint64(lenth)
 	}
@@ -76,7 +87,19 @@ func (l *RaftLog) lastIndex() uint64 {
 	return 1
 }
 
-func (l *RaftLog) Term(i uint64) (uint64, error) {
+func (l *raftLog) lastTerm() uint64 {
+	if lenth := len(l.unstableEnts); lenth != 0 {
+		return l.offset + uint64(lenth)
+	}
+
+	if i := l.storage.LastIndex(); i != 0 {
+		return i
+	}
+	//index	 默认从1开始
+	return 1
+}
+
+func (l *raftLog) Term(i uint64) (uint64, error) {
 	//如果i已经stable那么通过storage获取
 	if i > l.stabled {
 		return l.unstableEnts[i-l.applied].Index, nil
@@ -85,13 +108,13 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 	return l.storage.Term(i)
 }
 
-func (l *RaftLog) StableTo(i uint64) {
+func (l *raftLog) StableTo(i uint64) {
 	//裁剪掉unstable中已经stable的日志，可以减少内存中所占用的空间
 	l.stabled = i
 }
 
 // Entries 获取指定范围内的日志切片
-func (l *RaftLog) Entries(lo, hi uint64, maxSize uint64) (ents []pb.Entry, err error) {
+func (l *raftLog) Entries(lo, hi uint64, maxSize uint64) (ents []pb.Entry, err error) {
 	if lo > l.lastIndex() || lo == hi {
 		return nil, nil
 	}
@@ -130,7 +153,7 @@ func (l *RaftLog) Entries(lo, hi uint64, maxSize uint64) (ents []pb.Entry, err e
 }
 
 // l.firstIndex <= lo <= hi <= total raft log length
-func (l *RaftLog) mustCheckOutOfBounds(lo, hi uint64) error {
+func (l *raftLog) mustCheckOutOfBounds(lo, hi uint64) error {
 	if lo > hi {
 		log.Panicf("invalid slice %d > %d", lo, hi)
 	}
@@ -147,7 +170,7 @@ func (l *RaftLog) mustCheckOutOfBounds(lo, hi uint64) error {
 	return nil
 }
 
-func (l *RaftLog) unstableEntries() []*pb.Entry {
+func (l *raftLog) unstableEntries() []*pb.Entry {
 	if len(l.unstableEnts) == 0 {
 		return nil
 	}
@@ -155,7 +178,7 @@ func (l *RaftLog) unstableEntries() []*pb.Entry {
 }
 
 // TruncateAndAppend follower append maybe conflict log so should truncate
-func (l *RaftLog) TruncateAndAppend() {
+func (l *raftLog) TruncateAndAppend() {
 	if l.stabled > l.committed {
 	} else {
 		//如果发现需要裁剪的日志已经被stable了那么就需要将其从storage中删除
@@ -169,17 +192,27 @@ func (l *RaftLog) TruncateAndAppend() {
 
 // NextApplyEnts 返回可以应用到状态机的日志索引，若无返回index0
 // 以及持久化的日志实质上已经存储在storage中通过raft判断哪些日志可以apply到状态机中
-func (l *RaftLog) NextApplyEnts() (ents []*pb.Entry) {
+func (l *raftLog) NextApplyEnts() (ents []*pb.Entry) {
 	return nil
 }
 
-func (l *RaftLog) SetCommittedIndex(i uint64) {
+func (l *raftLog) SetCommittedIndex(i uint64) {
 	l.committed = i
 }
 
 // 每次处理完一轮ready后都需要刷新firstIndex
-func (l *RaftLog) RefreshFirstAndAppliedIndex() {
+func (l *raftLog) RefreshFirstAndAppliedIndex() {
 	// todo 使用锁来保证first
 	l.first = l.storage.FirstIndex()
 	l.applied = l.storage.AppliedIndex()
+}
+
+func (l *raftLog) appliedTo(i uint64) {
+	if i == 0 {
+		return
+	}
+	if l.committed < i || i < l.applied {
+		log.Panicf("applied(%d) is out of range [prevApplied(%d), committed(%d)]", i, l.applied, l.committed)
+	}
+	l.applied = i
 }

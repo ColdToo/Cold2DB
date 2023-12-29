@@ -10,7 +10,10 @@ import (
 func main() {
 	config.InitConfig()
 	log.InitLog(config.GetZapConf())
-	db.OpenKVStorage(config.GetDBConf())
+	kvStorage, err := db.OpenKVStorage(config.GetDBConf())
+	if err != nil {
+		return
+	}
 
 	localIpAddr, localId, nodes := config.GetLocalInfo()
 	raftConfig := config.GetRaftConf()
@@ -18,7 +21,8 @@ func main() {
 	confChangeC := make(chan pb.ConfChange)
 	kvHTTPStopC := make(chan struct{})
 
-	kvStore := NewKVStore(proposeC, raftConfig.RequestTimeout)
+	kvStore := NewKVStore(proposeC, raftConfig.RequestTimeout, kvStorage)
 	StartAppNode(localId, nodes, proposeC, confChangeC, kvHTTPStopC, kvStore, raftConfig, localIpAddr)
+
 	ServeHttpKVAPI(kvStore, localIpAddr, confChangeC, kvHTTPStopC)
 }

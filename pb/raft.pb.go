@@ -367,6 +367,7 @@ type HardState struct {
 	Term                 uint64   `protobuf:"varint,1,opt,name=term" json:"term"`
 	Vote                 uint64   `protobuf:"varint,2,opt,name=vote" json:"vote"`
 	Applied              uint64   `protobuf:"varint,3,opt,name=applied" json:"applied"`
+	Committed            uint64   `protobuf:"varint,3,opt,name=applied" json:"committed"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/db/marshal"
-	"github.com/ColdToo/Cold2DB/log"
 	"time"
 )
 
@@ -15,13 +14,9 @@ type KvStore struct {
 	ReqTimeout time.Duration
 }
 
-func NewKVStore(proposeC chan<- []byte, requestTimeOut int) *KvStore {
-	storage, err := db.GetStorage()
-	if err != nil {
-		log.Panicf("get db failed %s", err.Error())
-	}
+func NewKVStore(proposeC chan<- []byte, requestTimeOut int, kvStorage *db.C2KV) *KvStore {
 	s := &KvStore{
-		storage:    storage,
+		storage:    kvStorage,
 		proposeC:   proposeC,
 		monitorKV:  make(map[int64]chan struct{}),
 		ReqTimeout: time.Duration(requestTimeOut) * time.Second,

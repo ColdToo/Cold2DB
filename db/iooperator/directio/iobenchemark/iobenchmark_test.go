@@ -1,8 +1,8 @@
 package main
 
 import (
-	"desmontration/directio"
 	"fmt"
+	"github.com/ncw/directio"
 	"io/ioutil"
 	"log"
 	"os"

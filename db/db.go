@@ -19,14 +19,21 @@ type Storage interface {
 	Scan(lowKey []byte, highKey []byte) (kvs []*marshal.KV, err error)
 	Put(kvs []*marshal.KV) error
 
-	PersistHardState(st pb.HardState) error
 	PersistUnstableEnts(entries []*pb.Entry) error
+	PersistHardState(st pb.HardState) error
 	Truncate(index uint64) error
 	GetHardState() (pb.HardState, pb.ConfState, error)
 	Entries(lo, hi, maxSize uint64) ([]*pb.Entry, error)
+
 	Term(i uint64) (uint64, error)
 	AppliedIndex() uint64
+	// FirstIndex returns the index of the first log entry that is
+	// possibly available via Entries (older entries have been incorporated
+	// into the latest Snapshot; if storage only contains the dummy entry the
+	// first log entry is not available).
 	FirstIndex() uint64
+	LastIndex() uint64
+
 	GetSnapshot() (pb.Snapshot, error)
 
 	Close()
@@ -81,8 +88,7 @@ func dbCfgCheck(dbCfg *config.DBConfig) (err error) {
 	return nil
 }
 
-func OpenKVStorage(dbCfg *config.DBConfig) {
-	var err error
+func OpenKVStorage(dbCfg *config.DBConfig) (C2 *C2KV, err error) {
 	if err = dbCfgCheck(dbCfg); err != nil {
 		log.Panicf("db config check failed", err)
 	}
@@ -336,10 +342,16 @@ func (db *C2KV) AppliedIndex() uint64 {
 	return 0
 }
 
+// /
 func (db *C2KV) FirstIndex() uint64 {
 	return 0
 }
 
+func (db *C2KV) LastIndex() uint64 {
+	return 0
+}
+
+// /
 func (db *C2KV) GetSnapshot() (pb.Snapshot, error) {
 	return pb.Snapshot{}, nil
 }

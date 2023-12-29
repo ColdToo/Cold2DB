@@ -16,11 +16,10 @@ package tracker
 
 import (
 	"fmt"
+	"github.com/ColdToo/Cold2DB/pb"
+	"github.com/ColdToo/Cold2DB/raft/quorum"
 	"sort"
 	"strings"
-
-	"go.etcd.io/etcd/raft/quorum"
-	pb "go.etcd.io/etcd/raft/raftpb"
 )
 
 // Config reflects the configuration tracked in a ProgressTracker.
