@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/ColdToo/Cold2DB/config"
+	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -12,37 +13,38 @@ import (
 )
 
 type AppNode struct {
-	localId uint64
-	localIp string
-	peers   []config.Node
+	localId   uint64
+	localIp   string
+	peers     []config.Peer
+	monitorKV map[int64]chan struct{}
 
-	kvStore   *KvStore
-	raftNode  raft.RaftNode
+	raftNode  raft.Node
 	transport transport.Transporter
+	kvStorage db.Storage
 
 	proposeC    chan []byte        // 提议 (k,v) channel
 	confChangeC chan pb.ConfChange // 提议更改配置文件 channel
-	kvHTTPStopC chan struct{}      // 关闭http服务器的信号 channel
+	kvServStopC chan struct{}      // 关闭http服务器的信号 channel
 }
 
-func StartAppNode(localId uint64, nodes []config.Peer, proposeC chan []byte, confChangeC chan pb.ConfChange,
-	kvHTTPStopC chan struct{}, kvStore *KvStore, raftConfig *config.RaftConfig, localIp string) {
+func StartAppNode(localId uint64, peers []config.Peer, proposeC chan []byte, confChangeC chan pb.ConfChange,
+	kvHTTPStopC chan struct{}, kvStorage db.Storage, raftConfig *config.RaftConfig, localIp string, monitorKV map[int64]chan struct{}) {
+	var err error
 	an := &AppNode{
 		localId:     localId,
 		localIp:     localIp,
-		peers:       nodes,
-		kvStore:     kvStore,
+		peers:       peers,
 		proposeC:    proposeC,
 		confChangeC: confChangeC,
-		kvHTTPStopC: kvHTTPStopC,
+		kvServStopC: kvHTTPStopC,
+		kvStorage:   kvStorage,
+		monitorKV:   monitorKV,
 	}
 
-	var err error
 	// 完成当前节点与集群中其他节点之间的网络连接
 	an.servePeerRaft()
-	// 启动Raft算法层
-	an.raftNode, err = raft.StartRaftNode(raftConfig, kvStore.storage)
-	if err != nil {
+	// 启动Raft
+	if an.raftNode, err = raft.StartRaftNode(raftConfig, kvStorage); err != nil {
 		log.Fatalf("start raft node err", err)
 	}
 	// 启动一个goroutine,处理appNode与raftNode的交互
@@ -70,6 +72,54 @@ func (an *AppNode) servePeerRaft() {
 	}
 }
 
+func (an *AppNode) serveRaftNode() {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			an.raftNode.Tick()
+		case rd := <-an.raftNode.Ready():
+			log.Infof("start handle ready %v", rd.HardState)
+
+			if len(rd.UnstableEntries) > 0 {
+				err := an.kvStorage.PersistUnstableEnts(rd.UnstableEntries)
+				if err != nil {
+					log.Errorf("save entries failed", err)
+				}
+			}
+
+			if !raft.IsEmptyHardState(rd.HardState) {
+				err := an.kvStorage.PersistHardState(rd.HardState)
+				if err != nil {
+					log.Errorf("", err)
+				}
+			}
+
+			if len(rd.CommittedEntries) > 0 {
+				err := an.applyCommittedEnts(rd.CommittedEntries)
+				if err != nil {
+					log.Errorf("apply entries failed", err)
+				}
+			}
+
+			if len(rd.Messages) > 0 {
+				an.transport.Send(rd.Messages)
+			}
+
+			//通知raftNode本轮ready已经处理完可以进行下一轮处理
+			an.raftNode.Advance()
+			log.Infof("handle ready success %v", rd.HardState)
+
+		case err := <-an.transport.GetErrorC():
+			log.Panicf("transport get critical err", err)
+			an.stop()
+			return
+		}
+	}
+}
+
 func (an *AppNode) servePropCAndConfC() {
 	confChangeCount := uint64(0)
 
@@ -92,62 +142,7 @@ func (an *AppNode) servePropCAndConfC() {
 	}
 }
 
-func (an *AppNode) serveRaftNode() {
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			an.raftNode.Tick()
-
-		case rd := <-an.raftNode.GetReadyC():
-			log.Infof("start handle ready %v", rd.HardState)
-
-			//todo 可以并行操作
-			if len(rd.UnstableEntries) > 0 {
-				err := an.saveEntries(rd.UnstableEntries)
-				if err != nil {
-					log.Errorf("save entries failed", err)
-				}
-			}
-
-			if len(rd.CommittedEntries) > 0 {
-				err := an.applyCommitedEntries(rd.CommittedEntries)
-				if err != nil {
-					log.Errorf("apply entries failed", err)
-				}
-			}
-
-			if !raft.IsEmptyHardState(rd.HardState) {
-				err := an.saveHardState(rd.HardState)
-				if err != nil {
-					log.Errorf("", err)
-				}
-			}
-
-			if len(rd.Messages) > 0 {
-				an.transport.Send(rd.Messages)
-			}
-
-			//通知raftNode本轮ready已经处理完可以进行下一轮处理
-			an.raftNode.Advance()
-			log.Infof("handle ready success %v", rd.HardState)
-
-		case err := <-an.transport.GetErrorC():
-			log.Panicf("transport get critical err", err)
-			an.stop()
-			return
-
-		case err := <-an.raftNode.GetErrorC():
-			log.Panicf("raftNode get critical err", err)
-			an.stop()
-			return
-		}
-	}
-}
-
-func (an *AppNode) applyCommitedEntries(ents []*pb.Entry) (err error) {
+func (an *AppNode) applyCommittedEnts(ents []*pb.Entry) (err error) {
 	entries := make([]*pb.Entry, 0)
 
 	//apply entries
@@ -186,25 +181,17 @@ func (an *AppNode) applyCommitedEntries(ents []*pb.Entry) (err error) {
 		kvIds = append(kvIds, kv.ApplySig)
 	}
 
-	err = an.kvStore.Apply(kvs)
+	err = an.kvStorage.Apply(kvs)
 	if err != nil {
 		log.Errorf("apply committed entries error", err)
 		return
 	}
 
 	for _, id := range kvIds {
-		close(an.kvStore.monitorKV[id])
-		delete(an.kvStore.monitorKV, id)
+		close(an.monitorKV[id])
+		delete(an.monitorKV, id)
 	}
 	return
-}
-
-func (an *AppNode) saveEntries(ents []*pb.Entry) (err error) {
-	return an.kvStore.storage.PersistUnstableEnts(ents)
-}
-
-func (an *AppNode) saveHardState(state pb.HardState) error {
-	return an.kvStore.storage.PersistHardState(state)
 }
 
 // Process Rat网络层接口,网络层通过该接口与RaftNode交互
@@ -218,12 +205,10 @@ func (an *AppNode) ReportSnapshotStatus(id uint64, status raft.SnapshotStatus) {
 	an.raftNode.ReportSnapshot(id, status)
 }
 
-// todo 关闭kv存储服务,回收相关资源
 func (an *AppNode) stop() {
 	an.transport.Stop()
 	an.raftNode.Stop()
-	an.kvStore.storage.Close()
 	close(an.proposeC)
 	close(an.confChangeC)
-	close(an.kvHTTPStopC)
+	close(an.kvServStopC)
 }

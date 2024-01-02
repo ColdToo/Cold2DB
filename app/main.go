@@ -9,20 +9,20 @@ import (
 
 func main() {
 	config.InitConfig()
-	log.InitLog(config.GetZapConf())
-	kvStorage, err := db.OpenKVStorage(config.GetDBConf())
-	if err != nil {
-		return
-	}
-
 	localIpAddr, localId, nodes := config.GetLocalInfo()
 	raftConfig := config.GetRaftConf()
+	log.InitLog(config.GetZapConf())
 	proposeC := make(chan []byte, raftConfig.RequestLimit)
 	confChangeC := make(chan pb.ConfChange)
-	kvHTTPStopC := make(chan struct{})
+	kvServiceStopC := make(chan struct{})
+	monitorKV := make(map[int64]chan struct{})
 
-	kvStore := NewKVStore(proposeC, raftConfig.RequestTimeout, kvStorage)
-	StartAppNode(localId, nodes, proposeC, confChangeC, kvHTTPStopC, kvStore, raftConfig, localIpAddr)
+	kvStorage, err := db.OpenKVStorage(config.GetDBConf())
+	if err != nil {
+		log.Panicf("open kv storage failed", err)
+	}
 
-	ServeHttpKVAPI(kvStore, localIpAddr, confChangeC, kvHTTPStopC)
+	kvStore := NewKVService(proposeC, confChangeC, raftConfig.RequestTimeout, kvStorage, monitorKV)
+	StartAppNode(localId, nodes, proposeC, confChangeC, kvServiceStopC, kvStorage, raftConfig, localIpAddr, monitorKV)
+	ServeHttpKVAPI(kvStore, localIpAddr, kvServiceStopC)
 }

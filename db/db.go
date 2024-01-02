@@ -17,7 +17,7 @@ import (
 type Storage interface {
 	Get(key []byte) (kv *marshal.KV, err error)
 	Scan(lowKey []byte, highKey []byte) (kvs []*marshal.KV, err error)
-	Put(kvs []*marshal.KV) error
+	Apply(kvs []*marshal.KV) error
 
 	PersistUnstableEnts(entries []*pb.Entry) error
 	PersistHardState(st pb.HardState) error
@@ -288,7 +288,7 @@ func (db *C2KV) Scan(lowKey []byte, highKey []byte) ([]*marshal.KV, error) {
 	return kvSlice, nil
 }
 
-func (db *C2KV) Put(kvs []*marshal.KV) (err error) {
+func (db *C2KV) Apply(kvs []*marshal.KV) (err error) {
 	kvBytes := make([]*marshal.BytesKV, len(kvs))
 	var bytesCount int64
 	for i, kv := range kvs {

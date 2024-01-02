@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/ColdToo/Cold2DB/log"
-	"github.com/ColdToo/Cold2DB/pb"
 )
 
 const (
@@ -16,23 +15,15 @@ const (
 	POST   = "POST"
 )
 
-type UpdateNodeInfo struct {
-	NodeIP string            `json:"node_ip"`
-	NodeId uint64            `json:"node_id"`
-	NodeOp pb.ConfChangeType `json:"node_op"`
-}
-
 type HttpKVAPI struct {
-	store       *KvStore
-	confChangeC chan<- pb.ConfChange
+	kvsService *KvService
 }
 
-func ServeHttpKVAPI(kvStore *KvStore, Addr string, confChangeC chan<- pb.ConfChange, doneC <-chan struct{}) {
+func ServeHttpKVAPI(kvService *KvService, Addr string, doneC <-chan struct{}) {
 	srv := http.Server{
 		Addr: Addr,
 		Handler: &HttpKVAPI{
-			store:       kvStore,
-			confChangeC: confChangeC,
+			kvsService: kvService,
 		},
 	}
 
@@ -43,7 +34,6 @@ func ServeHttpKVAPI(kvStore *KvStore, Addr string, confChangeC chan<- pb.ConfCha
 	}()
 
 	<-doneC
-	close(srv.Handler.(*HttpKVAPI).confChangeC)
 	if err := srv.Shutdown(nil); err != nil {
 		log.Fatal(err.Error())
 	}
@@ -56,7 +46,7 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == GET:
 		//v, err := ioutil.ReadAll(r.Body)
-		//if v, err = h.store.Lookup(v); err != nil {
+		//if v, err = h.kvsService.Lookup(v); err != nil {
 		//	http.Error(w, "Failed to GET", http.StatusNotFound)
 		//} else {
 		//	w.Write(v)
@@ -69,7 +59,7 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		ok, err := h.store.Propose([]byte(key), v, false, 0)
+		ok, err := h.kvsService.Propose([]byte(key), v, false, 0)
 		if err != nil {
 			return
 		}
@@ -78,7 +68,7 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case r.Method == DELETE:
-		ok, err := h.store.Propose([]byte(key), nil, true, 0)
+		ok, err := h.kvsService.Propose([]byte(key), nil, true, 0)
 		if err != nil {
 			return
 		}
@@ -93,32 +83,12 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed on PUT", http.StatusBadRequest)
 			return
 		}
-		nodeInfo := new(UpdateNodeInfo)
-		json.Unmarshal(v, &nodeInfo)
+		json.Unmarshal(v, &ConfChangeInfo)
 
-		h.NodeUpdate(nodeInfo, w)
+		h.kvsService.ConfChangePropose()
+		w.WriteHeader(http.StatusNoContent)
 
 	default:
 		http.Error(w, "Method not allowed,Only support put、get、post、delete", http.StatusMethodNotAllowed)
 	}
-}
-
-func (h *HttpKVAPI) NodeUpdate(updateInfo *UpdateNodeInfo, w http.ResponseWriter) {
-	var cc pb.ConfChange
-	switch updateInfo.NodeOp {
-	case pb.ConfChangeAddNode:
-		cc = pb.ConfChange{
-			Type:    pb.ConfChangeAddNode,
-			NodeID:  updateInfo.NodeId,
-			Context: []byte(updateInfo.NodeIP),
-		}
-	case pb.ConfChangeRemoveNode:
-		cc = pb.ConfChange{
-			Type:   pb.ConfChangeRemoveNode,
-			NodeID: updateInfo.NodeId,
-		}
-	}
-	h.confChangeC <- cc
-	// todo 配置变更成功后才应该返回
-	w.WriteHeader(http.StatusNoContent)
 }

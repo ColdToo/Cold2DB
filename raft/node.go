@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"context"
 	"errors"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db"
@@ -104,7 +105,7 @@ type SoftState struct {
 	RaftRole Role
 }
 
-//type RawNode struct {
+//type RaftNode struct {
 //	raft       *raft
 //	prevSoftSt *SoftState
 //	prevHardSt pb.HardState
@@ -116,7 +117,7 @@ type msgWithResult struct {
 }
 
 type raftNode struct {
-	rawNode     RawNode
+	raftNode    rawNode
 	confStateC  chan pb.ConfState
 	confChangeC chan pb.ConfChange
 	ReadyC      chan *Ready
@@ -132,7 +133,7 @@ type raftNode struct {
 	ErrorC   chan error
 }
 
-func StartRaftNode(raftConfig *config.RaftConfig, storage db.Storage) (*raftNode, error) {
+func StartRaftNode(raftConfig *config.RaftConfig, storage db.Storage) (Node, error) {
 	opts := &raftOpts{
 		ID:            raftConfig.ID,
 		ElectionTick:  raftConfig.ElectionTick,
@@ -140,26 +141,17 @@ func StartRaftNode(raftConfig *config.RaftConfig, storage db.Storage) (*raftNode
 		Peers:         raftConfig.Peers,
 	}
 
-	rn, err := NewRawNode(c)
-	rn := &raftNode{
-		propc:      make(chan msgWithResult),
-		recvc:      make(chan pb.Message),
-		confStateC: make(chan pb.ConfState),
-		ReadyC:     make(chan *Ready),
-		AdvanceC:   make(chan struct{}),
-		tickc:      make(chan struct{}, 128),
-		done:       make(chan struct{}),
-		stop:       make(chan struct{}),
-		status:     make(chan chan Status)}
+	rn, err := NewRaftNode(c)
 	rn.serveAppNode()
 	return rn, nil
 }
+
 func (rn *raftNode) serveAppNode() {
 	var readyC chan *Ready
 	var advanceC chan struct{}
 	var rd *Ready
 
-	r := rn.Raft
+	r := rn.raft
 	lead := None
 
 	for {

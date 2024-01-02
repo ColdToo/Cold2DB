@@ -41,6 +41,11 @@ const (
 	ReadOnlyLeaseBased
 )
 
+// CampaignType represents the type of campaigning
+// the reason we use the type of string instead of uint64
+// is because it's simpler to compare and fill in raft entries
+type CampaignType string
+
 // Possible values for CampaignType
 const (
 	// campaignPreElection represents the first phase of a normal election when
@@ -52,6 +57,20 @@ const (
 	// campaignTransfer represents the type of leader transfer
 	campaignTransfer CampaignType = "CampaignTransfer"
 )
+
+// StateType represents the role of a node in a cluster.
+type StateType uint64
+
+var stmap = [...]string{
+	"StateFollower",
+	"StateCandidate",
+	"StateLeader",
+	"StatePreCandidate",
+}
+
+func (st StateType) String() string {
+	return stmap[st]
+}
 
 // ErrProposalDropped is returned when the proposal is ignored by some cases,
 // so that the proposer can be notified and fail fast.
@@ -167,6 +186,8 @@ type raft struct {
 	lead uint64
 	Term uint64
 	Role Role
+
+	state StateType
 	// isLearner is true if the local raft node is a learner.
 	isLearner bool
 	raftOpts *raftOpts
@@ -203,11 +224,11 @@ type raft struct {
 	leadTransferee bool
 }
 
-func newraft(opts *raftOpts,storage db.Storage) (r *raft, err error) {
+func newRaft(opts *raftOpts,storage db.Storage) (r *raft, err error) {
 	if err = opts.validate(); err != nil {
 		log.Panicf("verify raft options failed",err)
 	}
-	rLog := newraftLog(storage, opts.MaxCommittedSizePerReady)
+	rLog := newRaftLog(storage, opts.MaxCommittedSizePerReady)
 	r = &raft{
 		id:                        opts.ID,
 		lead:                      None,
