@@ -205,6 +205,7 @@ func (an *AppNode) ReportSnapshotStatus(id uint64, status raft.SnapshotStatus) {
 	an.raftNode.ReportSnapshot(id, status)
 }
 
+// 关闭Raft
 func (an *AppNode) stop() {
 	an.transport.Stop()
 	an.raftNode.Stop()

@@ -29,6 +29,11 @@ func isHardStateEqual(a, b pb.HardState) bool {
 	return a.Term == b.Term && a.Vote == b.Vote && a.Applied == b.Applied
 }
 
+// IsEmptySnap returns true if the given Snapshot is empty.
+func IsEmptySnap(sp pb.Snapshot) bool {
+	return sp.Metadata.Index == 0
+}
+
 type uint64Slice []uint64
 
 func (p uint64Slice) Len() int           { return len(p) }

@@ -2,44 +2,37 @@ package raft
 
 import (
 	"context"
-	"errors"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db"
+	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
-var ErrStepLocalMsg = errors.New("raft: cannot step raft local message")
-
-var ErrStepPeerNotFound = errors.New("raft: cannot step as peer not found")
-
 //go:generate mockgen -source=./raft_node.go -destination=../mocks/raft_node.go -package=mock
 
-// Node represents a node in a raft cluster.
 type Node interface {
 	// Tick increments the internal logical clock for the Node by a single tick. Election
 	// timeouts and heartbeat timeouts are in units of ticks.
 	Tick()
-	// Campaign causes the Node to transition to candidate state and start campaigning to become leader.
-	Campaign(ctx context.Context) error
+
 	// Propose proposes that data be appended to the log. Note that proposals can be lost without
 	// notice, therefore it is user's job to ensure proposal retries.
 	Propose(ctx context.Context, data []byte) error
-	// ProposeConfChange proposes a configuration change. Like any proposal, the
-	// configuration change may be dropped with or without an error being
-	// returned. In particular, configuration changes are dropped unless the
-	// leader has certainty that there is no prior unapplied configuration
-	// change in its log.
-	//
-	// The method accepts either a pb.ConfChange (deprecated) or pb.ConfChangeV2
-	// message. The latter allows arbitrary configuration changes via joint
-	// consensus, notably including replacing a voter. Passing a ConfChangeV2
-	// message is only allowed if all Nodes participating in the cluster run a
-	// version of this library aware of the V2 API. See pb.ConfChangeV2 for
-	// usage details and semantics.
-	ProposeConfChange(ctx context.Context, cc pb.ConfChangeI) error
-
+	// ProposeConfChange proposes a configuration change. Like any proposal
+	ProposeConfChange(ctx context.Context, cc pb.ConfChange) error
+	// TransferLeadership attempts to transfer leadership to the given transferee.
+	TransferLeadership(ctx context.Context, lead, transferee uint64)
+	// Campaign causes the Node to transition to candidate state and start campaigning to become leader.
+	Campaign(ctx context.Context) error
 	// Step advances the state machine using the given message. ctx.Err() will be returned, if any.
 	Step(ctx context.Context, msg pb.Message) error
+
+	// ApplyConfChange applies a config change (previously passed to
+	// ProposeConfChange) to the node. This must be called whenever a config
+	// change is observed in Ready.CommittedEntries, except when the app decides
+	// to reject the configuration change (i.e. treats it as a noop instead), in
+	// which case it must not be called.
+	ApplyConfChange(cc pb.ConfChange) *pb.ConfState
 
 	// Ready returns a channel that returns the current point-in-time state.
 	// Users of the Node must call Advance after retrieving the state returned by Ready.
@@ -47,7 +40,6 @@ type Node interface {
 	// NOTE: No committed entries from the next Ready may be applied until all committed entries
 	// and snapshots from the previous one have finished.
 	Ready() <-chan Ready
-
 	// Advance notifies the Node that the application has saved progress up to the last Ready.
 	// It prepares the node to return the next available Ready.
 	//
@@ -58,18 +50,20 @@ type Node interface {
 	// a long time to apply the snapshot data. To continue receiving Ready without blocking raft
 	// progress, it can call Advance before finishing applying the last ready.
 	Advance()
-	// ApplyConfChange applies a config change (previously passed to
-	// ProposeConfChange) to the node. This must be called whenever a config
-	// change is observed in Ready.CommittedEntries, except when the app decides
-	// to reject the configuration change (i.e. treats it as a noop instead), in
-	// which case it must not be called.
-	//
-	// Returns an opaque non-nil ConfState protobuf which must be recorded in
-	// snapshots.
-	ApplyConfChange(cc pb.ConfChangeI) *pb.ConfState
 
-	// TransferLeadership attempts to transfer leadership to the given transferee.
-	TransferLeadership(ctx context.Context, lead, transferee uint64)
+	// ReportUnreachable reports the given node is not reachable for the last send.
+	ReportUnreachable(id uint64)
+	// ReportSnapshot reports the status of the sent snapshot. The id is the raft ID of the follower
+	// who is to receive the snapshot, and the status is SnapshotFinish or SnapshotFailure.
+	// Calling ReportSnapshot with SnapshotFinish is a no-op. But, any failure in applying a
+	// snapshot (for e.g., while streaming it from leader to follower), should be reported to the
+	// leader with SnapshotFailure. When leader sends a snapshot to a follower, it pauses any raft
+	// log probes until the follower can apply the snapshot and advance its state. If the follower
+	// can't do that, for e.g., due to a crash, it could end up in a limbo, never getting any
+	// updates from the leader. Therefore, it is crucial that the application ensures that any
+	// failure in snapshot sending is caught and reported back to the leader; so it can resume raft
+	// log probing in the follower.
+	ReportSnapshot(id uint64, status SnapshotStatus)
 
 	// ReadIndex request a read state. The read state will be set in the ready.
 	// Read state has a read index. Once the application advances further than the read
@@ -81,19 +75,6 @@ type Node interface {
 
 	// Status returns the current status of the raft state machine.
 	Status() Status
-	// ReportUnreachable reports the given node is not reachable for the last send.
-	ReportUnreachable(id uint64)
-	// ReportSnapshot reports the status of the sent snapshot. The id is the raft ID of the follower
-	// who is meant to receive the snapshot, and the status is SnapshotFinish or SnapshotFailure.
-	// Calling ReportSnapshot with SnapshotFinish is a no-op. But, any failure in applying a
-	// snapshot (for e.g., while streaming it from leader to follower), should be reported to the
-	// leader with SnapshotFailure. When leader sends a snapshot to a follower, it pauses any raft
-	// log probes until the follower can apply the snapshot and advance its state. If the follower
-	// can't do that, for e.g., due to a crash, it could end up in a limbo, never getting any
-	// updates from the leader. Therefore, it is crucial that the application ensures that any
-	// failure in snapshot sending is caught and reported back to the leader; so it can resume raft
-	// log probing in the follower.
-	ReportSnapshot(id uint64, status SnapshotStatus)
 	// Stop performs any necessary termination of the Node.
 	Stop()
 }
@@ -105,11 +86,9 @@ type SoftState struct {
 	RaftRole Role
 }
 
-//type RaftNode struct {
-//	raft       *raft
-//	prevSoftSt *SoftState
-//	prevHardSt pb.HardState
-//}
+var (
+	emptyState = pb.HardState{}
+)
 
 type msgWithResult struct {
 	m      pb.Message
@@ -117,20 +96,19 @@ type msgWithResult struct {
 }
 
 type raftNode struct {
-	raftNode    rawNode
+	rawNode     *rawNode
 	confStateC  chan pb.ConfState
 	confChangeC chan pb.ConfChange
-	ReadyC      chan *Ready
-	propc       chan msgWithResult
-	recvc       chan pb.Message
-
-	advancec chan struct{}
-	tickc    chan struct{}
-	done     chan struct{}
-	stop     chan struct{}
-	status   chan chan Status
-	AdvanceC chan struct{}
-	ErrorC   chan error
+	readyC      chan Ready
+	propC       chan msgWithResult
+	receiveC    chan pb.Message
+	advanceC    chan struct{}
+	tickC       chan struct{}
+	doneC       chan struct{}
+	stopC       chan struct{}
+	statusC     chan chan Status
+	AdvanceC    chan struct{}
+	ErrorC      chan error
 }
 
 func StartRaftNode(raftConfig *config.RaftConfig, storage db.Storage) (Node, error) {
@@ -141,23 +119,44 @@ func StartRaftNode(raftConfig *config.RaftConfig, storage db.Storage) (Node, err
 		Peers:         raftConfig.Peers,
 	}
 
-	rn, err := NewRaftNode(c)
-	rn.serveAppNode()
-	return rn, nil
+	rn, err := NewRawNode(opts, storage)
+	if err != nil {
+		return nil, err
+	}
+
+	raftNode := raftNode{
+		propC:       make(chan msgWithResult),
+		receiveC:    make(chan pb.Message),
+		confChangeC: make(chan pb.ConfChange),
+		confStateC:  make(chan pb.ConfState),
+		readyC:      make(chan Ready),
+		advanceC:    make(chan struct{}),
+		// make tickc a buffered chan, so raft node can buffer some ticks when the node
+		// is busy processing raft messages. Raft node will resume process buffered
+		// ticks when it becomes idle.
+		tickC:   make(chan struct{}, 128),
+		doneC:   make(chan struct{}),
+		stopC:   make(chan struct{}),
+		statusC: make(chan chan Status),
+		rawNode: rn,
+	}
+	raftNode.serveAppNode()
+	return raftNode, nil
 }
 
 func (rn *raftNode) serveAppNode() {
+	var propc chan msgWithResult
 	var readyC chan *Ready
 	var advanceC chan struct{}
 	var rd *Ready
 
-	r := rn.raft
+	r := rn.rawNode.raft
 	lead := None
 
 	for {
 		if advanceC != nil {
 			readyC = nil
-		} else if rd = rn.Ready(); rd != nil {
+		} else if rd = rn.rawNode.HasReady(); rd != nil {
 			readyC = rn.ReadyC
 		}
 
@@ -175,11 +174,114 @@ func (rn *raftNode) serveAppNode() {
 	}
 }
 
-// Step 网络层通过该方法处理message信息
-func (rn *raftNode) Step(m *pb.Message) error {
-	return rn.Raft.Step(m)
+//
+
+func confChangeToMsg(c pb.ConfChange) (pb.Message, error) {
+	typ, data, err := pb.MarshalConfChange(c)
+	if err != nil {
+		return pb.Message{}, err
+	}
+	return pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Type: typ, Data: data}}}, nil
 }
 
+func (rn *raftNode) Campaign(ctx context.Context) error {
+	return rn.step(ctx, pb.Message{Type: pb.MsgHup})
+}
+
+func (rn *raftNode) ProposeConfChange(ctx context.Context, cc pb.ConfChange) error {
+	msg, err := confChangeToMsg(cc)
+	if err != nil {
+		return err
+	}
+	return rn.Step(ctx, msg)
+}
+
+func (rn *raftNode) ApplyConfChange(cc pb.ConfChange) *pb.ConfState {
+	var cs pb.ConfState
+	select {
+	case rn.confChangeC <- cc:
+	case <-rn.doneC:
+	}
+	select {
+	case cs = <-rn.confStateC:
+	case <-rn.doneC:
+	}
+	return &cs
+}
+
+func (rn *raftNode) TransferLeadership(ctx context.Context, lead, transferee uint64) {
+	select {
+	// manually set 'from' and 'to', so that leader can voluntarily transfers its leadership
+	case rn.receiveC <- pb.Message{Type: pb.MsgTransferLeader, From: transferee, To: lead}:
+	case <-rn.doneC:
+	case <-ctx.Done():
+	}
+}
+
+func (rn *raftNode) Propose(ctx context.Context, data []byte) error {
+	return rn.stepWait(ctx, pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Data: data}}})
+}
+
+func (rn *raftNode) Step(ctx context.Context, m pb.Message) error {
+	// ignore unexpected local messages receiving over network
+	if IsLocalMsg(m.Type) {
+		// TODO: return an error?
+		return nil
+	}
+	return rn.step(ctx, m)
+}
+
+func (rn *raftNode) step(ctx context.Context, m pb.Message) error {
+	return rn.stepWithWaitOption(ctx, m, false)
+}
+
+func (rn *raftNode) stepWait(ctx context.Context, m pb.Message) error {
+	return rn.stepWithWaitOption(ctx, m, true)
+}
+
+// propose类消息走propC其余走receiveC，配置变更走confChangeC
+func (rn *raftNode) stepWithWaitOption(ctx context.Context, m pb.Message, wait bool) error {
+	if m.Type != pb.MsgProp {
+		select {
+		case rn.receiveC <- m:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-rn.done:
+			return ErrStopped
+		}
+	}
+	ch := rn.propC
+	pm := msgWithResult{m: m}
+	if wait {
+		pm.result = make(chan error, 1)
+	}
+	select {
+	case ch <- pm:
+		if !wait {
+			return nil
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-n.done:
+		return ErrStopped
+	}
+	select {
+	case err := <-pm.result:
+		if err != nil {
+			return err
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-n.done:
+		return ErrStopped
+	}
+	return nil
+}
+
+//////
+
+// appNode和raftNode通信的channel
 type Ready struct {
 	// The current volatile state of a Node.
 	// SoftState will be nil if there is no update.
@@ -219,131 +321,118 @@ type Ready struct {
 	UnstableEntries []*pb.Entry //需要持久化的entries
 }
 
-///////
-
-// Propose 用于kv请求提议
-func (rn *raftNode) Propose(buffer []byte) error {
-	ent := pb.Entry{Data: buffer}
-	ents := make([]pb.Entry, 0)
-	ents = append(ents, ent)
-	return rn.Raft.Step(&pb.Message{
-		Type:    pb.MsgProp,
-		From:    rn.Raft.id,
-		Entries: ents})
-}
-
-// ProposeConfChange 用于配置变更信息处理
-func (rn *raftNode) ProposeConfChange(cc pb.ConfChange) error {
-	data, err := cc.Marshal()
-	if err != nil {
-		return err
-	}
-	ent := pb.Entry{Type: pb.EntryConfChange, Data: data}
-	return rn.Raft.Step(&pb.Message{
-		Type:    pb.MsgProp,
-		Entries: []pb.Entry{ent},
-	})
-}
-
-////
-
-func (rn *raftNode) Tick() {
-	rn.Raft.tick()
-}
-
-// Advance 做下一轮ready的预处理
-func (rn *raftNode) Advance() {
-	// 每当appNode处理完一次ready后需要更新raftlog的first index 和 applied index
-	rn.Raft.RaftLog.RefreshFirstAndAppliedIndex()
-	// 需要将log中的entries进行裁剪
-
-	// raft算法层可以进行下一轮ready
-	rn.AdvanceC <- struct{}{}
-}
-
-func (rn *raftNode) newReady() Ready {
+func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	rd := Ready{
-		CommittedEntries: rn.Raft.raftLog.NextApplyEnts(),
+		Entries:          r.raftLog.unstableEntries(),
+		CommittedEntries: r.raftLog.nextEnts(),
+		Messages:         r.msgs,
 	}
-
-	if len(rn.Raft.msgs) > 0 {
-		rd.Messages = rn.Raft.msgs
-		//todo 清空msg防止重复发送，这里会不会出现并发问题
-		rn.Raft.msgs = make([]*pb.Message, 0)
+	if softSt := r.softState(); !softSt.equal(prevSoftSt) {
+		rd.SoftState = softSt
 	}
-
-	hardState := pb.HardState{
-		Term:    rn.Raft.Term,
-		Vote:    rn.Raft.VoteFor,
-		Applied: rn.Raft.raftLog.AppliedIndex(),
+	if hardSt := r.hardState(); !isHardStateEqual(hardSt, prevHardSt) {
+		rd.HardState = hardSt
 	}
-
-	if !isHardStateEqual(rn.prevHardSt, hardState) {
-		rd.HardState = hardState
+	if r.raftLog.unstable.snapshot != nil {
+		rd.Snapshot = *r.raftLog.unstable.snapshot
 	}
-
+	if len(r.readStates) != 0 {
+		rd.ReadStates = r.readStates
+	}
+	rd.MustSync = MustSync(r.hardState(), prevHardSt, len(rd.Entries))
 	return rd
 }
 
-// 1、需要持久化的状态有改变
-// 2、有待applied的entries
-// 3、有待发送给其他节点的msg
+func (rd Ready) containsUpdates() bool {
+	return rd.SoftState != nil || !IsEmptyHardState(rd.HardState) ||
+		!IsEmptySnap(rd.Snapshot) || len(rd.Entries) > 0 ||
+		len(rd.CommittedEntries) > 0 || len(rd.Messages) > 0 || len(rd.ReadStates) != 0
+}
 
-func (rn *raftNode) Ready() (rd *Ready) {
-	rd = new(Ready)
-
-	hardState := pb.HardState{
-		Term:    rn.Raft.Term,
-		Vote:    rn.Raft.VoteFor,
-		Applied: rn.Raft.raftLog.AppliedIndex(),
+// appliedCursor extracts from the Ready the highest index the client has
+// applied (once the Ready is confirmed via Advance). If no information is
+// contained in the Ready, returns zero.
+func (rd Ready) appliedCursor() uint64 {
+	if n := len(rd.CommittedEntries); n > 0 {
+		return rd.CommittedEntries[n-1].Index
 	}
-
-	if !IsEmptyHardState(hardState) && !isHardStateEqual(rn.prevHardSt, hardState) {
-		rd.HardState = hardState
+	if index := rd.Snapshot.Metadata.Index; index > 0 {
+		return index
 	}
+	return 0
+}
 
-	if len(rn.Raft.msgs) > 0 {
-		rd.Messages = rn.Raft.msgs
-		//todo 清空msg防止重复发送，这里会不会出现并发问题
-		rn.Raft.msgs = make([]*pb.Message, 0)
+func (rn *raftNode) Ready() <-chan Ready { return rn.readyC }
+
+func (rn *raftNode) Advance() {
+	select {
+	case rn.advanceC <- struct{}{}:
+	case <-rn.doneC:
 	}
+}
 
-	if rn.Raft.RaftLog.HasNextApplyEnts() {
-		rd.CommittedEntries = rn.Raft.RaftLog.NextApplyEnts()
+// MustSync 在这里，"同步写入"指的是将数据立即写入到持久化存储（如磁盘）中，
+// 并且在写入完成之前阻塞其他操作，以确保数据的持久性和一致性。
+// 这是为了保证在发生故障或重启时，系统能够恢复到一个一致的状态。
+func MustSync(st, prevst pb.HardState, entsnum int) bool {
+	// Persistent state on all servers:
+	// (Updated on stable storage before responding to RPCs)
+	// currentTerm
+	// votedFor
+	// log entries[]
+	return entsnum != 0 || st.Vote != prevst.Vote || st.Term != prevst.Term
+}
+
+// Tick increments the internal logical clock for this Node. Election timeouts
+// and heartbeat timeouts are in units of ticks.
+func (rn *raftNode) Tick() {
+	select {
+	case rn.tickC <- struct{}{}:
+	case <-rn.doneC:
+	default:
+		log.Warnf("%d A tick missed to fire. Node blocks too long!", rn.rawNode.raft.id)
 	}
-	return
-}
-
-func (rn *raftNode) GetReadyC() chan *Ready {
-	return rn.ReadyC
-}
-
-func (rn *raftNode) GetErrorC() chan error {
-	return rn.ErrorC
-}
-
-//////
-
-// 配置变更
-
-func (rn *raftNode) TransferLeader(transferee uint64) {
-	_ = rn.Raft.Step(&pb.Message{Type: pb.MsgTransferLeader, From: transferee})
-}
-
-func (rn *raftNode) ApplyConfChange(cc pb.ConfChange) {
-	return
-}
-
-//网络层报告接口
-
-func (rn *raftNode) ReportUnreachable(id uint64) {
-	return
-}
-
-func (rn *raftNode) ReportSnapshot(id uint64, status SnapshotStatus) {
-	return
 }
 
 func (rn *raftNode) Stop() {
-	// todo 回收raft相关资源
+	select {
+	case rn.stopC <- struct{}{}:
+		// Not already stopped, so trigger it
+	case <-rn.doneC:
+		// Node has already been stopped - no need to do anything
+		return
+	}
+	// Block until the stop has been acknowledged by run()
+	<-rn.doneC
 }
+
+// 网络层接口
+func (rn *raftNode) ReportUnreachable(id uint64) {
+	select {
+	case rn.receiveC <- pb.Message{Type: pb.MsgUnreachable, From: id}:
+	case <-rn.doneC:
+	}
+}
+
+func (rn *raftNode) ReportSnapshot(id uint64, status SnapshotStatus) {
+	rej := status == SnapshotFailure
+	select {
+	case rn.receiveC <- pb.Message{Type: pb.MsgSnapStatus, From: id, Reject: rej}:
+	case <-rn.doneC:
+	}
+}
+
+//// 用于线性一致性读
+//func (rn *raftNode) ReadIndex(ctx context.Context, rctx []byte) error {
+//	return rn.step(ctx, pb.Message{Type: pb.MsgReadIndex, Entries: []pb.Entry{{Data: rctx}}})
+//}
+//
+//func (rn *raftNode) Status() Status {
+//	c := make(chan Status)
+//	select {
+//	case n.status <- c:
+//		return <-c
+//	case <-n.done:
+//		return Status{}
+//	}
+//}

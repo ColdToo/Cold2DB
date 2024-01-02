@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
@@ -34,8 +35,11 @@ type rawNode struct {
 	prevHardSt pb.HardState
 }
 
-func NewRawNode(config *opts) (*rawNode, error) {
-	r := newRaft(config)
+func NewRawNode(opts *raftOpts, storage db.Storage) (*rawNode, error) {
+	r, err := newRaft(opts, storage)
+	if err != nil {
+		return nil, err
+	}
 	rn := &rawNode{
 		raft: r,
 	}
@@ -102,7 +106,7 @@ func (rn *rawNode) Step(m pb.Message) error {
 	if IsLocalMsg(m.Type) {
 		return ErrStepLocalMsg
 	}
-	if pr := rn.raft.prs.Progress[m.From]; pr != nil || !IsResponseMsg(m.Type) {
+	if pr := rn.raft.trk.Progress[m.From]; pr != nil || !IsResponseMsg(m.Type) {
 		return rn.raft.Step(m)
 	}
 	return ErrStepPeerNotFound
