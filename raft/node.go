@@ -2,6 +2,7 @@ package raft
 
 import (
 	"context"
+	"errors"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/log"
@@ -79,16 +80,17 @@ type Node interface {
 	Stop()
 }
 
+var (
+	emptyState = pb.HardState{}
+	ErrStopped = errors.New("raft: stopped")
+)
+
 // SoftState provides state that is useful for logging and debugging.
 // The state is volatile and does not need to be persisted to the WAL.
 type SoftState struct {
 	Lead     uint64 // must use atomic operations to access; keep 64-bit aligned.
 	RaftRole Role
 }
-
-var (
-	emptyState = pb.HardState{}
-)
 
 type msgWithResult struct {
 	m      pb.Message
@@ -109,6 +111,7 @@ type raftNode struct {
 	statusC     chan chan Status
 	AdvanceC    chan struct{}
 	ErrorC      chan error
+	status      chan chan Status
 }
 
 func StartRaftNode(raftConfig *config.RaftConfig, storage db.Storage) (Node, error) {
@@ -124,7 +127,7 @@ func StartRaftNode(raftConfig *config.RaftConfig, storage db.Storage) (Node, err
 		return nil, err
 	}
 
-	raftNode := raftNode{
+	raftNode := &raftNode{
 		propC:       make(chan msgWithResult),
 		receiveC:    make(chan pb.Message),
 		confChangeC: make(chan pb.ConfChange),
@@ -174,16 +177,6 @@ func (rn *raftNode) serveAppNode() {
 	}
 }
 
-//
-
-func confChangeToMsg(c pb.ConfChange) (pb.Message, error) {
-	typ, data, err := pb.MarshalConfChange(c)
-	if err != nil {
-		return pb.Message{}, err
-	}
-	return pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Type: typ, Data: data}}}, nil
-}
-
 func (rn *raftNode) Campaign(ctx context.Context) error {
 	return rn.step(ctx, pb.Message{Type: pb.MsgHup})
 }
@@ -194,6 +187,14 @@ func (rn *raftNode) ProposeConfChange(ctx context.Context, cc pb.ConfChange) err
 		return err
 	}
 	return rn.Step(ctx, msg)
+}
+
+func confChangeToMsg(c pb.ConfChange) (pb.Message, error) {
+	typ, data, err := pb.MarshalConfChange(c)
+	if err != nil {
+		return pb.Message{}, err
+	}
+	return pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Type: typ, Data: data}}}, nil
 }
 
 func (rn *raftNode) ApplyConfChange(cc pb.ConfChange) *pb.ConfState {
@@ -239,7 +240,6 @@ func (rn *raftNode) stepWait(ctx context.Context, m pb.Message) error {
 	return rn.stepWithWaitOption(ctx, m, true)
 }
 
-// propose类消息走propC其余走receiveC，配置变更走confChangeC
 func (rn *raftNode) stepWithWaitOption(ctx context.Context, m pb.Message, wait bool) error {
 	if m.Type != pb.MsgProp {
 		select {
@@ -247,7 +247,7 @@ func (rn *raftNode) stepWithWaitOption(ctx context.Context, m pb.Message, wait b
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-rn.done:
+		case <-rn.doneC:
 			return ErrStopped
 		}
 	}
@@ -263,7 +263,7 @@ func (rn *raftNode) stepWithWaitOption(ctx context.Context, m pb.Message, wait b
 		}
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-n.done:
+	case <-rn.doneC:
 		return ErrStopped
 	}
 	select {
@@ -273,15 +273,12 @@ func (rn *raftNode) stepWithWaitOption(ctx context.Context, m pb.Message, wait b
 		}
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-n.done:
+	case <-rn.doneC:
 		return ErrStopped
 	}
 	return nil
 }
 
-//////
-
-// appNode和raftNode通信的channel
 type Ready struct {
 	// The current volatile state of a Node.
 	// SoftState will be nil if there is no update.
@@ -339,7 +336,7 @@ func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	if len(r.readStates) != 0 {
 		rd.ReadStates = r.readStates
 	}
-	rd.MustSync = MustSync(r.hardState(), prevHardSt, len(rd.Entries))
+	rd.MustSync = mustSync(r.hardState(), prevHardSt, len(rd.Entries))
 	return rd
 }
 
@@ -374,7 +371,7 @@ func (rn *raftNode) Advance() {
 // MustSync 在这里，"同步写入"指的是将数据立即写入到持久化存储（如磁盘）中，
 // 并且在写入完成之前阻塞其他操作，以确保数据的持久性和一致性。
 // 这是为了保证在发生故障或重启时，系统能够恢复到一个一致的状态。
-func MustSync(st, prevst pb.HardState, entsnum int) bool {
+func mustSync(st, prevst pb.HardState, entsnum int) bool {
 	// Persistent state on all servers:
 	// (Updated on stable storage before responding to RPCs)
 	// currentTerm
@@ -383,8 +380,6 @@ func MustSync(st, prevst pb.HardState, entsnum int) bool {
 	return entsnum != 0 || st.Vote != prevst.Vote || st.Term != prevst.Term
 }
 
-// Tick increments the internal logical clock for this Node. Election timeouts
-// and heartbeat timeouts are in units of ticks.
 func (rn *raftNode) Tick() {
 	select {
 	case rn.tickC <- struct{}{}:
@@ -406,7 +401,6 @@ func (rn *raftNode) Stop() {
 	<-rn.doneC
 }
 
-// 网络层接口
 func (rn *raftNode) ReportUnreachable(id uint64) {
 	select {
 	case rn.receiveC <- pb.Message{Type: pb.MsgUnreachable, From: id}:
@@ -422,17 +416,16 @@ func (rn *raftNode) ReportSnapshot(id uint64, status SnapshotStatus) {
 	}
 }
 
-//// 用于线性一致性读
-//func (rn *raftNode) ReadIndex(ctx context.Context, rctx []byte) error {
-//	return rn.step(ctx, pb.Message{Type: pb.MsgReadIndex, Entries: []pb.Entry{{Data: rctx}}})
-//}
-//
-//func (rn *raftNode) Status() Status {
-//	c := make(chan Status)
-//	select {
-//	case n.status <- c:
-//		return <-c
-//	case <-n.done:
-//		return Status{}
-//	}
-//}
+func (rn *raftNode) ReadIndex(ctx context.Context, rctx []byte) error {
+	return rn.step(ctx, pb.Message{Type: pb.MsgReadIndex, Entries: []pb.Entry{{Data: rctx}}})
+}
+
+func (rn *raftNode) Status() Status {
+	c := make(chan Status)
+	select {
+	case rn.status <- c:
+		return <-c
+	case <-rn.doneC:
+		return Status{}
+	}
+}
