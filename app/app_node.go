@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/db/marshal"
@@ -196,7 +197,7 @@ func (an *AppNode) applyCommittedEnts(ents []*pb.Entry) (err error) {
 
 // Process Rat网络层接口,网络层通过该接口与RaftNode交互
 func (an *AppNode) Process(m *pb.Message) error {
-	return an.raftNode.Step(m)
+	return an.raftNode.Step(context.TODO(), *m)
 }
 
 func (an *AppNode) ReportUnreachable(id uint64) { an.raftNode.ReportUnreachable(id) }

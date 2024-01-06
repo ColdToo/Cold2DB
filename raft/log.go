@@ -79,7 +79,6 @@ func (l *raftLog) lastIndex() uint64 {
 	if lenth := len(l.unstableEnts); lenth != 0 {
 		return l.offset + uint64(lenth)
 	}
-
 	if i := l.storage.LastIndex(); i != 0 {
 		return i
 	}
@@ -187,7 +186,17 @@ func (l *raftLog) TruncateAndAppend() {
 		l.offset = l.committed
 		l.storage.Truncate()
 	}
+}
 
+func (l *raftLog) append(ents ...pb.Entry) uint64 {
+	if len(ents) == 0 {
+		return l.lastIndex()
+	}
+	if appendLast := ents[0].Index - 1; appendLast < l.committed {
+		log.Panicf("after(%d) is out of range [committed(%d)]", appendLast, l.committed)
+	}
+	l.unstable.truncateAndAppend(ents)
+	return l.lastIndex()
 }
 
 // NextApplyEnts 返回可以应用到状态机的日志索引，若无返回index0

@@ -88,8 +88,8 @@ var (
 // SoftState provides state that is useful for logging and debugging.
 // The state is volatile and does not need to be persisted to the WAL.
 type SoftState struct {
-	Lead     uint64 // must use atomic operations to access; keep 64-bit aligned.
-	RaftRole Role
+	Lead      uint64 // must use atomic operations to access; keep 64-bit aligned.
+	RaftState StateType
 }
 
 type msgWithResult struct {
@@ -119,7 +119,6 @@ func StartRaftNode(raftConfig *config.RaftConfig, storage db.Storage) (Node, err
 		ID:            raftConfig.ID,
 		ElectionTick:  raftConfig.ElectionTick,
 		HeartbeatTick: raftConfig.HeartbeatTick,
-		Peers:         raftConfig.Peers,
 	}
 
 	rn, err := NewRawNode(opts, storage)

@@ -1,30 +1,51 @@
+// Copyright 2015 The etcd Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package raft
 
 import (
 	"errors"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/code"
-	"github.com/ColdToo/Cold2DB/config"
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
-	"github.com/ColdToo/Cold2DB/raft/confchange"
 	"github.com/ColdToo/Cold2DB/raft/tracker"
 	"math"
 	"math/rand"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 )
-
-type Role uint8
 
 const None uint64 = 0
 const noLimit = math.MaxUint64
+
 var SendEmptyMessage bool = true
 
+// ErrProposalDropped is returned when the proposal is ignored by some cases,
+// so that the proposer can be notified and fail fast.
+var ErrProposalDropped = errors.New("raft proposal dropped")
+
+// Possible values for StateType.
 const (
-	Leader Role = iota
-	Follower
-	Candidate
+	StateFollower StateType = iota
+	StateCandidate
+	StateLeader
+	StatePreCandidate
+	numStates
 )
 
 type ReadOnlyOption int
@@ -72,26 +93,16 @@ func (st StateType) String() string {
 	return stmap[st]
 }
 
-// ErrProposalDropped is returned when the proposal is ignored by some cases,
-// so that the proposer can be notified and fail fast.
-var ErrProposalDropped = errors.New("raft proposal dropped")
-
 type raftOpts struct {
 	ID uint64
 
-	ElectionTick int
+	electionTimeout int
 
-	HeartbeatTick int
+	heartbeatTimeout int
 
 	maxNextEntSize uint64
 
-	Peers []config.Peer
-
-	// Applied is the last applied index. It should only be set when restarting
-	// raft. raft will not return entries to the application smaller or equal to
-	// Applied. If Applied is unset when restarting, raft might return previous
-	// applied entries. This is a very application dependent configuration.
-	Applied uint64
+	maxUncommittedSize uint64
 	// MaxSizePerMsg limits the max byte size of each append message. Smaller
 	// value lowers the raft recovery cost(initial probing and message lost
 	// during normal operation). On the other side, it might affect the
@@ -112,6 +123,7 @@ type raftOpts struct {
 	// overflowing that sending buffer.
 	// limit the proposal rate?
 	MaxInflightMsgs int
+
 	// CheckQuorum specifies if the leader should check quorum activity. Leader
 	// steps down when quorum is not active for an electionTimeout.
 	CheckQuorum bool
@@ -130,21 +142,8 @@ type raftOpts struct {
 	// should (clock can move backward/pause without any bound). ReadIndex is not safe
 	// in that case.
 	// CheckQuorum MUST be enabled if ReadOnlyOption is ReadOnlyLeaseBased.
-	ReadOnlyOption ReadOnlyOption
-	// Logger is the logger used for raft log. For multinode which can host
-	// multiple raft group, each raft group can have its own logger
-	// Logger Logger
-	// max msg can send to follower
-	maxMsgSize uint64
-
-	maxUncommittedSize uint64
-	//heartbeat interval是leader发送心跳的间隔时间。
-	//election timeout是follower多久没收到心跳要重新选举的时间。
-	//etcd默认heartbeat interval是100ms，election timeout是[1000,2000]ms。
-	//heartbeat interval一般小于election timeout。
-	heartbeatTimeout int
-
-	electionTimeout int
+	ReadOnlyOption            ReadOnlyOption
+	disableProposalForwarding bool
 }
 
 func (c *raftOpts) validate() error {
@@ -185,58 +184,75 @@ type raft struct {
 	id   uint64
 	lead uint64
 	Term uint64
-	Role Role
+	// leadTransferee is id of the leader transfer target when its value is not zero.
+	// Follow the procedure defined in raft thesis 3.10.
+	leadTransferee uint64
+	isLearner      bool
+	state          StateType
 
-	state StateType
-	// isLearner is true if the local raft node is a learner.
-	isLearner bool
-	raftOpts *raftOpts
+	// votes records
+	Vote        uint64
+	votes       map[uint64]bool
+	voteCount   int //获取的认可票数
+	rejectCount int //获取的拒绝票数
 
-	raftLog  *raftLog
-	//用于追踪节点的进度
+	readStates []ReadState
+	raftOpts   *raftOpts
+	raftLog    *raftLog
+	//用于追踪节点的相关信息
 	trk tracker.ProgressTracker
 	//需要发送给其他节点的的消息
-	msgs []*pb.Message
+	msgs     []*pb.Message
 	readOnly *readOnly
 	//不同角色指向不同的stepFunc
 	stepFunc stepFunc
 	//不同角色指向不同的tick驱动函数
 	tick func()
+	// pendingReadIndexMessages is used to store messages of type MsgReadIndex
+	// that can't be answered as new leader didn't committed any log in
+	// current term. Those will be handled as fast as first log is committed in
+	// current term.
+	pendingReadIndexMessages []pb.Message
 
+	// Only one conf change may be pending (in the log, but not yet
+	// applied) at a time. This is enforced via pendingConfIndex, which
+	// is set to a value >= the log index of the latest pending
+	// configuration change (if any). Config changes are only allowed to
+	// be proposed if the leader's applied index is greater than this
+	// value.
+	pendingConfIndex uint64
+	// an estimate of the size of the uncommitted tail of the Raft log. Used to
+	// prevent unbounded log growth. Only maintained by the leader. Reset on
+	// term changes.
+	uncommittedSize uint64
+
+	// randomizedElectionTimeout is a random number between
+	// [electiontimeout, 2 * electiontimeout - 1]. It gets reset
+	// when raft changes its state to follower or candidate.
+	randomizedElectionTimeout int
 	// number of ticks since it reached last electionTimeout when it is leader
 	// or candidate.
 	// number of ticks since it reached last electionTimeout or received a
 	// valid message from current leader when it is a follower.
 	electionElapsed int
-
 	// number of ticks since it reached last heartbeatTimeout.
 	// only leader keeps heartbeatElapsed.
 	heartbeatElapsed int
-
-	// votes records
-	Vote     uint64
-	votes       map[uint64]bool
-	voteCount   int //获取的认可票数
-	rejectCount int //获取的拒绝票数
-
-	realElectionTimeout int
-
-	leadTransferee bool
 }
 
-func newRaft(opts *raftOpts,storage db.Storage) (r *raft, err error) {
+func newRaft(opts *raftOpts, storage db.Storage) (r *raft, err error) {
 	if err = opts.validate(); err != nil {
-		log.Panicf("verify raft options failed",err)
+		log.Panicf("verify raft options failed", err)
 	}
 	rLog := newRaftLog(storage, opts.MaxCommittedSizePerReady)
 	r = &raft{
-		id:                        opts.ID,
-		lead:                      None,
-		isLearner:                 false,
-		raftLog:                   rLog,
-		trk:                       tracker.MakeProgressTracker(opts.MaxInflightMsgs),
-		raftOpts:                  opts,
-		readOnly: 				   newReadOnly(opts.ReadOnlyOption),
+		id:        opts.ID,
+		lead:      None,
+		isLearner: false,
+		raftLog:   rLog,
+		trk:       tracker.MakeProgressTracker(opts.MaxInflightMsgs),
+		raftOpts:  opts,
+		readOnly:  newReadOnly(opts.ReadOnlyOption),
 	}
 
 	//todo retore hardstate
@@ -272,6 +288,218 @@ func (r *raft) loadHardState(state pb.HardState) {
 	r.Vote = state.Vote
 }
 
+func (r *raft) softState() *SoftState { return &SoftState{Lead: r.lead, RaftState: r.state} }
+
+func (r *raft) hardState() pb.HardState {
+	return pb.HardState{
+		Term:   r.Term,
+		Vote:   r.Vote,
+		Commit: r.raftLog.committed,
+	}
+}
+
+func (r *raft) becomeFollower(term uint64, lead uint64) {
+	r.reset(term)
+	r.stepFunc = stepFollower
+	r.tick = r.tickElection
+	r.state = StateFollower
+	r.lead = lead
+	log.Infof("%x became follower at term %d", r.id, r.Term)
+}
+
+func (r *raft) becomeCandidate() {
+	if r.state == StateLeader {
+		panic("invalid transition [leader -> candidate]")
+	}
+	r.reset(r.Term + 1)
+	r.stepFunc = stepCandidate
+	r.tick = r.tickElection
+	r.Vote = r.id
+	r.state = StateCandidate
+	log.Infof("%x became candidate at term %d", r.id, r.Term)
+}
+
+func (r *raft) becomePreCandidate() {
+	if r.state == StateLeader {
+		panic("invalid transition [leader -> pre-candidate]")
+	}
+	// Becoming a pre-candidate changes our step functions and state,
+	// but doesn't change anything else. In particular it does not increase
+	// r.Term or change r.Vote.
+	r.stepFunc = stepCandidate
+	r.trk.ResetVotes()
+	r.tick = r.tickElection
+	r.lead = None
+	r.state = StatePreCandidate
+	log.Infof("%x became pre-candidate at term %d", r.id, r.Term)
+}
+
+func (r *raft) becomeLeader() {
+	if r.state == StateFollower {
+		panic("invalid transition [follower -> leader]")
+	}
+	r.stepFunc = stepLeader
+	r.tick = r.tickHeartbeat
+	r.reset(r.Term)
+	r.lead = r.id
+	r.state = StateLeader
+	// Followers enter replicate mode when they've been successfully probed
+	// (perhaps after having received a snapshot as a result). The leader is
+	// trivially in this state. Note that r.reset() has initialized this
+	// progress with the last index already.
+	r.trk.Progress[r.id].BecomeReplicate()
+
+	// Conservatively set the pendingConfIndex to the last index in the
+	// log. There may or may not be a pending config change, but it's
+	// safe to delay any future proposals until we commit all our
+	// pending log entries, and scanning the entire tail of the log
+	// could be expensive.
+	r.pendingConfIndex = r.raftLog.lastIndex()
+
+	//todo 在成为leader后需要插入一条空日志
+	emptyEnt := pb.Entry{Data: nil}
+	if !r.appendEntry(emptyEnt) {
+		// This won't happen because we just called reset() above.
+		log.Panic("empty entry was dropped")
+	}
+	// As a special case, don't count the initial empty entry towards the
+	// uncommitted log quota. This is because we want to preserve the
+	// behavior of allowing one entry larger than quota if the current
+	// usage is zero.
+	r.reduceUncommittedSize([]pb.Entry{emptyEnt})
+	log.Infof("%x became leader at term %d", r.id, r.Term)
+}
+
+func (r *raft) tickElection() {
+	r.electionElapsed++
+	if r.promotable() && r.electionElapsed >= r.randomizedElectionTimeout {
+		r.electionElapsed = 0
+		err := r.Step(&pb.Message{From: r.id, Type: pb.MsgHup})
+		if err != nil {
+			log.Error("msg").Err(code.TickErr, err).Record()
+			return
+		}
+	}
+}
+
+// tickHeartbeat is run by leaders to send a MsgBeat after r.heartbeatTimeout.
+func (r *raft) tickHeartbeat() {
+	r.heartbeatElapsed++
+	r.electionElapsed++
+
+	if r.electionElapsed >= r.raftOpts.electionTimeout {
+		r.electionElapsed = 0
+		if r.raftOpts.CheckQuorum {
+			r.Step(&pb.Message{From: r.id, Type: pb.MsgCheckQuorum})
+		}
+
+		// If current leader cannot transfer leadership in electionTimeout, it becomes leader again.
+		if r.state == StateLeader && r.leadTransferee != None {
+			r.abortLeaderTransfer()
+		}
+	}
+
+	if r.state != StateLeader {
+		return
+	}
+
+	if r.heartbeatElapsed >= r.raftOpts.heartbeatTimeout {
+		r.heartbeatElapsed = 0
+		r.Step(&pb.Message{From: r.id, Type: pb.MsgBeat})
+	}
+}
+
+// ------------------- hup -------------------
+// 选举可以由timeout触发或者主动发起的选举触发
+func (r *raft) hup(t CampaignType) {
+	if r.state == StateLeader {
+		r.logger.Debugf("%x ignoring MsgHup because already leader", r.id)
+		return
+	}
+
+	if !r.promotable() {
+		r.logger.Warningf("%x is unpromotable and can not campaign", r.id)
+		return
+	}
+	ents, err := r.raftLog.slice(r.raftLog.applied+1, r.raftLog.committed+1, noLimit)
+	if err != nil {
+		r.logger.Panicf("unexpected error getting unapplied entries (%v)", err)
+	}
+	if n := numOfPendingConf(ents); n != 0 && r.raftLog.committed > r.raftLog.applied {
+		r.logger.Warningf("%x cannot campaign at term %d since there are still %d pending configuration changes to apply", r.id, r.Term, n)
+		return
+	}
+
+	r.logger.Infof("%x is starting a new election at term %d", r.id, r.Term)
+	r.campaign(t)
+}
+
+// campaign transitions the raft instance to candidate state. This must only be
+// called after verifying that this is a legitimate transition.
+func (r *raft) campaign(t CampaignType) {
+	if !r.promotable() {
+		// This path should not be hit (callers are supposed to check), but
+		// better safe than sorry.
+		r.logger.Warningf("%x is unpromotable; campaign() should have been called", r.id)
+	}
+	var term uint64
+	var voteMsg pb.MessageType
+	if t == campaignPreElection {
+		r.becomePreCandidate()
+		voteMsg = pb.MsgPreVote
+		// PreVote RPCs are sent for the next term before we've incremented r.Term.
+		term = r.Term + 1
+	} else {
+		r.becomeCandidate()
+		voteMsg = pb.MsgVote
+		term = r.Term
+	}
+	if _, _, res := r.poll(r.id, voteRespMsgType(voteMsg), true); res == quorum.VoteWon {
+		// We won the election after voting for ourselves (which must mean that
+		// this is a single-node cluster). Advance to the next state.
+		if t == campaignPreElection {
+			r.campaign(campaignElection)
+		} else {
+			r.becomeLeader()
+		}
+		return
+	}
+	var ids []uint64
+	{
+		idMap := r.prs.Voters.IDs()
+		ids = make([]uint64, 0, len(idMap))
+		for id := range idMap {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	}
+	for _, id := range ids {
+		if id == r.id {
+			continue
+		}
+		r.logger.Infof("%x [logterm: %d, index: %d] sent %s request to %x at term %d",
+			r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), voteMsg, id, r.Term)
+
+		var ctx []byte
+		if t == campaignTransfer {
+			ctx = []byte(t)
+		}
+		r.send(pb.Message{Term: term, To: id, Type: voteMsg, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm(), Context: ctx})
+	}
+}
+
+func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int, rejected int, result quorum.VoteResult) {
+	if v {
+		r.logger.Infof("%x received %s from %x at term %d", r.id, t, id, r.Term)
+	} else {
+		r.logger.Infof("%x received %s rejection from %x at term %d", r.id, t, id, r.Term)
+	}
+	r.prs.RecordVote(id, v)
+	return r.prs.TallyVotes()
+}
+
+// ------------------- hup -------------------
+
 // Step 该函数接收一个 Msg，然后根据节点的角色和 Msg 的类型调用不同的处理函数。
 // raft层都是通过Step函数和Tick函数驱动的
 func (r *raft) Step(m *pb.Message) error {
@@ -281,16 +509,291 @@ func (r *raft) Step(m *pb.Message) error {
 type stepFunc func(r *raft, m *pb.Message) error
 
 func stepLeader(r *raft, m *pb.Message) error {
+	// These message types do not require any progress for m.From.
 	switch m.Type {
 	case pb.MsgBeat:
 		r.bcastHeartbeat()
-	case pb.MsgHeartbeatResp:
-		r.handleHeartbeatResponse(m)
 	case pb.MsgProp:
-		r.handlePropMsg(m)
-	case pb.MsgAppResp:
-		r.handleAppendResponse(m)
+		return r.handlePropMsg(m)
+	case pb.MsgCheckQuorum:
+	//todo
+	case pb.MsgReadIndex:
 	}
+
+	// All other message types require a progress for m.From (pr).
+	pr := r.trk.Progress[m.From]
+	if pr == nil {
+		log.Debugf("%x no progress available for %x", r.id, m.From)
+		return nil
+	}
+
+	switch m.Type {
+	case pb.MsgAppResp:
+		pr.RecentActive = true
+
+		if m.Reject {
+			// RejectHint is the suggested next base entry for appending (i.e.
+			// we try to append entry RejectHint+1 next), and LogTerm is the
+			// term that the follower has at index RejectHint. Older versions
+			// of this library did not populate LogTerm for rejections and it
+			// is zero for followers with an empty log.
+			//
+			// Under normal circumstances, the leader's log is longer than the
+			// follower's and the follower's log is a prefix of the leader's
+			// (i.e. there is no divergent uncommitted suffix of the log on the
+			// follower). In that case, the first probe reveals where the
+			// follower's log ends (RejectHint=follower's last index) and the
+			// subsequent probe succeeds.
+			//
+			// However, when networks are partitioned or systems overloaded,
+			// large divergent log tails can occur. The naive attempt, probing
+			// entry by entry in decreasing order, will be the product of the
+			// length of the diverging tails and the network round-trip latency,
+			// which can easily result in hours of time spent probing and can
+			// even cause outright outages. The probes are thus optimized as
+			// described below.
+			r.logger.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d",
+				r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
+			nextProbeIdx := m.RejectHint
+			if m.LogTerm > 0 {
+				// If the follower has an uncommitted log tail, we would end up
+				// probing one by one until we hit the common prefix.
+				//
+				// For example, if the leader has:
+				//
+				//   idx        1 2 3 4 5 6 7 8 9
+				//              -----------------
+				//   term (L)   1 3 3 3 5 5 5 5 5
+				//   term (F)   1 1 1 1 2 2
+				//
+				// Then, after sending an append anchored at (idx=9,term=5) we
+				// would receive a RejectHint of 6 and LogTerm of 2. Without the
+				// code below, we would try an append at index 6, which would
+				// fail again.
+				//
+				// However, looking only at what the leader knows about its own
+				// log and the rejection hint, it is clear that a probe at index
+				// 6, 5, 4, 3, and 2 must fail as well:
+				//
+				// For all of these indexes, the leader's log term is larger than
+				// the rejection's log term. If a probe at one of these indexes
+				// succeeded, its log term at that index would match the leader's,
+				// i.e. 3 or 5 in this example. But the follower already told the
+				// leader that it is still at term 2 at index 9, and since the
+				// log term only ever goes up (within a log), this is a contradiction.
+				//
+				// At index 1, however, the leader can draw no such conclusion,
+				// as its term 1 is not larger than the term 2 from the
+				// follower's rejection. We thus probe at 1, which will succeed
+				// in this example. In general, with this approach we probe at
+				// most once per term found in the leader's log.
+				//
+				// There is a similar mechanism on the follower (implemented in
+				// handleAppendEntries via a call to findConflictByTerm) that is
+				// useful if the follower has a large divergent uncommitted log
+				// tail[1], as in this example:
+				//
+				//   idx        1 2 3 4 5 6 7 8 9
+				//              -----------------
+				//   term (L)   1 3 3 3 3 3 3 3 7
+				//   term (F)   1 3 3 4 4 5 5 5 6
+				//
+				// Naively, the leader would probe at idx=9, receive a rejection
+				// revealing the log term of 6 at the follower. Since the leader's
+				// term at the previous index is already smaller than 6, the leader-
+				// side optimization discussed above is ineffective. The leader thus
+				// probes at index 8 and, naively, receives a rejection for the same
+				// index and log term 5. Again, the leader optimization does not improve
+				// over linear probing as term 5 is above the leader's term 3 for that
+				// and many preceding indexes; the leader would have to probe linearly
+				// until it would finally hit index 3, where the probe would succeed.
+				//
+				// Instead, we apply a similar optimization on the follower. When the
+				// follower receives the probe at index 8 (log term 3), it concludes
+				// that all of the leader's log preceding that index has log terms of
+				// 3 or below. The largest index in the follower's log with a log term
+				// of 3 or below is index 3. The follower will thus return a rejection
+				// for index=3, log term=3 instead. The leader's next probe will then
+				// succeed at that index.
+				//
+				// [1]: more precisely, if the log terms in the large uncommitted
+				// tail on the follower are larger than the leader's. At first,
+				// it may seem unintuitive that a follower could even have such
+				// a large tail, but it can happen:
+				//
+				// 1. Leader appends (but does not commit) entries 2 and 3, crashes.
+				//   idx        1 2 3 4 5 6 7 8 9
+				//              -----------------
+				//   term (L)   1 2 2     [crashes]
+				//   term (F)   1
+				//   term (F)   1
+				//
+				// 2. a follower becomes leader and appends entries at term 3.
+				//              -----------------
+				//   term (x)   1 2 2     [down]
+				//   term (F)   1 3 3 3 3
+				//   term (F)   1
+				//
+				// 3. term 3 leader goes down, term 2 leader returns as term 4
+				//    leader. It commits the log & entries at term 4.
+				//
+				//              -----------------
+				//   term (L)   1 2 2 2
+				//   term (x)   1 3 3 3 3 [down]
+				//   term (F)   1
+				//              -----------------
+				//   term (L)   1 2 2 2 4 4 4
+				//   term (F)   1 3 3 3 3 [gets probed]
+				//   term (F)   1 2 2 2 4 4 4
+				//
+				// 4. the leader will now probe the returning follower at index
+				//    7, the rejection points it at the end of the follower's log
+				//    which is at a higher log term than the actually committed
+				//    log.
+				nextProbeIdx = r.raftLog.findConflictByTerm(m.RejectHint, m.LogTerm)
+			}
+			if pr.MaybeDecrTo(m.Index, nextProbeIdx) {
+				r.logger.Debugf("%x decreased progress of %x to [%s]", r.id, m.From, pr)
+				if pr.State == tracker.StateReplicate {
+					pr.BecomeProbe()
+				}
+				r.sendAppend(m.From)
+			}
+		} else {
+			oldPaused := pr.IsPaused()
+			if pr.MaybeUpdate(m.Index) {
+				switch {
+				case pr.State == tracker.StateProbe:
+					pr.BecomeReplicate()
+				case pr.State == tracker.StateSnapshot && pr.Match >= pr.PendingSnapshot:
+					// TODO(tbg): we should also enter this branch if a snapshot is
+					// received that is below pr.PendingSnapshot but which makes it
+					// possible to use the log again.
+					r.logger.Debugf("%x recovered from needing snapshot, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
+					// Transition back to replicating state via probing state
+					// (which takes the snapshot into account). If we didn't
+					// move to replicating state, that would only happen with
+					// the next round of appends (but there may not be a next
+					// round for a while, exposing an inconsistent RaftStatus).
+					pr.BecomeProbe()
+					pr.BecomeReplicate()
+				case pr.State == tracker.StateReplicate:
+					pr.Inflights.FreeLE(m.Index)
+				}
+
+				if r.maybeCommit() {
+					// committed index has progressed for the term, so it is safe
+					// to respond to pending read index requests
+					releasePendingReadIndexMessages(r)
+					r.bcastAppend()
+				} else if oldPaused {
+					// If we were paused before, this node may be missing the
+					// latest commit index, so send it.
+					r.sendAppend(m.From)
+				}
+				// We've updated flow control information above, which may
+				// allow us to send multiple (size-limited) in-flight messages
+				// at once (such as when transitioning from probe to
+				// replicate, or when freeTo() covers multiple messages). If
+				// we have more entries to send, send as many messages as we
+				// can (without sending empty messages for the commit index)
+				for r.maybeSendAppend(m.From, false) {
+				}
+				// Transfer leadership is in progress.
+				if m.From == r.leadTransferee && pr.Match == r.raftLog.lastIndex() {
+					r.logger.Infof("%x sent MsgTimeoutNow to %x after received MsgAppResp", r.id, m.From)
+					r.sendTimeoutNow(m.From)
+				}
+			}
+		}
+	case pb.MsgHeartbeatResp:
+		pr.RecentActive = true
+		pr.ProbeSent = false
+
+		// free one slot for the full inflights window to allow progress.
+		if pr.State == tracker.StateReplicate && pr.Inflights.Full() {
+			pr.Inflights.FreeFirstOne()
+		}
+		if pr.Match < r.raftLog.lastIndex() {
+			r.sendAppend(m.From)
+		}
+
+		if r.readOnly.option != ReadOnlySafe || len(m.Context) == 0 {
+			return nil
+		}
+
+		if r.prs.Voters.VoteResult(r.readOnly.recvAck(m.From, m.Context)) != quorum.VoteWon {
+			return nil
+		}
+
+		rss := r.readOnly.advance(m)
+		for _, rs := range rss {
+			if resp := r.responseToReadIndexReq(rs.req, rs.index); resp.To != None {
+				r.send(resp)
+			}
+		}
+	case pb.MsgSnapStatus:
+		if pr.State != tracker.StateSnapshot {
+			return nil
+		}
+		// TODO(tbg): this code is very similar to the snapshot handling in
+		// MsgAppResp above. In fact, the code there is more correct than the
+		// code here and should likely be updated to match (or even better, the
+		// logic pulled into a newly created Progress state machine handler).
+		if !m.Reject {
+			pr.BecomeProbe()
+			r.logger.Debugf("%x snapshot succeeded, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
+		} else {
+			// NB: the order here matters or we'll be probing erroneously from
+			// the snapshot index, but the snapshot never applied.
+			pr.PendingSnapshot = 0
+			pr.BecomeProbe()
+			r.logger.Debugf("%x snapshot failed, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
+		}
+		// If snapshot finish, wait for the MsgAppResp from the remote node before sending
+		// out the next MsgApp.
+		// If snapshot failure, wait for a heartbeat interval before next try
+		pr.ProbeSent = true
+	case pb.MsgUnreachable:
+		// During optimistic replication, if the remote becomes unreachable,
+		// there is huge probability that a MsgApp is lost.
+		if pr.State == tracker.StateReplicate {
+			pr.BecomeProbe()
+		}
+		r.logger.Debugf("%x failed to send message to %x because it is unreachable [%s]", r.id, m.From, pr)
+	case pb.MsgTransferLeader:
+		if pr.IsLearner {
+			r.logger.Debugf("%x is learner. Ignored transferring leadership", r.id)
+			return nil
+		}
+		leadTransferee := m.From
+		lastLeadTransferee := r.leadTransferee
+		if lastLeadTransferee != None {
+			if lastLeadTransferee == leadTransferee {
+				r.logger.Infof("%x [term %d] transfer leadership to %x is in progress, ignores request to same node %x",
+					r.id, r.Term, leadTransferee, leadTransferee)
+				return nil
+			}
+			r.abortLeaderTransfer()
+			r.logger.Infof("%x [term %d] abort previous transferring leadership to %x", r.id, r.Term, lastLeadTransferee)
+		}
+		if leadTransferee == r.id {
+			r.logger.Debugf("%x is already leader. Ignored transferring leadership to self", r.id)
+			return nil
+		}
+		// Transfer leadership to third party.
+		r.logger.Infof("%x [term %d] starts to transfer leadership to %x", r.id, r.Term, leadTransferee)
+		// Transfer leadership should be finished in one electionTimeout, so reset r.electionElapsed.
+		r.electionElapsed = 0
+		r.leadTransferee = leadTransferee
+		if pr.Match == r.raftLog.lastIndex() {
+			r.sendTimeoutNow(leadTransferee)
+			r.logger.Infof("%x sends MsgTimeoutNow to %x immediately as %x already has up-to-date log", r.id, leadTransferee, leadTransferee)
+		} else {
+			r.sendAppend(leadTransferee)
+		}
+	}
+
 	return nil
 }
 
@@ -320,102 +823,43 @@ func stepCandidate(r *raft, m *pb.Message) error {
 	return nil
 }
 
-func (r *raft) becomeFollower(term uint64, lead uint64) {
-	log.Infof("%v become follower", r.id)
-	r.Role = Follower
-	r.Term = term
-	r.LeaderID = lead
-	r.votes = nil
-	r.voteCount = 0
-	r.rejectCount = 0
-	r.stepFunc = stepFollower
-	r.tick = r.tickElection
-	r.resetTick()
-}
-
-func (r *raft) becomeCandidate() {
-	log.Infof("%v become candidate", r.id)
-	r.Role = Candidate
-	r.Term += 1
-	r.Vote = r.id
-	r.votes = make(map[uint64]bool)
-	r.votes[r.id] = true
-	r.voteCount = 1
-	r.tick = r.tickElection
-	r.stepFunc = stepCandidate
-	r.resetTick()
-}
-
-func (r *raft) becomeLeader() {
-	log.Infof("%v become leader", r.id)
-	r.Role = Leader
-	r.LeaderID = r.id
-	r.stepFunc = stepLeader
-	r.tick = r.tickHeartbeat
-	for _, v := range r.Progress {
-		v.Match = 0
-		v.Next = r.raftLog.lastIndex() + 1 //因为不知道其他节点的目前日志的一个状态，默认同步
-	}
-	entries := make([]pb.Entry, 1)
-	entries = append(entries, pb.Entry{
-		Type:  pb.EntryNormal,
-		Term:  r.Term,
-		Index: r.raftLog.LastIndex() + 1,
-		Data:  nil})
-
-	r.raftLog.AppendEntries(entries)
-	r.bcastAppendEntries()
-	r.resetTick()
-}
-
-func (r *raft) tickElection() {
-	r.electionElapsed++
-	if r.electionElapsed >= r.realElectionTimeout {
-		r.electionElapsed = 0
-		err := r.Step(&pb.Message{From: r.id, Type: pb.MsgHup})
-		if err != nil {
-			log.Error("msg").Err(code.TickErr, err).Record()
-			return
-		}
-	}
-}
-
-func (r *raft) tickHeartbeat() {
-	r.heartbeatElapsed++
-	if r.heartbeatElapsed >= r.heartbeatTimeout {
-		r.heartbeatElapsed = 0
-		err := r.Step(&pb.Message{From: r.id, Type: pb.MsgBeat})
-		if err != nil {
-			log.Error("msg").Err(code.TickErr, err).Record()
-			return
-		}
-	}
-}
-
-func (r *raft) campaign() {
-	r.becomeCandidate()
-	r.bcastVoteRequest()
-}
-
 // ------------------- leader behavior -------------------
+
+// hearbeat
 func (r *raft) bcastHeartbeat() {
-	for peer := range r.Progress {
-		if peer != r.id {
-			r.sendHeartbeat(peer)
-		}
+	lastCtx := r.readOnly.lastPendingRequestCtx()
+	if len(lastCtx) == 0 {
+		r.bcastHeartbeatWithCtx(nil)
+	} else {
+		r.bcastHeartbeatWithCtx([]byte(lastCtx))
 	}
 }
 
-func (r *raft) sendHeartbeat(to uint64) {
-	msg := &pb.Message{
-		Type: pb.MsgBeat,
-		To:   to,
-		From: r.id,
-		Term: r.Term,
-		//通过携带的committed信息，follower节点可以知道哪些entry已经被committed
-		Commit: r.raftLog.CommittedIndex(),
+func (r *raft) bcastHeartbeatWithCtx(ctx []byte) {
+	r.trk.Visit(func(id uint64, _ *tracker.Progress) {
+		if id == r.id {
+			return
+		}
+		r.sendHeartbeat(id, ctx)
+	})
+}
+
+func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
+	// Attach the commit as min(to.matched, r.committed).
+	// When the leader sends out heartbeat message,
+	// the receiver(follower) might not be matched with the leader
+	// or it might not have all the committed entries.
+	// The leader MUST NOT forward the follower's commit to
+	// an unmatched index.
+	commit := min(r.trk.Progress[to].Match, r.raftLog.committed)
+	m := pb.Message{
+		To:      to,
+		Type:    pb.MsgHeartbeat,
+		Commit:  commit,
+		Context: ctx,
 	}
-	r.msgs = append(r.msgs, msg)
+
+	r.send(m)
 }
 
 func (r *raft) handleHeartbeatResponse(m *pb.Message) {
@@ -425,64 +869,63 @@ func (r *raft) handlePropMsg(m *pb.Message) error {
 	if len(m.Entries) == 0 {
 		log.Panicf("%x stepped empty MsgProp", r.id)
 	}
-	//首先leader会检查自己的Progress结构是否还存在，以判断自己是否已经被ConfChange操作移出了集群，如果该leader被移出了集群，则不会处理该提议。
-	if r.Progress[r.id] == nil {
-		return code.ErrProposalDropped
+	if r.trk.Progress[r.id] == nil {
+		// If we are not currently a member of the range (i.e. this node
+		// was removed from the configuration while serving as leader),
+		// drop any new proposals.
+		return ErrProposalDropped
 	}
-	if r.leadTransferee {
+	if r.leadTransferee != None {
 		log.Debugf("%x [term %d] transfer leadership to %x is in progress; dropping proposal", r.id, r.Term, r.leadTransferee)
-		return code.ErrProposalDropped
+		return ErrProposalDropped
 	}
-
 	r.handleConfigEntry(m.Entries)
-
-
 	if !r.appendEnts(m.Entries...) {
 		return code.ErrProposalDropped
 	}
-
-	r.bcastAppendEnts()
+	r.bcastAppend()
 	return nil
 }
 
 func (r *raft) handleConfigEntry(ents []pb.Entry) {
-	e := &m.Entries[i]
-	var cc pb.ConfChangeI
-	if e.Type == pb.EntryConfChange {
-		var ccc pb.ConfChange
-		if err := ccc.Unmarshal(e.Data); err != nil {
-			panic(err)
+	for i := range ents {
+		e := &ents[i]
+		var cc pb.ConfChangeI
+		if e.Type == pb.EntryConfChange {
+			var ccc pb.ConfChange
+			if err := ccc.Unmarshal(e.Data); err != nil {
+				panic(err)
+			}
+			cc = ccc
+		} else if e.Type == pb.EntryConfChangeV2 {
+			var ccc pb.ConfChangeV2
+			if err := ccc.Unmarshal(e.Data); err != nil {
+				panic(err)
+			}
+			cc = ccc
 		}
-		cc = ccc
-	} else if e.Type == pb.EntryConfChangeV2 {
-		var ccc pb.ConfChangeV2
-		if err := ccc.Unmarshal(e.Data); err != nil {
-			panic(err)
-		}
-		cc = ccc
-	}
-	if cc != nil {
-		alreadyPending := r.pendingConfIndex > r.raftLog.applied
-		alreadyJoint := len(r.trk.Config.Voters[1]) > 0
-		wantsLeaveJoint := len(cc.AsV2().Changes) == 0
+		if cc != nil {
+			alreadyPending := r.pendingConfIndex > r.raftLog.applied
+			alreadyJoint := len(r.prs.Config.Voters[1]) > 0
+			wantsLeaveJoint := len(cc.AsV2().Changes) == 0
 
-		var refused string
-		if alreadyPending {
-			refused = fmt.Sprintf("possible unapplied conf change at index %d (applied to %d)", r.pendingConfIndex, r.raftLog.applied)
-		} else if alreadyJoint && !wantsLeaveJoint {
-			refused = "must transition out of joint config first"
-		} else if !alreadyJoint && wantsLeaveJoint {
-			refused = "not in joint state; refusing empty conf change"
-		}
+			var refused string
+			if alreadyPending {
+				refused = fmt.Sprintf("possible unapplied conf change at index %d (applied to %d)", r.pendingConfIndex, r.raftLog.applied)
+			} else if alreadyJoint && !wantsLeaveJoint {
+				refused = "must transition out of joint config first"
+			} else if !alreadyJoint && wantsLeaveJoint {
+				refused = "not in joint state; refusing empty conf change"
+			}
 
-		if refused != "" {
-			log.Infof("%x ignoring conf change %v at config %s: %s", r.id, cc, r.trk.Config, refused)
-			m.Entries[i] = pb.Entry{Type: pb.EntryNormal}
-		} else {
-			r.pendingConfIndex = r.raftLog.lastIndex() + uint64(i) + 1
+			if refused != "" {
+				log.Infof("%x ignoring conf change %v at config %s: %s", r.id, cc, r.prs.Config, refused)
+				m.Entries[i] = pb.Entry{Type: pb.EntryNormal}
+			} else {
+				r.pendingConfIndex = r.raftLog.lastIndex() + uint64(i) + 1
+			}
 		}
 	}
-}
 }
 
 func (r *raft) appendEnts(es ...pb.Entry) (accepted bool) {
@@ -510,12 +953,88 @@ func (r *raft) appendEnts(es ...pb.Entry) (accepted bool) {
 	return true
 }
 
-func (r *raft) bcastAppendEnts() {
-	for peer := range r.Progress {
-		if peer != r.id {
-			r.sendAppendEntries(peer, SendEmptyMessage)
+// bcastAppend sends RPC, with entries to all peers that are not up-to-date
+// according to the progress recorded in r.prs.
+func (r *raft) bcastAppend() {
+	r.trk.Visit(func(id uint64, _ *tracker.Progress) {
+		if id == r.id {
+			return
+		}
+		r.sendAppend(id)
+	})
+}
+
+// sendAppend sends an append RPC with new entries (if any) and the
+// current commit index to the given peer.
+func (r *raft) sendAppend(to uint64) {
+	r.maybeSendAppend(to, true)
+}
+
+// maybeSendAppend sends an append RPC with new entries to the given peer,
+// if necessary. Returns true if a message was sent. The sendIfEmpty
+// argument controls whether messages with no entries will be sent
+// ("empty" messages are useful to convey updated Commit indexes, but
+// are undesirable when we're sending multiple messages in a batch).
+func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
+	pr := r.trk.Progress[to]
+	if pr.IsPaused() {
+		return false
+	}
+	m := pb.Message{}
+	m.To = to
+
+	term, errt := r.raftLog.term(pr.Next - 1)
+	ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize)
+	if len(ents) == 0 && !sendIfEmpty {
+		return false
+	}
+
+	if errt != nil || erre != nil { // send snapshot if we failed to get term or entries
+		if !pr.RecentActive {
+			r.logger.Debugf("ignore sending snapshot to %x since it is not recently active", to)
+			return false
+		}
+
+		m.Type = pb.MsgSnap
+		snapshot, err := r.raftLog.snapshot()
+		if err != nil {
+			if err == ErrSnapshotTemporarilyUnavailable {
+				r.logger.Debugf("%x failed to send snapshot to %x because snapshot is temporarily unavailable", r.id, to)
+				return false
+			}
+			panic(err) // TODO(bdarnell)
+		}
+		if IsEmptySnap(snapshot) {
+			panic("need non-empty snapshot")
+		}
+		m.Snapshot = snapshot
+		sindex, sterm := snapshot.Metadata.Index, snapshot.Metadata.Term
+		r.logger.Debugf("%x [firstindex: %d, commit: %d] sent snapshot[index: %d, term: %d] to %x [%s]",
+			r.id, r.raftLog.firstIndex(), r.raftLog.committed, sindex, sterm, to, pr)
+		pr.BecomeSnapshot(sindex)
+		r.logger.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pr)
+	} else {
+		m.Type = pb.MsgApp
+		m.Index = pr.Next - 1
+		m.LogTerm = term
+		m.Entries = ents
+		m.Commit = r.raftLog.committed
+		if n := len(m.Entries); n != 0 {
+			switch pr.State {
+			// optimistically increase the next when in StateReplicate
+			case tracker.StateReplicate:
+				last := m.Entries[n-1].Index
+				pr.OptimisticUpdate(last)
+				pr.Inflights.Add(last)
+			case tracker.StateProbe:
+				pr.ProbeSent = true
+			default:
+				r.logger.Panicf("%x is sending append in unhandled state %s", r.id, pr.State)
+			}
 		}
 	}
+	r.send(m)
+	return true
 }
 
 // 当需要发送包含新条目的附加RPC时，如果需要发送空消息以传达更新的提交索引，则将sendIfEmpty标记为true。
@@ -778,6 +1297,44 @@ func (r *raft) sendVoteResponse(candidate uint64, reject bool) {
 
 // ------------------ public behavior ------------------------
 
+// public behavior
+// send schedules persisting state to a stable storage and AFTER that
+// sending the message (as part of next Ready message processing).
+func (r *raft) send(m pb.Message) {
+	if m.From == None {
+		m.From = r.id
+	}
+	if m.Type == pb.MsgVote || m.Type == pb.MsgVoteResp || m.Type == pb.MsgPreVote || m.Type == pb.MsgPreVoteResp {
+		if m.Term == 0 {
+			// All {pre-,}campaign messages need to have the term set when
+			// sending.
+			// - MsgVote: m.Term is the term the node is campaigning for,
+			//   non-zero as we increment the term when campaigning.
+			// - MsgVoteResp: m.Term is the new r.Term if the MsgVote was
+			//   granted, non-zero for the same reason MsgVote is
+			// - MsgPreVote: m.Term is the term the node will campaign,
+			//   non-zero as we use m.Term to indicate the next term we'll be
+			//   campaigning for
+			// - MsgPreVoteResp: m.Term is the term received in the original
+			//   MsgPreVote if the pre-vote was granted, non-zero for the
+			//   same reasons MsgPreVote is
+			panic(fmt.Sprintf("term should be set when sending %s", m.Type))
+		}
+	} else {
+		if m.Term != 0 {
+			panic(fmt.Sprintf("term should not be set when sending %s (was %d)", m.Type, m.Term))
+		}
+		// do not attach term to MsgProp, MsgReadIndex
+		// proposals are a way to forward to the leader and
+		// should be treated as local message.
+		// MsgReadIndex is also forwarded to leader.
+		if m.Type != pb.MsgProp && m.Type != pb.MsgReadIndex {
+			m.Term = r.Term
+		}
+	}
+	r.msgs = append(r.msgs, m)
+}
+
 func (r *raft) isLeader() bool {
 	return r.Role == Leader
 }
@@ -788,12 +1345,6 @@ func (r *raft) isFollower() bool {
 
 func (r *raft) isCandidate() bool {
 	return r.Role == Candidate
-}
-
-func (r *raft) resetTick() {
-	r.heartbeatElapsed = 0
-	r.electionElapsed = 0
-	r.resetRealElectionTimeout()
 }
 
 func (r *raft) resetRealElectionTimeout() {
@@ -814,7 +1365,7 @@ func (r *raft) increaseUncommittedSize(ents []pb.Entry) bool {
 		s += uint64(PayloadSize(e))
 	}
 
-	if r.uncommittedSize > 0 && s > 0 && r.uncommittedSize+s > r.maxUncommittedSize {
+	if r.uncommittedSize > 0 && s > 0 && r.uncommittedSize+s > r.raftOpts.maxUncommittedSize {
 		// If the uncommitted tail of the raft log is empty, allow any size
 		// proposal. Otherwise, limit the size of the uncommitted tail of the
 		// log and drop any proposal that would push the size over the limit.
@@ -849,7 +1400,6 @@ func (r *raft) reduceUncommittedSize(ents []pb.Entry) {
 		r.uncommittedSize -= s
 	}
 }
-
 
 // switchToConfig reconfigures this node to use the provided configuration. It
 // updates the in-memory state and, when necessary, carries out additional
@@ -907,12 +1457,100 @@ func (r *raft) switchToConfig(cfg tracker.Config, trk tracker.ProgressMap) pb.Co
 
 	return cs
 }
-func (r *raft) softState() *SoftState { return &SoftState{Lead: r.lead, RaftState: r.state} }
 
-func (r *raft) hardState() pb.HardState {
-	return pb.HardState{
-		Term:   r.Term,
-		Vote:   r.Vote,
-		Commit: r.raftLog.committed,
+// lockedRand is a small wrapper around rand.Rand to provide
+// synchronization among multiple raft groups. Only the methods needed
+// by the code are exposed (e.g. Intn).
+type lockedRand struct {
+	mu   sync.Mutex
+	rand *rand.Rand
+}
+
+func (r *lockedRand) Intn(n int) int {
+	r.mu.Lock()
+	v := r.rand.Intn(n)
+	r.mu.Unlock()
+	return v
+}
+
+var globalRand = &lockedRand{
+	rand: rand.New(rand.NewSource(time.Now().UnixNano())),
+}
+
+func (r *raft) reset(term uint64) {
+	if r.Term != term {
+		r.Term = term
+		r.Vote = None
 	}
+	r.lead = None
+
+	r.electionElapsed = 0
+	r.heartbeatElapsed = 0
+	r.resetRandomizedElectionTimeout()
+
+	r.abortLeaderTransfer()
+
+	r.trk.ResetVotes()
+	r.trk.Visit(func(id uint64, pr *tracker.Progress) {
+		*pr = tracker.Progress{
+			Match:     0,
+			Next:      r.raftLog.lastIndex() + 1,
+			Inflights: tracker.NewInflights(r.trk.MaxInflight),
+			IsLearner: pr.IsLearner,
+		}
+		if id == r.id {
+			pr.Match = r.raftLog.lastIndex()
+		}
+	})
+
+	r.pendingConfIndex = 0
+	r.uncommittedSize = 0
+	//todo figure out what this is
+	r.readOnly = newReadOnly(r.readOnly.option)
+}
+
+func (r *raft) resetRandomizedElectionTimeout() {
+	r.randomizedElectionTimeout = r.raftOpts.electionTimeout + globalRand.Intn(r.raftOpts.electionTimeout)
+}
+
+func (r *raft) abortLeaderTransfer() {
+	r.leadTransferee = None
+}
+
+func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
+	li := r.raftLog.lastIndex()
+	for i := range es {
+		es[i].Term = r.Term
+		es[i].Index = li + 1 + uint64(i)
+	}
+
+	// Track the size of this uncommitted proposal.
+	if !r.increaseUncommittedSize(es) {
+		log.Debugf("%x appending new entries to log would exceed uncommitted entry size limit; dropping proposal", r.id)
+		// Drop the proposal.
+		return false
+	}
+
+	// use latest "last" index after truncate/append
+	li = r.raftLog.append(es...)
+
+	r.trk.Progress[r.id].MaybeUpdate(li)
+	// Regardless of maybeCommit's return, our caller will call bcastAppend.
+	r.maybeCommit()
+	return true
+}
+
+// maybeCommit attempts to advance the commit index. Returns true if
+// the commit index changed (in which case the caller should call
+// r.bcastAppend).
+func (r *raft) maybeCommit() bool {
+	mci := r.trk.Committed()
+	return r.raftLog.maybeCommit(mci, r.Term)
+}
+
+// promotable indicates whether state machine can be promoted to leader,
+// which is true when its own id is in progress list.
+func (r *raft) promotable() bool {
+	pr := r.trk.Progress[r.id]
+	return pr != nil && !pr.IsLearner && !r.raftLog.hasPendingSnapshot()
 }
