@@ -225,3 +225,64 @@ func (l *raftLog) appliedTo(i uint64) {
 	}
 	l.applied = i
 }
+
+// findConflictByTerm takes an (index, term) pair (indicating a conflicting log
+// entry on a leader/follower during an append) and finds the largest index in
+// log l with a term <= `term` and an index <= `index`. If no such index exists
+// in the log, the log's first index is returned.
+//
+// The index provided MUST be equal to or less than l.lastIndex(). Invalid
+// inputs log a warning and the input index is returned.
+func (l *raftLog) findConflictByTerm(index uint64, term uint64) uint64 {
+	if li := l.lastIndex(); index > li {
+		// NB: such calls should not exist, but since there is a straightfoward
+		// way to recover, do it.
+		//
+		// It is tempting to also check something about the first index, but
+		// there is odd behavior with peers that have no log, in which case
+		// lastIndex will return zero and firstIndex will return one, which
+		// leads to calls with an index of zero into this method.
+		l.logger.Warningf("index(%d) is out of range [0, lastIndex(%d)] in findConflictByTerm",
+			index, li)
+		return index
+	}
+	for {
+		logTerm, err := l.term(index)
+		if logTerm <= term || err != nil {
+			break
+		}
+		index--
+	}
+	return index
+}
+
+// isUpToDate determines if the given (lastIndex,term) log is more up-to-date
+// by comparing the index and term of the last entries in the existing logs.
+// If the logs have last entries with different terms, then the log with the
+// later term is more up-to-date. If the logs end with the same term, then
+// whichever log has the larger lastIndex is more up-to-date. If the logs are
+// the same, the given log is up-to-date.
+func (l *raftLog) isUpToDate(lasti, term uint64) bool {
+	return term > l.lastTerm() || (term == l.lastTerm() && lasti >= l.lastIndex())
+}
+
+func (l *raftLog) zeroTermOnErrCompacted(t uint64, err error) uint64 {
+	if err == nil {
+		return t
+	}
+	if err == ErrCompacted {
+		return 0
+	}
+	l.logger.Panicf("unexpected error (%v)", err)
+	return 0
+}
+
+func (l *raftLog) commitTo(tocommit uint64) {
+	// never decrease commit
+	if l.committed < tocommit {
+		if l.lastIndex() < tocommit {
+			l.logger.Panicf("tocommit(%d) is out of range [lastIndex(%d)]. Was the raft log corrupted, truncated, or lost?", tocommit, l.lastIndex())
+		}
+		l.committed = tocommit
+	}
+}
