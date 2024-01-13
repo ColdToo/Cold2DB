@@ -87,7 +87,7 @@ func (a *Arena) Alloc(size, overflow uint32, align Align) (uint32, error) {
 		a.growBufSize(uint64(padded + overflow))
 	}
 
-	// 对align取反再与操作，使地址对齐至8字节
+	// ^对align取反再与操作，使地址对齐至8字节
 	// align8: 7 0000 0111 -> 1111 1000
 	// align1: 0 0000 0000 -> 1111 1111
 	offset := (uint32(newSize) - padded + uint32(align)) & ^uint32(align)
