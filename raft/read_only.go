@@ -14,7 +14,7 @@
 
 package raft
 
-import pb "go.etcd.io/etcd/raft/v3/raftpb"
+import "github.com/ColdToo/Cold2DB/pb"
 
 // ReadState provides state for read only query.
 // It's caller's responsibility to call ReadIndex first before getting
@@ -78,7 +78,7 @@ func (ro *readOnly) recvAck(id uint64, context []byte) map[uint64]bool {
 // advance advances the read only request queue kept by the readonly struct.
 // It dequeues the requests until it finds the read only request that has
 // the same context as the given `m`.
-func (ro *readOnly) advance(m pb.Message) []*readIndexStatus {
+func (ro *readOnly) advance(m *pb.Message) []*readIndexStatus {
 	var (
 		i     int
 		found bool

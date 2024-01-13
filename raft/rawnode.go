@@ -92,15 +92,16 @@ func (rn *rawNode) HasReady() bool {
 	if hardSt := r.hardState(); !IsEmptyHardState(hardSt) && !isHardStateEqual(hardSt, rn.prevHardSt) {
 		return true
 	}
-	if r.raftLog.hasPendingSnapshot() {
+	if len(r.msgs) > 0 || len(r.raftLog.unstableEntries()) > 0 || r.raftLog.hasNextApplyEnts() {
 		return true
 	}
-	if len(r.msgs) > 0 || len(r.raftLog.unstableEntries()) > 0 || r.raftLog.hasNextEnts() {
-		return true
-	}
-	if len(r.readStates) != 0 {
-		return true
-	}
+	// todo snapshot and read line
+	//if r.raftLog.hasPendingSnapshot() {
+	//	return true
+	//}
+	//if len(r.readStates) != 0 {
+	//	return true
+	//}
 	return false
 }
 

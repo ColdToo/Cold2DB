@@ -116,6 +116,7 @@ func OpenKVStorage(dbCfg *config.DBConfig) (C2 *C2KV, err error) {
 			C2.memTablePipe <- NewMemTable(dbCfg.MemConfig)
 		}
 	}()
+	return C2, nil
 }
 
 //persistIndex............AppliedIndex.....committedIndex.......stableIndex......

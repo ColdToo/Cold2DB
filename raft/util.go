@@ -26,7 +26,7 @@ func IsEmptyHardState(st pb.HardState) bool {
 }
 
 func isHardStateEqual(a, b pb.HardState) bool {
-	return a.Term == b.Term && a.Vote == b.Vote && a.Applied == b.Applied
+	return a.Term == b.Term && a.Vote == b.Vote
 }
 
 // IsEmptySnap returns true if the given Snapshot is empty.
@@ -167,11 +167,11 @@ func DescribeEntry(e pb.Entry, f EntryFormatter) string {
 		f = func(data []byte) string { return fmt.Sprintf("%q", data) }
 	}
 
-	formatConfChange := func(cc pb.ConfChangeI) string {
-		// TODO(tbg): give the EntryFormatter a type argument so that it gets
-		// a chance to expose the Context.
-		return pb.ConfChangesToString(cc.AsV2().Changes)
-	}
+	//formatConfChange := func(cc pb.ConfChangeI) string {
+	//	// TODO(tbg): give the EntryFormatter a type argument so that it gets
+	//	// a chance to expose the Context.
+	//	return pb.ConfChangesToString(cc.AsV2().Changes)
+	//}
 
 	var formatted string
 	switch e.Type {
@@ -182,14 +182,14 @@ func DescribeEntry(e pb.Entry, f EntryFormatter) string {
 		if err := cc.Unmarshal(e.Data); err != nil {
 			formatted = err.Error()
 		} else {
-			formatted = formatConfChange(cc)
+			//formatted = formatConfChange(cc)
 		}
 	case pb.EntryConfChangeV2:
 		var cc pb.ConfChangeV2
 		if err := cc.Unmarshal(e.Data); err != nil {
 			formatted = err.Error()
 		} else {
-			formatted = formatConfChange(cc)
+			//formatted = formatConfChange(cc)
 		}
 	}
 	if formatted != "" {
@@ -221,12 +221,4 @@ func limitSize(ents []pb.Entry, maxSize uint64) []pb.Entry {
 		}
 	}
 	return ents[:limit]
-}
-
-func assertConfStatesEquivalent(l Logger, cs1, cs2 pb.ConfState) {
-	err := cs1.Equivalent(cs2)
-	if err == nil {
-		return
-	}
-	l.Panic(err)
 }

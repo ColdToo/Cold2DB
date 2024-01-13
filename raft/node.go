@@ -92,6 +92,10 @@ type SoftState struct {
 	RaftState StateType
 }
 
+func (a *SoftState) equal(b *SoftState) bool {
+	return a.Lead == b.Lead && a.RaftState == b.RaftState
+}
+
 type msgWithResult struct {
 	m      pb.Message
 	result chan error
@@ -126,7 +130,7 @@ func StartRaftNode(raftConfig *config.RaftConfig, storage db.Storage) (Node, err
 		return nil, err
 	}
 
-	raftNode := &raftNode{
+	rN := &raftNode{
 		propC:       make(chan msgWithResult),
 		receiveC:    make(chan pb.Message),
 		confChangeC: make(chan pb.ConfChange),
@@ -142,35 +146,52 @@ func StartRaftNode(raftConfig *config.RaftConfig, storage db.Storage) (Node, err
 		statusC: make(chan chan Status),
 		rawNode: rn,
 	}
-	raftNode.serveAppNode()
-	return raftNode, nil
+	rN.serveAppNode()
+	return rN, nil
 }
 
 func (rn *raftNode) serveAppNode() {
-	var propc chan msgWithResult
-	var readyC chan *Ready
+	var propC chan msgWithResult
+	var readyC chan Ready
 	var advanceC chan struct{}
-	var rd *Ready
+	var rd Ready
 
 	r := rn.rawNode.raft
-	lead := None
 
 	for {
 		if advanceC != nil {
 			readyC = nil
-		} else if rd = rn.rawNode.HasReady(); rd != nil {
-			readyC = rn.ReadyC
+		} else if rn.rawNode.HasReady() {
+			rd = rn.rawNode.readyWithoutAccept()
+			readyC = rn.readyC
 		}
 
 		select {
-		case readyC <- rd:
-			advanceC = rn.AdvanceC
+		case <-rn.tickC:
+			rn.rawNode.Tick()
+		case m := <-rn.receiveC:
+			if pr := r.trk.Progress[m.From]; pr != nil {
+				r.Step(m)
+			}
+		case pm := <-propC:
+			m := pm.m
+			m.From = r.id
+			err := r.Step(m)
+			if pm.result != nil {
+				pm.result <- err
+				close(pm.result)
+			}
 
+		case readyC <- rd:
+			rn.rawNode.acceptReady(rd)
+			advanceC = rn.advanceC
 		case <-advanceC:
+			rn.rawNode.Advance(rd)
+			rd = Ready{}
 			advanceC = nil
 
-		case <-rn.stop:
-			close(rn.done)
+		case <-rn.stopC:
+			close(rn.doneC)
 			return
 		}
 	}
@@ -189,11 +210,12 @@ func (rn *raftNode) ProposeConfChange(ctx context.Context, cc pb.ConfChange) err
 }
 
 func confChangeToMsg(c pb.ConfChange) (pb.Message, error) {
-	typ, data, err := pb.MarshalConfChange(c)
-	if err != nil {
-		return pb.Message{}, err
-	}
-	return pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Type: typ, Data: data}}}, nil
+	//typ, data, err := pb.MarshalConfChange(c)
+	//if err != nil {
+	//	return pb.Message{}, err
+	//}
+	//return pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Type: typ, Data: data}}}, nil
+	return pb.Message{}, nil
 }
 
 func (rn *raftNode) ApplyConfChange(cc pb.ConfChange) *pb.ConfState {
@@ -320,7 +342,7 @@ type Ready struct {
 func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	rd := Ready{
 		Entries:          r.raftLog.unstableEntries(),
-		CommittedEntries: r.raftLog.nextEnts(),
+		CommittedEntries: r.raftLog.nextApplyEnts(),
 		Messages:         r.msgs,
 	}
 	if softSt := r.softState(); !softSt.equal(prevSoftSt) {
@@ -329,13 +351,8 @@ func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	if hardSt := r.hardState(); !isHardStateEqual(hardSt, prevHardSt) {
 		rd.HardState = hardSt
 	}
-	if r.raftLog.unstable.snapshot != nil {
-		rd.Snapshot = *r.raftLog.unstable.snapshot
-	}
-	if len(r.readStates) != 0 {
-		rd.ReadStates = r.readStates
-	}
-	rd.MustSync = mustSync(r.hardState(), prevHardSt, len(rd.Entries))
+
+	rd.MustSync = MustSync(r.hardState(), prevHardSt, len(rd.Entries))
 	return rd
 }
 
@@ -427,4 +444,15 @@ func (rn *raftNode) Status() Status {
 	case <-rn.doneC:
 		return Status{}
 	}
+}
+
+// MustSync returns true if the hard state and count of Raft entries indicate
+// that a synchronous write to persistent storage is required.
+func MustSync(st, prevst pb.HardState, entsnum int) bool {
+	// Persistent state on all servers:
+	// (Updated on stable storage before responding to RPCs)
+	// currentTerm
+	// votedFor
+	// log entries[]
+	return entsnum != 0 || st.Vote != prevst.Vote || st.Term != prevst.Term
 }

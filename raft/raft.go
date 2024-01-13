@@ -199,7 +199,7 @@ type raft struct {
 	//用于追踪节点的相关信息
 	trk tracker.ProgressTracker
 	//需要发送给其他节点的的消息
-	msgs     []*pb.Message
+	msgs     []pb.Message
 	readOnly *readOnly
 	//不同角色指向不同的stepFunc
 	stepFunc stepFunc
@@ -243,18 +243,25 @@ func newRaft(opts *raftOpts, storage db.Storage) (r *raft, err error) {
 		log.Panicf("verify raft options failed", err)
 	}
 	rLog := newRaftLog(storage, opts.MaxCommittedSizePerReady)
+	hs, _, err := storage.GetHardState()
+	if err != nil {
+		log.Panicf("get hard state  from storage failed", err) // TODO(bdarnell)
+	}
+
 	r = &raft{
+		raftOpts:  opts,
 		id:        opts.ID,
 		lead:      None,
 		isLearner: false,
-		raftLog:   rLog,
-		trk:       tracker.MakeProgressTracker(opts.MaxInflightMsgs),
-		raftOpts:  opts,
-		readOnly:  newReadOnly(opts.ReadOnlyOption),
+
+		raftLog: rLog,
+		trk:     tracker.MakeProgressTracker(opts.MaxInflightMsgs),
+
+		//线性一致性读
+		readOnly: newReadOnly(opts.ReadOnlyOption),
 	}
 
-	//todo retore hardstate
-	hs, _, err := storage.GetHardState()
+	//todo restore conf state
 	//cfg, trk, err := confchange.Restore(confchange.Changer{Tracker:   r.trk, LastIndex: raftlog.lastIndex()}, cs)
 	//if err != nil {
 	//	panic(err)
@@ -265,6 +272,10 @@ func newRaft(opts *raftOpts, storage db.Storage) (r *raft, err error) {
 		r.loadHardState(hs)
 	}
 
+	appliedIndex := r.raftLog.storage.AppliedIndex()
+	if appliedIndex > 0 {
+		r.raftLog.appliedTo(appliedIndex)
+	}
 	r.becomeFollower(r.Term, None)
 
 	var nodesStrs []string
@@ -291,7 +302,7 @@ func (r *raft) softState() *SoftState { return &SoftState{Lead: r.lead, RaftStat
 func (r *raft) hardState() pb.HardState {
 	return pb.HardState{
 		Term:   r.Term,
-		Vote:   r.Vote,
+		Vote:   r.vote,
 		Commit: r.raftLog.committed,
 	}
 }
@@ -348,7 +359,7 @@ func (r *raft) becomeCandidate() {
 	r.reset(r.Term + 1)
 	r.stepFunc = stepCandidate
 	r.tick = r.tickElection
-	r.Vote = r.id
+	r.vote = r.id
 	r.state = StateCandidate
 	log.Infof("%x became candidate at term %d", r.id, r.Term)
 }
@@ -372,7 +383,7 @@ func (r *raft) tickElection() {
 	r.electionElapsed++
 	if r.promotable() && r.electionElapsed >= r.randomizedElectionTimeout {
 		r.electionElapsed = 0
-		err := r.Step(&pb.Message{From: r.id, Type: pb.MsgHup})
+		err := r.Step(pb.Message{From: r.id, Type: pb.MsgHup})
 		if err != nil {
 			log.Error("msg").Err(code.TickErr, err).Record()
 			return
@@ -387,7 +398,7 @@ func (r *raft) tickHeartbeat() {
 	if r.electionElapsed >= r.raftOpts.electionTimeout {
 		r.electionElapsed = 0
 		if r.raftOpts.CheckQuorum {
-			r.Step(&pb.Message{From: r.id, Type: pb.MsgCheckQuorum})
+			r.Step(pb.Message{From: r.id, Type: pb.MsgCheckQuorum})
 		}
 
 		// If current leader cannot transfer leadership in electionTimeout, it becomes leader again.
@@ -402,11 +413,11 @@ func (r *raft) tickHeartbeat() {
 
 	if r.heartbeatElapsed >= r.raftOpts.heartbeatTimeout {
 		r.heartbeatElapsed = 0
-		r.Step(&pb.Message{From: r.id, Type: pb.MsgBeat})
+		r.Step(pb.Message{From: r.id, Type: pb.MsgBeat})
 	}
 }
 
-func (r *raft) Step(m *pb.Message) error {
+func (r *raft) Step(m pb.Message) error {
 	// Handle the message term, which may result in our stepping down to a follower.
 	switch {
 	case m.Term == 0:
@@ -508,7 +519,7 @@ func (r *raft) Step(m *pb.Message) error {
 		}
 
 	default:
-		err := r.stepFunc(r, m)
+		err := r.stepFunc(r, &m)
 		if err != nil {
 			return err
 		}
@@ -653,7 +664,7 @@ func (r *raft) hup(t CampaignType) {
 	r.campaign(t)
 }
 
-func numOfPendingConf(ents []pb.Entry) int {
+func numOfPendingConf(ents []*pb.Entry) int {
 	n := 0
 	for i := range ents {
 		if ents[i].Type == pb.EntryConfChange {
@@ -819,44 +830,44 @@ func (r *raft) handlePropMsg(m *pb.Message) error {
 }
 
 func (r *raft) handleConfigEntry(ents []pb.Entry) {
-	for i := range ents {
-		e := &ents[i]
-		var cc pb.ConfChangeI
-		if e.Type == pb.EntryConfChange {
-			var ccc pb.ConfChange
-			if err := ccc.Unmarshal(e.Data); err != nil {
-				panic(err)
-			}
-			cc = ccc
-		} else if e.Type == pb.EntryConfChangeV2 {
-			var ccc pb.ConfChangeV2
-			if err := ccc.Unmarshal(e.Data); err != nil {
-				panic(err)
-			}
-			cc = ccc
-		}
-		if cc != nil {
-			alreadyPending := r.pendingConfIndex > r.raftLog.applied
-			alreadyJoint := len(r.prs.Config.Voters[1]) > 0
-			wantsLeaveJoint := len(cc.AsV2().Changes) == 0
-
-			var refused string
-			if alreadyPending {
-				refused = fmt.Sprintf("possible unapplied conf change at index %d (applied to %d)", r.pendingConfIndex, r.raftLog.applied)
-			} else if alreadyJoint && !wantsLeaveJoint {
-				refused = "must transition out of joint config first"
-			} else if !alreadyJoint && wantsLeaveJoint {
-				refused = "not in joint state; refusing empty conf change"
-			}
-
-			if refused != "" {
-				log.Infof("%x ignoring conf change %v at config %s: %s", r.id, cc, r.prs.Config, refused)
-				m.Entries[i] = pb.Entry{Type: pb.EntryNormal}
-			} else {
-				r.pendingConfIndex = r.raftLog.lastIndex() + uint64(i) + 1
-			}
-		}
-	}
+	//for i := range ents {
+	//	e := &ents[i]
+	//	var cc pb.ConfChangeI
+	//	if e.Type == pb.EntryConfChange {
+	//		var ccc pb.ConfChange
+	//		if err := ccc.Unmarshal(e.Data); err != nil {
+	//			panic(err)
+	//		}
+	//		cc = ccc
+	//	} else if e.Type == pb.EntryConfChangeV2 {
+	//		var ccc pb.ConfChangeV2
+	//		if err := ccc.Unmarshal(e.Data); err != nil {
+	//			panic(err)
+	//		}
+	//		cc = ccc
+	//	}
+	//	if cc != nil {
+	//		alreadyPending := r.pendingConfIndex > r.raftLog.applied
+	//		alreadyJoint := len(r.prs.Config.Voters[1]) > 0
+	//		wantsLeaveJoint := len(cc.AsV2().Changes) == 0
+	//
+	//		var refused string
+	//		if alreadyPending {
+	//			refused = fmt.Sprintf("possible unapplied conf change at index %d (applied to %d)", r.pendingConfIndex, r.raftLog.applied)
+	//		} else if alreadyJoint && !wantsLeaveJoint {
+	//			refused = "must transition out of joint config first"
+	//		} else if !alreadyJoint && wantsLeaveJoint {
+	//			refused = "not in joint state; refusing empty conf change"
+	//		}
+	//
+	//		if refused != "" {
+	//			log.Infof("%x ignoring conf change %v at config %s: %s", r.id, cc, r.prs.Config, refused)
+	//			m.Entries[i] = pb.Entry{Type: pb.EntryNormal}
+	//		} else {
+	//			r.pendingConfIndex = r.raftLog.lastIndex() + uint64(i) + 1
+	//		}
+	//	}
+	//}
 }
 
 func (r *raft) appendEnts(es ...pb.Entry) (accepted bool) {
@@ -868,7 +879,7 @@ func (r *raft) appendEnts(es ...pb.Entry) (accepted bool) {
 
 	after := es[0].Index - 1
 	if after < r.raftLog.committed {
-		log.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
+		log.Panicf("after(%d) is out of range [committed(%d)]", after, r.raftLog.committed)
 	}
 
 	// 限流
@@ -894,7 +905,7 @@ func (r *raft) bcastAppend() {
 }
 
 func (r *raft) sendAppend(to uint64) {
-	r.maybeSendAppend(to, true)
+	//r.maybeSendAppend(to, true)
 }
 
 func (r *raft) handleAppendResponse(m *pb.Message, pr *tracker.Progress) {
@@ -952,8 +963,8 @@ func (r *raft) handleAppendResponse(m *pb.Message, pr *tracker.Progress) {
 			// replicate, or when freeTo() covers multiple messages). If
 			// we have more entries to send, send as many messages as we
 			// can (without sending empty messages for the commit index)
-			for r.maybeSendAppend(m.From, false) {
-			}
+			//for r.maybeSendAppend(m.From, false) {
+			//}
 			// Transfer leadership is in progress.
 			if m.From == r.leadTransferee && pr.Match == r.raftLog.lastIndex() {
 				log.Infof("%x sent MsgTimeoutNow to %x after received MsgAppResp", r.id, m.From)
@@ -1015,7 +1026,7 @@ func (r *raft) responseToReadIndexReq(req pb.Message, readIndex uint64) pb.Messa
 
 // committedEntryInCurrentTerm return true if the peer has committed an entry in its term.
 func (r *raft) committedEntryInCurrentTerm() bool {
-	return r.raftLog.zeroTermOnErrCompacted(r.raftLog.term(r.raftLog.committed)) == r.Term
+	return r.raftLog.zeroTermOnErrCompacted(r.raftLog.Term(r.raftLog.committed)) == r.Term
 }
 
 // ------------------ follower behavior ------------------
@@ -1028,43 +1039,43 @@ func (r *raft) handleHeartbeat(m *pb.Message) {
 }
 
 func (r *raft) handleAppendEntries(m *pb.Message) {
-	r.electionElapsed = 0
-	r.lead = m.From
-	if m.Index < r.raftLog.committed {
-		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed})
-		return
-	}
-
-	if mlastIndex, ok := r.raftLog.maybeAppend(m.Index, m.LogTerm, m.Commit, m.Entries...); ok {
-		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: mlastIndex})
-	} else {
-		r.logger.Debugf("%x [logterm: %d, index: %d] rejected MsgApp [logterm: %d, index: %d] from %x",
-			r.id, r.raftLog.zeroTermOnErrCompacted(r.raftLog.term(m.Index)), m.Index, m.LogTerm, m.Index, m.From)
-
-		// Return a hint to the leader about the maximum index and term that the
-		// two logs could be divergent at. Do this by searching through the
-		// follower's log for the maximum (index, term) pair with a term <= the
-		// MsgApp's LogTerm and an index <= the MsgApp's Index. This can help
-		// skip all indexes in the follower's uncommitted tail with terms
-		// greater than the MsgApp's LogTerm.
-		//
-		// See the other caller for findConflictByTerm (in stepLeader) for a much
-		// more detailed explanation of this mechanism.
-		hintIndex := min(m.Index, r.raftLog.lastIndex())
-		hintIndex = r.raftLog.findConflictByTerm(hintIndex, m.LogTerm)
-		hintTerm, err := r.raftLog.term(hintIndex)
-		if err != nil {
-			panic(fmt.Sprintf("term(%d) must be valid, but got %v", hintIndex, err))
-		}
-		r.send(pb.Message{
-			To:         m.From,
-			Type:       pb.MsgAppResp,
-			Index:      m.Index,
-			Reject:     true,
-			RejectHint: hintIndex,
-			LogTerm:    hintTerm,
-		})
-	}
+	//r.electionElapsed = 0
+	//r.lead = m.From
+	//if m.Index < r.raftLog.committed {
+	//	r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed})
+	//	return
+	//}
+	//
+	//if mlastIndex, ok := r.raftLog.maybeAppend(m.Index, m.LogTerm, m.Commit, m.Entries...); ok {
+	//	r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: mlastIndex})
+	//} else {
+	//	r.logger.Debugf("%x [logterm: %d, index: %d] rejected MsgApp [logterm: %d, index: %d] from %x",
+	//		r.id, r.raftLog.zeroTermOnErrCompacted(r.raftLog.term(m.Index)), m.Index, m.LogTerm, m.Index, m.From)
+	//
+	//	// Return a hint to the leader about the maximum index and term that the
+	//	// two logs could be divergent at. Do this by searching through the
+	//	// follower's log for the maximum (index, term) pair with a term <= the
+	//	// MsgApp's LogTerm and an index <= the MsgApp's Index. This can help
+	//	// skip all indexes in the follower's uncommitted tail with terms
+	//	// greater than the MsgApp's LogTerm.
+	//	//
+	//	// See the other caller for findConflictByTerm (in stepLeader) for a much
+	//	// more detailed explanation of this mechanism.
+	//	hintIndex := min(m.Index, r.raftLog.lastIndex())
+	//	hintIndex = r.raftLog.findConflictByTerm(hintIndex, m.LogTerm)
+	//	hintTerm, err := r.raftLog.term(hintIndex)
+	//	if err != nil {
+	//		panic(fmt.Sprintf("term(%d) must be valid, but got %v", hintIndex, err))
+	//	}
+	//	r.send(pb.Message{
+	//		To:         m.From,
+	//		Type:       pb.MsgAppResp,
+	//		Index:      m.Index,
+	//		Reject:     true,
+	//		RejectHint: hintIndex,
+	//		LogTerm:    hintTerm,
+	//	})
+	//}
 }
 
 // ------------------ candidate behavior ------------------
@@ -1167,7 +1178,7 @@ func (r *raft) switchToConfig(cfg tracker.Config, trk tracker.ProgressMap) pb.Co
 		// let them wait out a heartbeat interval (or the next incoming
 		// proposal).
 		r.trk.Visit(func(id uint64, pr *tracker.Progress) {
-			r.maybeSendAppend(id, false /* sendIfEmpty */)
+			//r.maybeSendAppend(id, false /* sendIfEmpty */)
 		})
 	}
 	// If the the leadTransferee was removed or demoted, abort the leadership transfer.
@@ -1245,15 +1256,16 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 // the commit index changed (in which case the caller should call
 // r.bcastAppend).
 func (r *raft) maybeCommit() bool {
-	mci := r.trk.Committed()
-	return r.raftLog.maybeCommit(mci, r.Term)
+	//mci := r.trk.Committed()
+	//return r.raftLog.maybeCommit(mci, r.Term)
+	return false
 }
 
 // promotable indicates whether state machine can be promoted to leader,
 // which is true when its own id is in progress list.
 func (r *raft) promotable() bool {
 	pr := r.trk.Progress[r.id]
-	return pr != nil && !pr.IsLearner && !r.raftLog.hasPendingSnapshot()
+	return pr != nil && !pr.IsLearner
 }
 
 func (r *raft) sendTimeoutNow(to uint64) {
@@ -1314,4 +1326,40 @@ func (r *lockedRand) Intn(n int) int {
 
 var globalRand = &lockedRand{
 	rand: rand.New(rand.NewSource(time.Now().UnixNano())),
+}
+
+func (r *raft) advance(rd Ready) {
+	r.reduceUncommittedSize(rd.CommittedEntries)
+
+	// If entries were applied (or a snapshot), update our cursor for
+	// the next Ready. Note that if the current HardState contains a
+	// new Commit index, this does not mean that we're also applying
+	// all of the new entries due to commit pagination by size.
+	if newApplied := rd.appliedCursor(); newApplied > 0 {
+		oldApplied := r.raftLog.applied
+		r.raftLog.appliedTo(newApplied)
+
+		if r.trk.Config.AutoLeave && oldApplied <= r.pendingConfIndex && newApplied >= r.pendingConfIndex && r.state == StateLeader {
+			// If the current (and most recent, at least for this leader's term)
+			// configuration should be auto-left, initiate that now. We use a
+			// nil Data which unmarshals into an empty ConfChangeV2 and has the
+			// benefit that appendEntry can never refuse it based on its size
+			// (which registers as zero).
+			ent := pb.Entry{
+				Type: pb.EntryConfChangeV2,
+				Data: nil,
+			}
+			// There's no way in which this proposal should be able to be rejected.
+			if !r.appendEntry(ent) {
+				panic("refused un-refusable auto-leaving ConfChangeV2")
+			}
+			r.pendingConfIndex = r.raftLog.lastIndex()
+			log.Infof("initiating automatic transition out of joint configuration %s", r.trk.Config)
+		}
+	}
+
+	if len(rd.Entries) > 0 {
+		e := rd.Entries[len(rd.Entries)-1]
+		r.raftLog.stableTo(e.Index, e.Term)
+	}
 }
