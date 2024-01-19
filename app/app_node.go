@@ -128,14 +128,14 @@ func (an *AppNode) servePropCAndConfC() {
 	for an.proposeC != nil && an.confChangeC != nil {
 		select {
 		case prop := <-an.proposeC:
-			err := an.raftNode.Propose(prop)
+			err := an.raftNode.Propose(context.TODO(), prop)
 			if err != nil {
 				log.Errorf("propose err", err)
 			}
 		case cc := <-an.confChangeC:
 			confChangeCount++
 			cc.ID = confChangeCount
-			err := an.raftNode.ProposeConfChange(cc)
+			err := an.raftNode.ProposeConfChange(context.TODO(), cc)
 			if err != nil {
 				log.Errorf("propose conf err", err)
 			}

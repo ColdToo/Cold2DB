@@ -1336,26 +1336,7 @@ func (r *raft) advance(rd Ready) {
 	// new Commit index, this does not mean that we're also applying
 	// all of the new entries due to commit pagination by size.
 	if newApplied := rd.appliedCursor(); newApplied > 0 {
-		oldApplied := r.raftLog.applied
 		r.raftLog.appliedTo(newApplied)
-
-		if r.trk.Config.AutoLeave && oldApplied <= r.pendingConfIndex && newApplied >= r.pendingConfIndex && r.state == StateLeader {
-			// If the current (and most recent, at least for this leader's term)
-			// configuration should be auto-left, initiate that now. We use a
-			// nil Data which unmarshals into an empty ConfChangeV2 and has the
-			// benefit that appendEntry can never refuse it based on its size
-			// (which registers as zero).
-			ent := pb.Entry{
-				Type: pb.EntryConfChangeV2,
-				Data: nil,
-			}
-			// There's no way in which this proposal should be able to be rejected.
-			if !r.appendEntry(ent) {
-				panic("refused un-refusable auto-leaving ConfChangeV2")
-			}
-			r.pendingConfIndex = r.raftLog.lastIndex()
-			log.Infof("initiating automatic transition out of joint configuration %s", r.trk.Config)
-		}
 	}
 
 	if len(rd.Entries) > 0 {
