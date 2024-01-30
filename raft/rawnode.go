@@ -76,9 +76,7 @@ func (rn *rawNode) acceptReady(rd Ready) {
 	if rd.SoftState != nil {
 		rn.prevSoftSt = rd.SoftState
 	}
-	if len(rd.ReadStates) != 0 {
-		rn.raft.readStates = nil
-	}
+
 	rn.raft.msgs = nil
 }
 

@@ -529,7 +529,7 @@ func stepLeader(r *raft, m *pb.Message) error {
 func stepFollower(r *raft, m *pb.Message) error {
 	switch m.Type {
 	case pb.MsgApp:
-		r.handleAppendEntries(m)
+		r.handleAppendEntries(*m)
 	case pb.MsgHeartbeat:
 		r.handleHeartbeat(m)
 	case pb.MsgSnap:
@@ -561,7 +561,7 @@ func stepCandidate(r *raft, m *pb.Message) error {
 		return ErrProposalDropped
 	case pb.MsgApp:
 		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
-		r.handleAppendEntries(m)
+		r.handleAppendEntries(*m)
 	case pb.MsgHeartbeat:
 		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
 		r.handleHeartbeat(m)
@@ -592,12 +592,7 @@ func stepCandidate(r *raft, m *pb.Message) error {
 // ------------------- leader behavior -------------------
 
 func (r *raft) bcastHeartbeat() {
-	lastCtx := r.readOnly.lastPendingRequestCtx()
-	if len(lastCtx) == 0 {
-		r.bcastHeartbeatWithCtx(nil)
-	} else {
-		r.bcastHeartbeatWithCtx([]byte(lastCtx))
-	}
+	r.bcastHeartbeatWithCtx(nil)
 }
 
 func (r *raft) bcastHeartbeatWithCtx(ctx []byte) {
@@ -639,24 +634,10 @@ func (r *raft) handleHeartbeatResponse(m *pb.Message, pr *tracker.Progress) {
 		r.sendAppend(m.From)
 	}
 
-	if r.readOnly.option != ReadOnlySafe || len(m.Context) == 0 {
-		return
-	}
-
-	if r.trk.Voters.VoteResult(r.readOnly.recvAck(m.From, m.Context)) != quorum.VoteWon {
-		return
-	}
-
-	rss := r.readOnly.advance(m)
-	for _, rs := range rss {
-		if resp := r.responseToReadIndexReq(rs.req, rs.index); resp.To != None {
-			r.send(resp)
-		}
-	}
 	return
 }
 
-func (r *raft) handleSnapStatus(m *pb.Message, pr *tracker.Progress) {
+func (r *raft) handleSnapStatus(m *pb.Message, pr *tracker.Progress) (err error) {
 	if pr.State != tracker.StateSnapshot {
 		return nil
 	}
@@ -666,18 +647,19 @@ func (r *raft) handleSnapStatus(m *pb.Message, pr *tracker.Progress) {
 	// logic pulled into a newly created Progress state machine handler).
 	if !m.Reject {
 		pr.BecomeProbe()
-		r.logger.Debugf("%x snapshot succeeded, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
+		log.Debugf("%x snapshot succeeded, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
 	} else {
 		// NB: the order here matters or we'll be probing erroneously from
 		// the snapshot index, but the snapshot never applied.
 		pr.PendingSnapshot = 0
 		pr.BecomeProbe()
-		r.logger.Debugf("%x snapshot failed, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
+		log.Debugf("%x snapshot failed, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
 	}
 	// If snapshot finish, wait for the MsgAppResp from the remote node before sending
 	// out the next MsgApp.
 	// If snapshot failure, wait for a heartbeat interval before next try
 	pr.ProbeSent = true
+	return err
 }
 
 func (r *raft) handleMsgUnreachableStatus(m *pb.Message, pr *tracker.Progress) {
@@ -708,13 +690,13 @@ func (r *raft) handleTransferLeader(m *pb.Message, pr *tracker.Progress) {
 
 	}
 	// Transfer leadership to third party.
-	r.logger.Infof("%x [term %d] starts to transfer leadership to %x", r.id, r.Term, leadTransferee)
+	log.Infof("%x [term %d] starts to transfer leadership to %x", r.id, r.Term, leadTransferee)
 	// Transfer leadership should be finished in one electionTimeout, so reset r.electionElapsed.
 	r.electionElapsed = 0
 	r.leadTransferee = leadTransferee
 	if pr.Match == r.raftLog.lastIndex() {
 		r.sendTimeoutNow(leadTransferee)
-		r.logger.Infof("%x sends MsgTimeoutNow to %x immediately as %x already has up-to-date log", r.id, leadTransferee, leadTransferee)
+		log.Infof("%x sends MsgTimeoutNow to %x immediately as %x already has up-to-date log", r.id, leadTransferee, leadTransferee)
 	} else {
 		r.sendAppend(leadTransferee)
 	}
@@ -892,18 +874,11 @@ func releasePendingReadIndexMessages(r *raft) {
 		log.Error("pending MsgReadIndex should be released only after first commit in current term")
 		return
 	}
-
-	msgs := r.pendingReadIndexMessages
-	r.pendingReadIndexMessages = nil
-
-	for _, m := range msgs {
-		sendMsgReadIndexResponse(r, m)
-	}
 }
 
 // committedEntryInCurrentTerm return true if the peer has committed an entry in its term.
 func (r *raft) committedEntryInCurrentTerm() bool {
-	return r.raftLog.zeroTermOnErrCompacted(r.raftLog.Term(r.raftLog.committed)) == r.Term
+	return r.raftLog.zeroTermOnErrCompacted(r.raftLog.term(r.raftLog.committed)) == r.Term
 }
 
 // ------------------ follower behavior ------------------
@@ -1009,24 +984,6 @@ func (r *raft) switchToConfig(cfg tracker.Config, trk tracker.ProgressMap) pb.Co
 
 	log.Infof("%x switched to configuration %s", r.id, r.trk.Config)
 	cs := r.trk.ConfState()
-	pr, ok := r.trk.Progress[r.id]
-
-	// Update whether the node itself is a learner, resetting to false when the
-	// node is removed.
-	r.isLearner = ok && pr.IsLearner
-
-	if (!ok || r.isLearner) && r.state == StateLeader {
-		// This node is leader and was removed or demoted. We prevent demotions
-		// at the time writing but hypothetically we handle them the same way as
-		// removing the leader: stepping down into the next Term.
-		//
-		// TODO(tbg): step down (for sanity) and ask follower with largest Match
-		// to TimeoutNow (to avoid interruption). This might still drop some
-		// proposals but it's better than nothing.
-		//
-		// TODO(tbg): test this branch. It is untested at the time of writing.
-		return cs
-	}
 
 	// The remaining steps only make sense if this node is the leader and there
 	// are other nodes.
@@ -1185,7 +1142,7 @@ func (r *raft) advance(rd Ready) {
 
 	if len(rd.Entries) > 0 {
 		e := rd.Entries[len(rd.Entries)-1]
-		r.raftLog.stableTo(e.Index, e.Term)
+		r.raftLog.stableTo(e.Index)
 	}
 }
 
@@ -1195,64 +1152,64 @@ func (r *raft) advance(rd Ready) {
 // ("empty" messages are useful to convey updated Commit indexes, but
 // are undesirable when we're sending multiple messages in a batch).
 func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
-	pr := r.trk.Progress[to]
-	if pr.IsPaused() {
-		return false
-	}
-	m := pb.Message{}
-	m.To = to
-
-	term, errt := r.raftLog.term(pr.Next - 1)
-	ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize)
-	if len(ents) == 0 && !sendIfEmpty {
-		return false
-	}
-
-	if errt != nil || erre != nil { // send snapshot if we failed to get term or entries
-		if !pr.RecentActive {
-			r.logger.Debugf("ignore sending snapshot to %x since it is not recently active", to)
-			return false
-		}
-
-		m.Type = pb.MsgSnap
-		snapshot, err := r.raftLog.snapshot()
-		if err != nil {
-			if err == ErrSnapshotTemporarilyUnavailable {
-				r.logger.Debugf("%x failed to send snapshot to %x because snapshot is temporarily unavailable", r.id, to)
-				return false
-			}
-			panic(err) // TODO(bdarnell)
-		}
-		if IsEmptySnap(snapshot) {
-			panic("need non-empty snapshot")
-		}
-		m.Snapshot = snapshot
-		sindex, sterm := snapshot.Metadata.Index, snapshot.Metadata.Term
-		r.logger.Debugf("%x [firstindex: %d, commit: %d] sent snapshot[index: %d, term: %d] to %x [%s]",
-			r.id, r.raftLog.firstIndex(), r.raftLog.committed, sindex, sterm, to, pr)
-		pr.BecomeSnapshot(sindex)
-		r.logger.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pr)
-	} else {
-		m.Type = pb.MsgApp
-		m.Index = pr.Next - 1
-		m.LogTerm = term
-		m.Entries = ents
-		m.Commit = r.raftLog.committed
-		if n := len(m.Entries); n != 0 {
-			switch pr.State {
-			// optimistically increase the next when in StateReplicate
-			case tracker.StateReplicate:
-				last := m.Entries[n-1].Index
-				pr.OptimisticUpdate(last)
-				pr.Inflights.Add(last)
-			case tracker.StateProbe:
-				pr.ProbeSent = true
-			default:
-				r.logger.Panicf("%x is sending append in unhandled state %s", r.id, pr.State)
-			}
-		}
-	}
-	r.send(m)
+	//pr := r.trk.Progress[to]
+	//if pr.IsPaused() {
+	//	return false
+	//}
+	//m := pb.Message{}
+	//m.To = to
+	//
+	//term, errt := r.raftLog.term(pr.Next - 1)
+	//ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize)
+	//if len(ents) == 0 && !sendIfEmpty {
+	//	return false
+	//}
+	//
+	//if errt != nil || erre != nil { // send snapshot if we failed to get term or entries
+	//	if !pr.RecentActive {
+	//		log.Debugf("ignore sending snapshot to %x since it is not recently active", to)
+	//		return false
+	//	}
+	//
+	//	m.Type = pb.MsgSnap
+	//	snapshot, err := r.raftLog.snapshot()
+	//	if err != nil {
+	//		if err == ErrSnapshotTemporarilyUnavailable {
+	//			log.Debugf("%x failed to send snapshot to %x because snapshot is temporarily unavailable", r.id, to)
+	//			return false
+	//		}
+	//		panic(err) // TODO(bdarnell)
+	//	}
+	//	if IsEmptySnap(snapshot) {
+	//		panic("need non-empty snapshot")
+	//	}
+	//	m.Snapshot = snapshot
+	//	sindex, sterm := snapshot.Index, snapshot.Metadata.Term
+	//	log.Debugf("%x [firstindex: %d, commit: %d] sent snapshot[index: %d, term: %d] to %x [%s]",
+	//		r.id, r.raftLog.firstIndex(), r.raftLog.committed, sindex, sterm, to, pr)
+	//	pr.BecomeSnapshot(sindex)
+	//	log.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pr)
+	//} else {
+	//	m.Type = pb.MsgApp
+	//	m.Index = pr.Next - 1
+	//	m.LogTerm = term
+	//	m.Entries = ents
+	//	m.Commit = r.raftLog.committed
+	//	if n := len(m.Entries); n != 0 {
+	//		switch pr.State {
+	//		// optimistically increase the next when in StateReplicate
+	//		case tracker.StateReplicate:
+	//			last := m.Entries[n-1].Index
+	//			pr.OptimisticUpdate(last)
+	//			pr.Inflights.Add(last)
+	//		case tracker.StateProbe:
+	//			pr.ProbeSent = true
+	//		default:
+	//			log.Panicf("%x is sending append in unhandled state %s", r.id, pr.State)
+	//		}
+	//	}
+	//}
+	//r.send(m)
 	return true
 }
 
@@ -1286,7 +1243,7 @@ func (r *raft) hup(t CampaignType) {
 		log.Warnf("%x is unpromotable and can not campaign", r.id)
 		return
 	}
-	ents, err := r.raftLog.Entries(r.raftLog.applied+1, r.raftLog.committed+1, noLimit)
+	ents, err := r.raftLog.entries(r.raftLog.committed+1, noLimit)
 	if err != nil {
 		log.Panicf("unexpected error getting unapplied entries (%v)", err)
 	}
@@ -1300,7 +1257,7 @@ func (r *raft) hup(t CampaignType) {
 	r.campaign(t)
 }
 
-func numOfPendingConf(ents []*pb.Entry) int {
+func numOfPendingConf(ents []pb.Entry) int {
 	n := 0
 	for i := range ents {
 		if ents[i].Type == pb.EntryConfChange {

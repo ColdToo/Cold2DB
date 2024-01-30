@@ -13,7 +13,7 @@ import (
 	"sync"
 )
 
-//go:generate mockgen -source=./db.go -destination=../mocks/db.go -package=mock
+//go:generate mockgen -source=./db.go -destination=./mocks/db.go -package=mocks
 type Storage interface {
 	Get(key []byte) (kv *marshal.KV, err error)
 	Scan(lowKey []byte, highKey []byte) (kvs []*marshal.KV, err error)
@@ -21,6 +21,7 @@ type Storage interface {
 
 	PersistUnstableEnts(entries []*pb.Entry) error
 	PersistHardState(st pb.HardState) error
+	// Truncate truncate index 及其之后的日志
 	Truncate(index uint64) error
 	InitialState() (pb.HardState, pb.ConfState, error)
 	Entries(lo, hi, maxSize uint64) ([]pb.Entry, error)
@@ -31,8 +32,6 @@ type Storage interface {
 
 	Close()
 }
-
-var C2 *C2KV
 
 type C2KV struct {
 	dbCfg *config.DBConfig
@@ -51,15 +50,9 @@ type C2KV struct {
 
 	logOffset uint64
 
-	entries []*pb.Entry //stable raft log entries
-}
+	sync.Mutex
 
-func GetStorage() (Storage, error) {
-	if C2 != nil {
-		return C2, nil
-	} else {
-		return nil, code.ErrDBNotInit
-	}
+	entries []*pb.Entry //stable raft log entries
 }
 
 func dbCfgCheck(dbCfg *config.DBConfig) (err error) {
@@ -264,21 +257,21 @@ func (db *C2KV) Scan(lowKey []byte, highKey []byte) ([]*marshal.KV, error) {
 		wg.Done()
 	}()
 
-	var memsKvs []*marshal.KV
+	var medbKvs []*marshal.KV
 	for _, mem := range db.immtableQ.tables {
 		memKvs, err := mem.Scan(lowKey, highKey)
 		if err != nil {
 			return nil, err
 		}
-		memsKvs = append(memsKvs, memKvs...)
+		medbKvs = append(medbKvs, memKvs...)
 	}
 	activeMemKvs, err := db.activeMem.Scan(lowKey, highKey)
 	if err != nil {
 		return nil, err
 	}
-	memsKvs = append(memsKvs, activeMemKvs...)
+	medbKvs = append(medbKvs, activeMemKvs...)
 	wg.Wait()
-	kvSlice = append(kvSlice, memsKvs...)
+	kvSlice = append(kvSlice, medbKvs...)
 	return kvSlice, nil
 }
 
@@ -305,20 +298,15 @@ func (db *C2KV) maybeRotateMemTable(bytesCount int64) {
 }
 
 // raft log
-
-func (db *C2KV) Entries(lo, hi, maxSize uint64) (entries []pb.Entry, err error) {
-	if int(lo) < len(db.entries) {
-		return nil, errors.New("some entries is compacted")
-	}
-	return
-}
-
-func (db *C2KV) PersistHardState(st pb.HardState) error {
-	db.wal.RaftStateSegment.RaftState = st
-	return db.wal.RaftStateSegment.Flush()
-}
-
 func (db *C2KV) PersistUnstableEnts(entries []*pb.Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	if db.lastIndex()+1 != db.firstIndex() {
+		log.Panicf("should not happen")
+	}
+
 	err := db.wal.Write(entries)
 	if err != nil {
 		return err
@@ -327,31 +315,64 @@ func (db *C2KV) PersistUnstableEnts(entries []*pb.Entry) error {
 	return nil
 }
 
-func (db *C2KV) Term(i uint64) (uint64, error) {
-	//如果i已经applied返回compact错误，若没有则返回对应term
-	return 0, errors.New("the specific index entry is compacted")
+func (db *C2KV) PersistHardState(st pb.HardState) error {
+	db.wal.RaftStateSegment.RaftState = st
+	return db.wal.RaftStateSegment.Flush()
 }
 
-// /
+func (db *C2KV) Truncate(index uint64) error {
+	offset := db.entries[0].Index
+	db.entries = db.entries[index-offset:]
+	return db.wal.Truncate(index)
+}
+
+func (db *C2KV) Entries(lo, hi, maxSize uint64) (entries []pb.Entry, err error) {
+	if int(lo) < len(db.entries) {
+		return nil, errors.New("some entries is compacted")
+	}
+
+	return
+}
+
+func (db *C2KV) Term(i uint64) (uint64, error) {
+	db.Lock()
+	defer db.Unlock()
+	offset := db.entries[0].Index
+	if i < offset {
+		return 0, code.ErrCompacted
+	}
+	if int(i-offset) >= len(db.entries) {
+		return 0, code.ErrUnavailable
+	}
+	return db.entries[i-offset].Term, nil
+}
+
 func (db *C2KV) FirstIndex() uint64 {
-	return 0
+	db.Lock()
+	defer db.Unlock()
+	return db.firstIndex()
+}
+
+func (db *C2KV) firstIndex() uint64 {
+	return db.entries[0].Index + 1
 }
 
 func (db *C2KV) LastIndex() uint64 {
-	return 0
+	db.Lock()
+	defer db.Unlock()
+	return db.lastIndex()
 }
 
-// /
+func (db *C2KV) lastIndex() uint64 {
+	return db.entries[uint64(len(db.entries))-1].Index
+}
+
 func (db *C2KV) Snapshot() (pb.Snapshot, error) {
 	return pb.Snapshot{}, nil
 }
 
 func (db *C2KV) InitialState() (pb.HardState, pb.ConfState, error) {
 	return pb.HardState{}, pb.ConfState{}, nil
-}
-
-func (db *C2KV) Truncate(index uint64) error {
-	return db.wal.Truncate(index)
 }
 
 func (db *C2KV) Close() {

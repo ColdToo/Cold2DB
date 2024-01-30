@@ -96,9 +96,6 @@ func DescribeReady(rd Ready, f EntryFormatter) string {
 		fmt.Fprintf(&buf, "HardState %s", DescribeHardState(rd.HardState))
 		buf.WriteByte('\n')
 	}
-	if len(rd.ReadStates) > 0 {
-		fmt.Fprintf(&buf, "ReadStates %v\n", rd.ReadStates)
-	}
 	if len(rd.Entries) > 0 {
 		buf.WriteString("Entries:\n")
 		fmt.Fprint(&buf, DescribeEntries(rd.Entries, f))
@@ -210,6 +207,9 @@ func DescribeEntries(ents []pb.Entry, f EntryFormatter) string {
 
 func limitSize(ents []pb.Entry, maxSize uint64) []pb.Entry {
 	if len(ents) == 0 {
+		return ents
+	}
+	if maxSize == noLimit {
 		return ents
 	}
 	size := ents[0].Size()

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"github.com/ColdToo/Cold2DB/db/Mock"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"reflect"
 	"testing"
@@ -16,10 +15,10 @@ var TestMemConfig = config.MemConfig{
 
 func TestMemTable_Scan(t *testing.T) {
 	//获取验证集
-	kvs := Mock.KVS_RAND_35MB_HASDEL_UQKey
+	kvs := mocks.KVS_RAND_35MB_HASDEL_UQKey
 	max := len(kvs) - 1
 	verifyKvs := make([]*marshal.KV, 0)
-	lowIndex := Mock.CreateRandomIndex(max)
+	lowIndex := mocks.CreateRandomIndex(max)
 	lowKey := kvs[lowIndex].Key
 	highKey := kvs[max].Key
 	for lowIndex <= max {
@@ -39,7 +38,7 @@ func TestMemTable_Scan(t *testing.T) {
 }
 
 func TestMemTable_All(t *testing.T) {
-	kvs := Mock.KVS_RAND_35MB_HASDEL_UQKey
+	kvs := mocks.KVS_RAND_35MB_HASDEL_UQKey
 	bytesKvs := make([]*marshal.BytesKV, 0)
 	for _, kv := range kvs {
 		bytesKvs = append(bytesKvs, &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeData(kv.Data)})
@@ -82,7 +81,7 @@ func TestMemTable_Queue(t *testing.T) {
 }
 
 func TestMemTable_Get(t *testing.T) {
-	kv := Mock.OneKV
+	kv := mocks.OneKV
 	mem := NewMemTable(TestMemConfig)
 	sklIter := mem.newSklIter()
 	err := sklIter.Put(kv.Key, marshal.EncodeData(kv.Data))

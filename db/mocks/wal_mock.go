@@ -1,4 +1,4 @@
-package Mock
+package mocks
 
 import (
 	"github.com/ColdToo/Cold2DB/db/marshal"

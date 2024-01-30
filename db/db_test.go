@@ -2,22 +2,22 @@ package db
 
 import (
 	"github.com/ColdToo/Cold2DB/config"
-	"github.com/ColdToo/Cold2DB/db/Mock"
 	"github.com/ColdToo/Cold2DB/db/marshal"
+	"github.com/ColdToo/Cold2DB/db/mocks"
 	"github.com/ColdToo/Cold2DB/db/wal"
 	"reflect"
 	"testing"
 )
 
 var MockDBCfg = &config.DBConfig{
-	DBPath:           Mock.DBPath,
+	DBPath:           mocks.DBPath,
 	MemTableNums:     10,
 	MemTablePipeSize: 10,
 	WalConfig: config.WalConfig{
-		WalDirPath: Mock.WALPath,
+		WalDirPath: mocks.WALPath,
 	},
 	ValueLogConfig: config.ValueLogConfig{
-		ValueLogDir: Mock.ValueLogPath,
+		ValueLogDir: mocks.ValueLogPath,
 	},
 	MemConfig: config.MemConfig{
 		MemTableSize: 60,
@@ -54,7 +54,7 @@ func TestKVStorage_dbCfgCheck(t *testing.T) {
 }
 
 func TestKVStorage_PersistUnstableEnts(t *testing.T) {
-	entSlices := Mock.ENTS_5GROUP_5000NUMS_250LENGTH
+	entSlices := mocks.ENTS_5GROUP_5000NUMS_250LENGTH
 	C2KV := MockKVStorage(MockDBCfg)
 	for _, ents := range entSlices {
 		if err := C2KV.PersistUnstableEnts(ents); err != nil {
@@ -86,7 +86,7 @@ func TestKVStorage_RestoreImMemFromWAL(t *testing.T) {
 }
 
 func TestKVStorage_KVOperate_GET(t *testing.T) {
-	kvs := Mock.KVS_RAND_27KB_HASDEL_UQKey
+	kvs := mocks.KVS_RAND_27KB_HASDEL_UQKey
 	C2KV := MockKVStorage(MockDBCfg)
 	err := C2KV.Put(kvs)
 	if err != nil {
@@ -94,7 +94,7 @@ func TestKVStorage_KVOperate_GET(t *testing.T) {
 	}
 	//获取验证集
 	max := len(kvs) - 1
-	Index := Mock.CreateRandomIndex(max)
+	Index := mocks.CreateRandomIndex(max)
 	kv := kvs[Index]
 	reKv, err := C2KV.Get(kv.Key)
 	if err != nil {
@@ -104,7 +104,7 @@ func TestKVStorage_KVOperate_GET(t *testing.T) {
 }
 
 func TestKVStorage_KVOperate_SCAN(t *testing.T) {
-	kvs := Mock.KVS_RAND_27KB_HASDEL_UQKey
+	kvs := mocks.KVS_RAND_27KB_HASDEL_UQKey
 	C2KV := MockKVStorage(MockDBCfg)
 	err := C2KV.Put(kvs)
 	if err != nil {
@@ -114,7 +114,7 @@ func TestKVStorage_KVOperate_SCAN(t *testing.T) {
 	//获取验证集
 	max := len(kvs) - 1
 	verifyKvs := make([]*marshal.KV, 0)
-	lowIndex := Mock.CreateRandomIndex(max)
+	lowIndex := mocks.CreateRandomIndex(max)
 	lowKey := kvs[lowIndex].Key
 	highKey := kvs[max].Key
 	for lowIndex <= max {

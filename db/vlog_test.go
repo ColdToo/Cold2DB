@@ -3,7 +3,6 @@ package db
 import (
 	"bytes"
 	"github.com/ColdToo/Cold2DB/config"
-	"github.com/ColdToo/Cold2DB/db/Mock"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"github.com/ColdToo/Cold2DB/db/wal"
 	"github.com/google/uuid"
@@ -14,16 +13,16 @@ import (
 
 func MockDataMemTable(kvs []*marshal.KV) *MemTable {
 	mem := NewMemTable(TestMemConfig)
-	mem.ConcurrentPut(Mock.KVsTransToByteKVs(kvs))
+	mem.ConcurrentPut(mocks.KVsTransToByteKVs(kvs))
 	return mem
 }
 
 func MockVlogFlush(mockKvs []*marshal.KV) *ValueLog {
 	kvs := MockDataMemTable(mockKvs).All()
 	partitionRecords := make([][]*marshal.KV, 3)
-	Mock.CreateValueLogDirIfNotExist(Mock.VlogPath)
-	vlogCfg := Mock.VlogCfg
-	stateSegment, err := wal.OpenKVStateSegment(Mock.FilePath, uuid.New().String()+wal.SegSuffix)
+	mocks.CreateValueLogDirIfNotExist(mocks.VlogPath)
+	vlogCfg := mocks.VlogCfg
+	stateSegment, err := wal.OpenKVStateSegment(mocks.FilePath, uuid.New().String()+wal.SegSuffix)
 	if err != nil {
 		panic(err)
 	}
@@ -56,13 +55,13 @@ func MockVlogFlush(mockKvs []*marshal.KV) *ValueLog {
 }
 
 func TestValueLog_Open(t *testing.T) {
-	Mock.CreateValueLogDirIfNotExist(Mock.VlogPath)
+	mocks.CreateValueLogDirIfNotExist(mocks.VlogPath)
 	vlogCfg := config.ValueLogConfig{
-		ValueLogDir:   Mock.VlogPath,
+		ValueLogDir:   mocks.VlogPath,
 		PartitionNums: 3,
 	}
 	tableC := make(chan *MemTable)
-	stateSegment, err := wal.OpenKVStateSegment(Mock.FilePath, uuid.New().String())
+	stateSegment, err := wal.OpenKVStateSegment(mocks.FilePath, uuid.New().String())
 	if err != nil {
 		t.Errorf("OpenKVStateSegment returned error: %v", err)
 	}
@@ -70,28 +69,28 @@ func TestValueLog_Open(t *testing.T) {
 	if err != nil {
 		t.Errorf("OpenValueLog returned error: %v", err)
 	}
-	os.RemoveAll(Mock.VlogPath)
+	os.RemoveAll(mocks.VlogPath)
 }
 
 func TestValueLog_ListenAndFlush(t *testing.T) {
-	Mock.CreateValueLogDirIfNotExist(Mock.VlogPath)
+	mocks.CreateValueLogDirIfNotExist(mocks.VlogPath)
 
 	tableC := make(chan *MemTable, 3)
-	stateSegment, err := wal.OpenKVStateSegment(Mock.FilePath, uuid.New().String()+wal.SegSuffix)
+	stateSegment, err := wal.OpenKVStateSegment(mocks.FilePath, uuid.New().String()+wal.SegSuffix)
 	if err != nil {
 		t.Errorf("OpenKVStateSegment returned error: %v", err)
 	}
-	vlog, err := OpenValueLog(Mock.VlogCfg, tableC, stateSegment)
+	vlog, err := OpenValueLog(mocks.VlogCfg, tableC, stateSegment)
 	if err != nil {
 		t.Errorf("OpenValueLog returned error: %v", err)
 	}
 
-	tableC <- MockDataMemTable(Mock.KVS_RAND_35MB_HASDEL_UQKey)
+	tableC <- MockDataMemTable(mocks.KVS_RAND_35MB_HASDEL_UQKey)
 	vlog.ListenAndFlush()
 }
 
 func TestValueLog_Scan(t *testing.T) {
-	kvs := Mock.KVS_SORT_27KB_NODEL_UQKey
+	kvs := mocks.KVS_SORT_27KB_NODEL_UQKey
 	vlog := MockVlogFlush(kvs)
 	max := len(kvs) - 1
 	defer func() {
@@ -99,7 +98,7 @@ func TestValueLog_Scan(t *testing.T) {
 	}()
 
 	verifyKvs := make([]*marshal.KV, 0)
-	lowIndex := Mock.CreateRandomIndex(max)
+	lowIndex := mocks.CreateRandomIndex(max)
 	lowKey := kvs[lowIndex].Key
 	highKey := kvs[max].Key
 	for lowIndex <= max {
@@ -112,7 +111,7 @@ func TestValueLog_Scan(t *testing.T) {
 	if err != nil {
 		return
 	}
-	sortScanKvs := Mock.SortKVSByKey(scanKvs)
+	sortScanKvs := mocks.SortKVSByKey(scanKvs)
 
 	for i := 0; i < len(sortScanKvs); i++ {
 		if bytes.Compare(sortScanKvs[i].Key, verifyKvs[i].Key) != 0 {
@@ -128,14 +127,14 @@ func TestValueLog_Scan(t *testing.T) {
 }
 
 func TestValueLog_Get(t *testing.T) {
-	kvs := Mock.KVS_RAND_35MB_NODEL_UQKey
+	kvs := mocks.KVS_RAND_35MB_NODEL_UQKey
 	vlog := MockVlogFlush(kvs)
 	defer func() {
 		vlog.Delete()
 	}()
 	max := len(kvs) - 1
 
-	Index := Mock.CreateRandomIndex(max)
+	Index := mocks.CreateRandomIndex(max)
 	kv := kvs[Index]
 	findKv, err := vlog.Get(kv.Key)
 	if err != nil {

@@ -21,7 +21,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/code"
-	"github.com/ColdToo/Cold2DB/db/Mock"
 	"github.com/ColdToo/Cold2DB/db/marshal"
 	"math/rand"
 	"strconv"
@@ -549,7 +548,7 @@ func TestBasicWrite(t *testing.T) {
 	var it Iterator
 	it.Init(l)
 
-	kvs := Mock.KVS_RAND_35MB_HASDEL_UQKey
+	kvs := mocks.KVS_RAND_35MB_HASDEL_UQKey
 	bytesKvs := make([]*marshal.BytesKV, 0)
 	for _, kv := range kvs {
 		bytesKvs = append(bytesKvs, &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeData(kv.Data)})
@@ -573,7 +572,7 @@ func TestBasicWrite(t *testing.T) {
 func TestBasicConcurrentWrite(t *testing.T) {
 	l := NewSkiplist(NewArena(100 * arenaSize))
 
-	kvs := Mock.KVS_RAND_35MB_HASDEL_UQKey
+	kvs := mocks.KVS_RAND_35MB_HASDEL_UQKey
 	bytesKvs := make([]*marshal.BytesKV, 0)
 	for _, kv := range kvs {
 		bytesKvs = append(bytesKvs, &marshal.BytesKV{Key: kv.Key, Value: marshal.EncodeData(kv.Data)})

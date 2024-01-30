@@ -32,13 +32,9 @@ var ErrSnapshotTemporarilyUnavailable = errors.New("snapshot is temporarily unav
 type raftLog struct {
 	applied uint64
 
-	first uint64
-
 	committed uint64
 
 	stabled uint64 //等于稳定存储的last index
-
-	last uint64 //相对于整个日志的last
 
 	// 这个偏移量（u.offset）表示当前不稳定日志中的第一个条目在整个日志中的位置。举个例子，
 	// 如果 u.offset 为 10，那么不稳定日志中的第一个条目在整个日志中的位置就是第 10 个位置。
@@ -61,11 +57,9 @@ func newRaftLog(storage db.Storage, maxNextEntsSize uint64) (r *raftLog) {
 		storage:         storage,
 		maxNextEntsSize: maxNextEntsSize,
 	}
-	firstIndex := storage.FirstIndex()
-	lastIndex := storage.LastIndex()
-	r.offset = lastIndex + 1
-	r.stabled = lastIndex
-	r.applied = firstIndex - 1
+	r.stabled = storage.LastIndex()
+	r.applied = storage.FirstIndex() - 1
+	r.offset = r.stabled + 1
 	return
 }
 
@@ -84,13 +78,9 @@ func (l *raftLog) firstIndex() uint64 {
 
 func (l *raftLog) lastIndex() uint64 {
 	if length := len(l.unstableEnts); length != 0 {
-		return l.offset + uint64(length)
+		return l.offset + uint64(length) - 1
 	}
-	if i := l.storage.LastIndex(); i != 0 {
-		return i
-	}
-	//index	 默认从1开始
-	return 1
+	return l.storage.LastIndex()
 }
 
 func (l *raftLog) lastTerm() uint64 {
@@ -102,8 +92,13 @@ func (l *raftLog) lastTerm() uint64 {
 }
 
 func (l *raftLog) term(i uint64) (uint64, error) {
+	// the valid term range is [index of dummy entry, last index]
+	if i < l.firstIndex() || i > l.lastIndex() {
+		return 0, nil
+	}
+
 	if i > l.stabled {
-		return l.unstableEnts[i-l.offset].Index, nil
+		return l.unstableEnts[i-l.offset].Term, nil
 	}
 
 	t, err := l.storage.Term(i)
@@ -152,13 +147,8 @@ func (l *raftLog) slice(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 		storedEnts, err := l.storage.Entries(lo, min(hi, l.offset), maxSize)
 		if err == ErrCompacted {
 			return nil, err
-		} else if err == ErrUnavailable {
-			log.Panicf("entries[%d:%d) is unavailable from storage", lo, min(hi, l.offset))
-		} else if err != nil {
-			panic(err)
 		}
 
-		// check if ents has reached the size limitation
 		if uint64(len(storedEnts)) < min(hi, l.offset)-lo {
 			return storedEnts, nil
 		}
@@ -179,9 +169,10 @@ func (l *raftLog) slice(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 	return limitSize(ents, maxSize), nil
 }
 
-// 是否满足$lo < hi。（slice获取的是左闭右开区间$[lo,hi)$的日志切片。）
-// 是否满足$lo > firstIndex，否则该范围中部分日志已被压缩，无法获取。
-// 是否满足$hi > lastIndex+1，否则该范围中部分日志还没被追加到当前节点的日志中，无法获取。
+// 是否满足lo < hi。（slice获取的是左闭右开区间$[lo,hi)$的日志切片。）
+// 是否满足lo > firstIndex，否则该范围中部分日志已被压缩，无法获取。
+// 是否满足hi > lastIndex+1，否则该范围中部分日志还没被追加到当前节点的日志中，无法获取。
+// l.firstIndex <= lo <= hi <= l.firstIndex + len(l.entries)
 func (l *raftLog) mustCheckOutOfBounds(lo, hi uint64) error {
 	if lo > hi {
 		log.Panicf("invalid slice %d > %d", lo, hi)
@@ -191,11 +182,13 @@ func (l *raftLog) mustCheckOutOfBounds(lo, hi uint64) error {
 		return ErrCompacted
 	}
 
-	if hi > l.lastIndex()+1 {
+	if hi > l.lastIndex() {
 		log.Panicf("slice[%d,%d) out of bound [%d,%d]", lo, hi, fi, l.lastIndex())
 	}
 	return nil
 }
+
+// for ready
 
 func (l *raftLog) unstableEntries() []pb.Entry {
 	if len(l.unstableEnts) == 0 {
@@ -219,70 +212,6 @@ func (l *raftLog) nextCommittedEnts() (ents []pb.Entry) {
 func (l *raftLog) hasNextCommittedEnts() bool {
 	off := max(l.applied+1, l.firstIndex())
 	return l.committed+1 > off
-}
-
-// isUpToDate determines if the given (lastIndex,term) log is more up-to-date
-// by comparing the index and term of the last entries in the existing logs.
-// If the logs have last entries with different terms, then the log with the
-// later term is more up-to-date. If the logs end with the same term, then
-// whichever log has the larger lastIndex is more up-to-date. If the logs are
-// the same, the given log is up-to-date.
-func (l *raftLog) isUpToDate(lasti, term uint64) bool {
-	return term > l.lastTerm() || (term == l.lastTerm() && lasti >= l.lastIndex())
-}
-
-func (l *raftLog) zeroTermOnErrCompacted(t uint64, err error) uint64 {
-	if err == nil {
-		return t
-	}
-	if err == ErrCompacted {
-		return 0
-	}
-	log.Panicf("unexpected error (%v)", err)
-	return 0
-}
-
-func (l *raftLog) commitTo(tocommit uint64) {
-	// never decrease commit
-	if l.committed < tocommit {
-		if l.lastIndex() < tocommit {
-			log.Panicf("tocommit(%d) is out of range [lastIndex(%d)]. Was the raft log corrupted, truncated, or lost?", tocommit, l.lastIndex())
-		}
-		l.committed = tocommit
-	}
-}
-
-func (l *raftLog) appliedTo(i uint64) {
-	if i == 0 {
-		return
-	}
-	if l.committed < i || i < l.applied {
-		log.Panicf("applied(%d) is out of range [prevApplied(%d), committed(%d)]", i, l.applied, l.committed)
-	}
-	l.applied = i
-}
-
-func (l *raftLog) stableTo(i uint64) {
-	if i >= l.offset {
-		l.unstableEnts = l.unstableEnts[i+1-l.offset:]
-		l.offset = i + 1
-		l.shrinkEntriesArray()
-	}
-}
-
-func (l *raftLog) shrinkEntriesArray() {
-	// We replace the array if we're using less than half of the space in
-	// it. This number is fairly arbitrary, chosen as an attempt to balance
-	// memory usage vs number of allocations. It could probably be improved
-	// with some focused tuning.
-	const lenMultiple = 2
-	if len(l.unstableEnts) == 0 {
-		l.unstableEnts = nil
-	} else if len(l.unstableEnts)*lenMultiple < cap(l.unstableEnts) {
-		newEntries := make([]pb.Entry, len(l.unstableEnts))
-		copy(newEntries, l.unstableEnts)
-		l.unstableEnts = newEntries
-	}
 }
 
 // append与maybeAppend是向raftLog写入日志的方法。
@@ -357,15 +286,15 @@ func (l *raftLog) truncateAndAppend(ents []pb.Entry) {
 	// after is the next index in the u.unstableEnts directly append
 	case after == l.offset+uint64(len(l.unstableEnts)):
 		l.unstableEnts = append(l.unstableEnts, ents...)
-	case after <= l.offset:
+	case after < l.offset:
 		log.Infof("replace the unstable entries from index %d", after)
-		// The log is being truncated to before our current offset
-		// portion, so set the offset and replace the entries
-		l.storage.Truncate(after)
+		if err := l.storage.Truncate(after); err != nil {
+			log.Panicf("failed to truncate the unstable entries before index %d,err:%v", after, err)
+		}
 		l.offset = after
 		l.unstableEnts = ents
 	default:
-		// after > l.offset
+		// after >= l.offset
 		log.Infof("truncate the unstable entries before index %d", after)
 		l.unstableEnts = append([]pb.Entry{}, l.unstableEnts[:after-l.offset]...)
 		l.unstableEnts = append(l.unstableEnts, ents...)
@@ -393,4 +322,62 @@ func (l *raftLog) findConflictByTerm(index uint64, term uint64) uint64 {
 		index--
 	}
 	return index
+}
+
+func (l *raftLog) isUpToDate(lasti, term uint64) bool {
+	return term > l.lastTerm() || (term == l.lastTerm() && lasti >= l.lastIndex())
+}
+
+func (l *raftLog) zeroTermOnErrCompacted(t uint64, err error) uint64 {
+	if err == nil {
+		return t
+	}
+	if err == ErrCompacted {
+		return 0
+	}
+	log.Panicf("unexpected error (%v)", err)
+	return 0
+}
+
+func (l *raftLog) commitTo(tocommit uint64) {
+	// never decrease commit
+	if l.committed < tocommit {
+		if l.lastIndex() < tocommit {
+			log.Panicf("tocommit(%d) is out of range [lastIndex(%d)]. Was the raft log corrupted, truncated, or lost?", tocommit, l.lastIndex())
+		}
+		l.committed = tocommit
+	}
+}
+
+func (l *raftLog) appliedTo(i uint64) {
+	if i == 0 {
+		return
+	}
+	if l.committed < i || i < l.applied {
+		log.Panicf("applied(%d) is out of range [prevApplied(%d), committed(%d)]", i, l.applied, l.committed)
+	}
+	l.applied = i
+}
+
+func (l *raftLog) stableTo(i uint64) {
+	if i >= l.offset {
+		l.unstableEnts = l.unstableEnts[i+1-l.offset:]
+		l.offset = i + 1
+		l.shrinkEntriesArray()
+	}
+}
+
+func (l *raftLog) shrinkEntriesArray() {
+	// We replace the array if we're using less than half of the space in
+	// it. This number is fairly arbitrary, chosen as an attempt to balance
+	// memory usage vs number of allocations. It could probably be improved
+	// with some focused tuning.
+	const lenMultiple = 2
+	if len(l.unstableEnts) == 0 {
+		l.unstableEnts = nil
+	} else if len(l.unstableEnts)*lenMultiple < cap(l.unstableEnts) {
+		newEntries := make([]pb.Entry, len(l.unstableEnts))
+		copy(newEntries, l.unstableEnts)
+		l.unstableEnts = newEntries
+	}
 }
