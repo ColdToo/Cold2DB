@@ -371,7 +371,6 @@ func (rn *raftNode) Advance() { rn.advanceC <- struct{}{} }
 // that a synchronous write to persistent storage is required.
 // MustSync 在这里，"同步写入"指的是将数据立即写入到持久化存储（如磁盘）中，
 // 并且在写入完成之前阻塞其他操作，以确保数据的持久性和一致性。
-// 这是为了保证在发生故障或重启时，系统能够恢复到一个一致的状态。
 func MustSync(st, prevst pb.HardState, entsnum int) bool {
 	// Persistent state on all servers:
 	// (Updated on stable storage before responding to RPCs)

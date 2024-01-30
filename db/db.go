@@ -22,19 +22,12 @@ type Storage interface {
 	PersistUnstableEnts(entries []*pb.Entry) error
 	PersistHardState(st pb.HardState) error
 	Truncate(index uint64) error
-	GetHardState() (pb.HardState, pb.ConfState, error)
-	Entries(lo, hi, maxSize uint64) ([]*pb.Entry, error)
-
+	InitialState() (pb.HardState, pb.ConfState, error)
+	Entries(lo, hi, maxSize uint64) ([]pb.Entry, error)
 	Term(i uint64) (uint64, error)
-	AppliedIndex() uint64
-	// FirstIndex returns the index of the first log entry that is
-	// possibly available via Entries (older entries have been incorporated
-	// into the latest Snapshot; if storage only contains the dummy entry the
-	// first log entry is not available).
 	FirstIndex() uint64
 	LastIndex() uint64
-
-	GetSnapshot() (pb.Snapshot, error)
+	Snapshot() (pb.Snapshot, error)
 
 	Close()
 }
@@ -313,7 +306,7 @@ func (db *C2KV) maybeRotateMemTable(bytesCount int64) {
 
 // raft log
 
-func (db *C2KV) Entries(lo, hi, maxSize uint64) (entries []*pb.Entry, err error) {
+func (db *C2KV) Entries(lo, hi, maxSize uint64) (entries []pb.Entry, err error) {
 	if int(lo) < len(db.entries) {
 		return nil, errors.New("some entries is compacted")
 	}
@@ -339,10 +332,6 @@ func (db *C2KV) Term(i uint64) (uint64, error) {
 	return 0, errors.New("the specific index entry is compacted")
 }
 
-func (db *C2KV) AppliedIndex() uint64 {
-	return 0
-}
-
 // /
 func (db *C2KV) FirstIndex() uint64 {
 	return 0
@@ -353,11 +342,11 @@ func (db *C2KV) LastIndex() uint64 {
 }
 
 // /
-func (db *C2KV) GetSnapshot() (pb.Snapshot, error) {
+func (db *C2KV) Snapshot() (pb.Snapshot, error) {
 	return pb.Snapshot{}, nil
 }
 
-func (db *C2KV) GetHardState() (pb.HardState, pb.ConfState, error) {
+func (db *C2KV) InitialState() (pb.HardState, pb.ConfState, error) {
 	return pb.HardState{}, pb.ConfState{}, nil
 }
 

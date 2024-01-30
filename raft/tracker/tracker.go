@@ -127,16 +127,8 @@ type ProgressTracker struct {
 func MakeProgressTracker(maxInflight int) ProgressTracker {
 	p := ProgressTracker{
 		MaxInflight: maxInflight,
-		Config: Config{
-			Voters: quorum.JointConfig{
-				quorum.MajorityConfig{},
-				nil, // only populated when used
-			},
-			Learners:     nil, // only populated when used
-			LearnersNext: nil, // only populated when used
-		},
-		Votes:    map[uint64]bool{},
-		Progress: map[uint64]*Progress{},
+		Votes:       map[uint64]bool{},
+		Progress:    map[uint64]*Progress{},
 	}
 	return p
 }
