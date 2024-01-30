@@ -28,9 +28,9 @@ type BytesKV struct {
 }
 
 type Data struct {
-	Index     uint64 //用于数据刷入到vlog时记录persist index
-	TimeStamp int64  //记录数据时间
-	Type      int8   //记录时删除还是插入
+	Index     uint64
+	TimeStamp int64
+	Type      int8
 	Value     []byte
 }
 
