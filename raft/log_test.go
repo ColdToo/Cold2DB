@@ -208,7 +208,7 @@ func TestSlice(t *testing.T) {
 	for i = 1; i < num/2; i++ {
 		persistEnts = append(persistEnts, pb.Entry{Term: offset + i, Index: offset + i})
 	}
-	storage := &db.C2KV{ent}
+	storage := &db.C2KV{}
 	l := newRaftLog(storage, noLimit)
 	for i = num / 2; i < num; i++ {
 		l.append(pb.Entry{Index: offset + i, Term: offset + i})

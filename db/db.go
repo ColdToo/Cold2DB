@@ -52,7 +52,7 @@ type C2KV struct {
 
 	sync.Mutex
 
-	entries []*pb.Entry //stable raft log entries
+	entries []pb.Entry //stable raft log entries
 }
 
 func dbCfgCheck(dbCfg *config.DBConfig) (err error) {
@@ -84,6 +84,7 @@ func OpenKVStorage(dbCfg *config.DBConfig) (C2 *C2KV, err error) {
 	C2.immtableQ = NewMemTableQueue(dbCfg.MemTableNums)
 	C2.activeMem = NewMemTable(dbCfg.MemConfig)
 	C2.memFlushC = memFlushC
+	C2.entries = make([]pb.Entry, 0)
 	if C2.wal, err = wal.NewWal(dbCfg.WalConfig); err != nil {
 		log.Panicf("open wal failed", err)
 	}
@@ -297,7 +298,6 @@ func (db *C2KV) maybeRotateMemTable(bytesCount int64) {
 	}
 }
 
-// raft log
 func (db *C2KV) PersistUnstableEnts(entries []*pb.Entry) error {
 	if len(entries) == 0 {
 		return nil
@@ -327,11 +327,18 @@ func (db *C2KV) Truncate(index uint64) error {
 }
 
 func (db *C2KV) Entries(lo, hi, maxSize uint64) (entries []pb.Entry, err error) {
-	if int(lo) < len(db.entries) {
+	if lo < db.firstIndex() || hi > db.lastIndex() {
 		return nil, errors.New("some entries is compacted")
 	}
 
-	return
+	if hi > db.lastIndex() {
+		log.Panicf("entries' hi(%d) is out of bound lastindex(%d)", hi, db.lastIndex())
+	}
+
+	offset := db.entries[0].Index
+	ents := db.entries[lo-offset : hi-offset]
+
+	return ents, nil
 }
 
 func (db *C2KV) Term(i uint64) (uint64, error) {

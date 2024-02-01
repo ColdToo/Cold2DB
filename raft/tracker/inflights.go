@@ -19,6 +19,18 @@ package tracker
 // use Full() to check whether more messages can be sent, call Add() whenever
 // they are sending a new append, and release "quota" via FreeLE() whenever an
 // ack is received.
+// Inflights is a sliding window for the inflight messages.
+// Each inflight message contains one or more log entries.
+// The max number of entries per message is defined in raft config as MaxSizePerMsg.
+// Thus inflight effectively limits both the number of inflight messages
+// and the bandwidth each Progress can use.
+// When inflights is Full, no more message should be sent.
+// When a leader sends out a message, the index of the last
+// entry should be added to inflights. The index MUST be added
+// into inflights in order.
+// When a leader receives a reply, the previous inflights should
+// be freed by calling inflights.FreeLE with the index of the last
+// received entry.
 type Inflights struct {
 	// the starting index in the buffer
 	start int

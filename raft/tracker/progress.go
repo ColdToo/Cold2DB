@@ -23,25 +23,10 @@ import (
 // Progress represents a follower’s progress in the view of the leader. Leader
 // maintains progresses of all followers, and sends entries to the follower
 // based on its progress.
-//
-// NB(tbg): Progress is basically a state machine whose transitions are mostly
-// strewn around `*raft.raft`. Additionally, some fields are only used when in a
-// certain State. All of this isn't ideal.
 type Progress struct {
 	//分别表示follower当前匹配的最大日志匹配号和下一个要应用的日志条目的匹配号。
 	Match, Next uint64
 
-	// State defines how the leader should interact with the follower.
-	//
-	// When in StateProbe, leader sends at most one replication message
-	// per heartbeat interval. It also probes actual progress of the follower.
-	//
-	// When in StateReplicate, leader optimistically increases next
-	// to the latest entry sent after sending replication message. This is
-	// an optimized state for fast replicating log entries to the follower.
-	//
-	// When in StateSnapshot, leader should have sent out snapshot
-	// before and stops sending any replication message.
 	State StateType
 
 	// PendingSnapshot is used in StateSnapshot.
@@ -54,31 +39,15 @@ type Progress struct {
 	// RecentActive is true if the progress is recently active. Receiving any messages
 	// from the corresponding follower indicates the progress is active.
 	// RecentActive can be reset to false after an election timeout.
-	//
-	// TODO(tbg): the leader should always have this set to true.
 	RecentActive bool
 
 	// ProbeSent is used while this follower is in StateProbe. When ProbeSent is
 	// true, raft should pause sending replication message to this peer until
 	// ProbeSent is reset. See ProbeAcked() and IsPaused().
+	// 是否要以probe的方式发送数据
 	ProbeSent bool
 
-	// Inflights is a sliding window for the inflight messages.
-	// Each inflight message contains one or more log entries.
-	// The max number of entries per message is defined in raft config as MaxSizePerMsg.
-	// Thus inflight effectively limits both the number of inflight messages
-	// and the bandwidth each Progress can use.
-	// When inflights is Full, no more message should be sent.
-	// When a leader sends out a message, the index of the last
-	// entry should be added to inflights. The index MUST be added
-	// into inflights in order.
-	// When a leader receives a reply, the previous inflights should
-	// be freed by calling inflights.FreeLE with the index of the last
-	// received entry.
 	Inflights *Inflights
-
-	// IsLearner is true if this progress is tracked for a learner.
-	IsLearner bool
 }
 
 // ResetState moves the Progress into the specified State, resetting ProbeSent,
@@ -160,7 +129,7 @@ func (pr *Progress) MaybeUpdate(n uint64) bool {
 // are in-flight. As a result, Next is increased to n+1.
 func (pr *Progress) OptimisticUpdate(n uint64) { pr.Next = n + 1 }
 
-// MaybeDecrTo adjusts the Progress to the receipt of a MsgApp rejection. The
+// MaybeDecreaseTo adjusts the Progress to the receipt of a MsgApp rejection. The
 // arguments are the index the follower rejected to append to its log, and its
 // last index.
 //
@@ -171,16 +140,11 @@ func (pr *Progress) OptimisticUpdate(n uint64) { pr.Next = n + 1 }
 //
 // If the rejection is genuine, Next is lowered sensibly, and the Progress is
 // cleared for sending log entries.
-func (pr *Progress) MaybeDecrTo(rejected, last uint64) bool {
+func (pr *Progress) MaybeDecreaseTo(rejected, last uint64) bool {
 	if pr.State == StateReplicate {
-		// The rejection must be stale if the progress has matched and "rejected"
-		// is smaller than "match".
 		if rejected <= pr.Match {
 			return false
 		}
-		// Directly decrease next to match + 1.
-		//
-		// TODO(tbg): why not use last if it's larger?
 		pr.Next = pr.Match + 1
 		return true
 	}

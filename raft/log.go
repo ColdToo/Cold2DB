@@ -133,6 +133,7 @@ func (l *raftLog) entries(i, maxSize uint64) (ents []pb.Entry, err error) {
 }
 
 // slice returns a slice of log entries from lo through hi-1, inclusive.
+// (lo,hi]
 func (l *raftLog) slice(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 	err := l.mustCheckOutOfBounds(lo, hi)
 	if err != nil {
@@ -301,7 +302,7 @@ func (l *raftLog) truncateAndAppend(ents []pb.Entry) {
 	}
 }
 
-func (l *raftLog) findConflictByTerm(index uint64, term uint64) uint64 {
+func (l *raftLog) findConflictIdxByTerm(index uint64, term uint64) uint64 {
 	if li := l.lastIndex(); index > li {
 		// NB: such calls should not exist, but since there is a straightfoward
 		// way to recover, do it.
