@@ -184,9 +184,6 @@ func (pr *Progress) IsPaused() bool {
 func (pr *Progress) String() string {
 	var buf strings.Builder
 	fmt.Fprintf(&buf, "%s match=%d next=%d", pr.State, pr.Match, pr.Next)
-	if pr.IsLearner {
-		fmt.Fprint(&buf, " learner")
-	}
 	if pr.IsPaused() {
 		fmt.Fprint(&buf, " paused")
 	}

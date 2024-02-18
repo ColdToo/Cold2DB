@@ -15,7 +15,6 @@
 package raft
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"github.com/ColdToo/Cold2DB/code"
@@ -358,11 +357,7 @@ func (r *raft) tickElection() {
 	r.electionElapsed++
 	if r.promotable() && r.electionElapsed >= r.randomizedElectionTimeout {
 		r.electionElapsed = 0
-		err := r.Step(pb.Message{From: r.id, Type: pb.MsgHup})
-		if err != nil {
-			log.Error("msg").Err(code.TickErr, err).Record()
-			return
-		}
+		r.Step(pb.Message{From: r.id, Type: pb.MsgHup})
 	}
 }
 
@@ -393,93 +388,7 @@ func (r *raft) tickHeartbeat() {
 }
 
 func (r *raft) Step(m pb.Message) error {
-	// Handle the message term, which may result in our stepping down to a follower.
-	switch {
-	// local message
-	case m.Term == 0:
-	case m.Term > r.Term:
-		if m.Type == pb.MsgVote || m.Type == pb.MsgPreVote {
-			force := bytes.Equal(m.Context, []byte(campaignTransfer))
-			inLease := r.raftOpts.CheckQuorum && r.lead != None && r.electionElapsed < r.raftOpts.electionTimeout
-			if !force && inLease {
-				log.Infof("%x [logterm: %d, index: %d, vote: %x] ignored %s from %x [logterm: %d, index: %d] at term %d: lease is not expired (remaining ticks: %d)",
-					r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.vote, m.Type, m.From, m.LogTerm, m.Index, r.Term, r.raftOpts.electionTimeout-r.electionElapsed)
-				return nil
-			}
-		}
-		switch {
-		case m.Type == pb.MsgPreVote:
-			// Never change our term in response to a PreVote
-		case m.Type == pb.MsgPreVoteResp && !m.Reject:
-			// We send pre-vote requests with a term in our future. If the
-			// pre-vote is granted, we will increment our term when we get a
-			// quorum. If it is not, the term comes from the node that
-			// rejected our vote so we should become a follower at the new
-			// term.
-		default:
-			log.Infof("%x [term: %d] received a %s message with higher term from %x [term: %d]",
-				r.id, r.Term, m.Type, m.From, m.Term)
-			if m.Type == pb.MsgApp || m.Type == pb.MsgHeartbeat || m.Type == pb.MsgSnap {
-				r.becomeFollower(m.Term, m.From)
-			} else {
-				r.becomeFollower(m.Term, None)
-			}
-		}
-	case m.Term < r.Term:
-		if (r.raftOpts.CheckQuorum || r.raftOpts.PreVote) && (m.Type == pb.MsgHeartbeat || m.Type == pb.MsgApp) {
-			r.send(pb.Message{To: m.From, Type: pb.MsgAppResp})
-		} else if m.Type == pb.MsgPreVote {
-			// Before Pre-Vote enable, there may have candidate with higher term,
-			// but less log. After update to Pre-Vote, the cluster may deadlock if
-			// we drop messages with a lower term.
-			log.Infof("%x [logterm: %d, index: %d, vote: %x] rejected %s from %x [logterm: %d, index: %d] at term %d",
-				r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.vote, m.Type, m.From, m.LogTerm, m.Index, r.Term)
-			r.send(pb.Message{To: m.From, Term: r.Term, Type: pb.MsgPreVoteResp, Reject: true})
-		} else {
-			// ignore other cases
-			log.Infof("%x [term: %d] ignored a %s message with lower term from %x [term: %d]",
-				r.id, r.Term, m.Type, m.From, m.Term)
-		}
-		return nil
-	}
-
-	switch m.Type {
-	case pb.MsgHup:
-		if r.raftOpts.PreVote {
-			r.hup(campaignPreElection)
-		} else {
-			r.hup(campaignElection)
-		}
-
-	case pb.MsgVote, pb.MsgPreVote:
-		// We can vote if this is a repeat of a vote we've already cast...
-		canVote := r.vote == m.From ||
-			// ...we haven't voted and we don't think there's a leader yet in this term...
-			(r.vote == None && r.lead == None) ||
-			// ...or this is a PreVote for a future term...
-			(m.Type == pb.MsgPreVote && m.Term > r.Term)
-		// ...and we believe the candidate is up to date.
-		if canVote && r.raftLog.isUpToDate(m.Index, m.LogTerm) {
-			log.Infof("%x [logterm: %d, index: %d, vote: %x] cast %s for %x [logterm: %d, index: %d] at term %d",
-				r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.vote, m.Type, m.From, m.LogTerm, m.Index, r.Term)
-			r.send(pb.Message{To: m.From, Term: m.Term, Type: voteRespMsgType(m.Type)})
-			if m.Type == pb.MsgVote {
-				r.electionElapsed = 0
-				r.vote = m.From
-			}
-		} else {
-			log.Infof("%x [logterm: %d, index: %d, vote: %x] rejected %s from %x [logterm: %d, index: %d] at term %d",
-				r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.vote, m.Type, m.From, m.LogTerm, m.Index, r.Term)
-			r.send(pb.Message{To: m.From, Term: r.Term, Type: voteRespMsgType(m.Type), Reject: true})
-		}
-
-	default:
-		err := r.stepFunc(r, &m)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return r.stepFunc(r, &m)
 }
 
 type stepFunc func(r *raft, m *pb.Message) error
@@ -517,6 +426,8 @@ func stepLeader(r *raft, m *pb.Message) error {
 
 func stepFollower(r *raft, m *pb.Message) error {
 	switch m.Type {
+	case pb.MsgHup:
+		r.hup(campaignElection)
 	case pb.MsgApp:
 		r.handleAppendEntries(*m)
 	case pb.MsgHeartbeat:
@@ -757,6 +668,11 @@ func (r *raft) handleAppendResponse(m *pb.Message, pr *tracker.Progress) {
 			// latest commit index, so send it.
 			r.sendAppend(m.From)
 		}
+
+		// 如果是正在 transfer 的目标，transfer
+		if m.From == r.leadTransferee {
+			r.Step(pb.Message{Type: pb.MsgTransferLeader, From: m.From})
+		}
 	}
 
 }
@@ -980,6 +896,70 @@ func (r *raft) promotable() bool {
 	return pr != nil
 }
 
+// 选举可以由heartbeat timeout触发或者客户端主动发起选举触发
+func (r *raft) hup(t CampaignType) {
+	if r.state == StateLeader {
+		log.Debugf("%x ignoring MsgHup because already leader", r.id)
+		return
+	}
+
+	if !r.promotable() {
+		log.Warnf("%x is unpromotable and can not campaign", r.id)
+		return
+	}
+
+	log.Infof("%x is starting a new election at term %d", r.id, r.Term)
+	r.campaign(t)
+}
+
+func (r *raft) campaign(t CampaignType) {
+	var term uint64
+	var voteMsg pb.MessageType
+
+	r.becomeCandidate()
+	voteMsg = pb.MsgVote
+	term = r.Term
+
+	if _, _, res := r.poll(r.id, voteRespMsgType(voteMsg), true); res == quorum.VoteWon {
+		r.becomeLeader()
+		return
+	}
+
+	var ids []uint64
+	{
+		idMap := r.trk.Voters.IDs()
+		ids = make([]uint64, 0, len(idMap))
+		for id := range idMap {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	}
+	for _, id := range ids {
+		if id == r.id {
+			continue
+		}
+		log.Infof("%x [logterm: %d, index: %d] sent %s request to %x at term %d",
+			r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), voteMsg, id, r.Term)
+
+		var ctx []byte
+		if t == campaignTransfer {
+			ctx = []byte(t)
+		}
+		r.send(pb.Message{Term: term, To: id, Type: voteMsg, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm(), Context: ctx})
+	}
+}
+
+// id from peer  t 预选举或选举 v 是否拒绝
+func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int, rejected int, result quorum.VoteResult) {
+	if v {
+		log.Infof("%x received %s from %x at term %d", r.id, t, id, r.Term)
+	} else {
+		log.Infof("%x received %s rejection from %x at term %d", r.id, t, id, r.Term)
+	}
+	r.trk.RecordVote(id, v)
+	return r.trk.TallyVotes()
+}
+
 // ------------------ public behavior ------------------------
 
 func (r *raft) reset(term uint64) {
@@ -1069,107 +1049,6 @@ func (r *raft) advance(rd Ready) {
 		e := rd.Entries[len(rd.Entries)-1]
 		r.raftLog.stableTo(e.Index)
 	}
-}
-
-// 选举可以由heartbeat timeout触发或者客户端主动发起选举触发
-func (r *raft) hup(t CampaignType) {
-	if r.state == StateLeader {
-		log.Debugf("%x ignoring MsgHup because already leader", r.id)
-		return
-	}
-
-	if !r.promotable() {
-		log.Warnf("%x is unpromotable and can not campaign", r.id)
-		return
-	}
-	ents, err := r.raftLog.entries(r.raftLog.committed+1, noLimit)
-	if err != nil {
-		log.Panicf("unexpected error getting unapplied entries (%v)", err)
-	}
-
-	if n := numOfPendingConf(ents); n != 0 && r.raftLog.committed > r.raftLog.applied {
-		log.Warnf("%x cannot campaign at term %d since there are still %d pending configuration changes to apply", r.id, r.Term, n)
-		return
-	}
-
-	log.Infof("%x is starting a new election at term %d", r.id, r.Term)
-	r.campaign(t)
-}
-
-func numOfPendingConf(ents []pb.Entry) int {
-	n := 0
-	for i := range ents {
-		if ents[i].Type == pb.EntryConfChange {
-			n++
-		}
-	}
-	return n
-}
-
-// campaign transitions the raft instance to candidate state. This must only be
-// called after verifying that this is a legitimate transition.
-func (r *raft) campaign(t CampaignType) {
-	if !r.promotable() {
-		// This path should not be hit (callers are supposed to check), but
-		// better safe than sorry.
-		log.Warnf("%x is unpromotable; campaign() should have been called", r.id)
-	}
-	var term uint64
-	var voteMsg pb.MessageType
-	if t == campaignPreElection {
-		r.becomePreCandidate()
-		voteMsg = pb.MsgPreVote
-		// PreVote RPCs are sent for the next term before we've incremented r.Term.
-		term = r.Term + 1
-	} else {
-		r.becomeCandidate()
-		voteMsg = pb.MsgVote
-		term = r.Term
-	}
-
-	if _, _, res := r.poll(r.id, voteRespMsgType(voteMsg), true); res == quorum.VoteWon {
-		// We won the election after voting for ourselves (which must mean that
-		// this is a single-node cluster). Advance to the next state.
-		if t == campaignPreElection {
-			r.campaign(campaignElection)
-		} else {
-			r.becomeLeader()
-		}
-		return
-	}
-
-	var ids []uint64
-	{
-		idMap := r.trk.Voters.IDs()
-		ids = make([]uint64, 0, len(idMap))
-		for id := range idMap {
-			ids = append(ids, id)
-		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	}
-	for _, id := range ids {
-		if id == r.id {
-			continue
-		}
-		log.Infof("%x [logterm: %d, index: %d] sent %s request to %x at term %d",
-			r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), voteMsg, id, r.Term)
-
-		var ctx []byte
-		if t == campaignTransfer {
-			ctx = []byte(t)
-		}
-		r.send(pb.Message{Term: term, To: id, Type: voteMsg, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm(), Context: ctx})
-	}
-}
-
-func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int, rejected int, result quorum.VoteResult) {
-	if v {
-		log.Infof("%x received %s from %x at term %d", r.id, t, id, r.Term)
-	} else {
-		log.Infof("%x received %s rejection from %x at term %d", r.id, t, id, r.Term)
-	}
-	r.trk.RecordVote(id, v)
-	return r.trk.TallyVotes()
 }
 
 // lockedRand is a small wrapper around rand.Rand to provide

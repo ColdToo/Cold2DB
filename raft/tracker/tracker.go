@@ -15,106 +15,16 @@
 package tracker
 
 import (
-	"fmt"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft/quorum"
 	"sort"
-	"strings"
 )
-
-// Config reflects the configuration tracked in a ProgressTracker.
-type Config struct {
-	Voters quorum.JointConfig
-	// AutoLeave is true if the configuration is joint and a transition to the
-	// incoming configuration should be carried out automatically by Raft when
-	// this is possible. If false, the configuration will be joint until the
-	// application initiates the transition manually.
-	AutoLeave bool
-	// Learners is a set of IDs corresponding to the learners active in the
-	// current configuration.
-	//
-	// Invariant: Learners and Voters does not intersect, i.e. if a peer is in
-	// either half of the joint config, it can't be a learner; if it is a
-	// learner it can't be in either half of the joint config. This invariant
-	// simplifies the implementation since it allows peers to have clarity about
-	// its current role without taking into account joint consensus.
-	Learners map[uint64]struct{}
-	// When we turn a voter into a learner during a joint consensus transition,
-	// we cannot add the learner directly when entering the joint state. This is
-	// because this would violate the invariant that the intersection of
-	// voters and learners is empty. For example, assume a Voter is removed and
-	// immediately re-added as a learner (or in other words, it is demoted):
-	//
-	// Initially, the configuration will be
-	//
-	//   voters:   {1 2 3}
-	//   learners: {}
-	//
-	// and we want to demote 3. Entering the joint configuration, we naively get
-	//
-	//   voters:   {1 2} & {1 2 3}
-	//   learners: {3}
-	//
-	// but this violates the invariant (3 is both voter and learner). Instead,
-	// we get
-	//
-	//   voters:   {1 2} & {1 2 3}
-	//   learners: {}
-	//   next_learners: {3}
-	//
-	// Where 3 is now still purely a voter, but we are remembering the intention
-	// to make it a learner upon transitioning into the final configuration:
-	//
-	//   voters:   {1 2}
-	//   learners: {3}
-	//   next_learners: {}
-	//
-	// Note that next_learners is not used while adding a learner that is not
-	// also a voter in the joint config. In this case, the learner is added
-	// right away when entering the joint configuration, so that it is caught up
-	// as soon as possible.
-	LearnersNext map[uint64]struct{}
-}
-
-func (c Config) String() string {
-	var buf strings.Builder
-	fmt.Fprintf(&buf, "voters=%s", c.Voters)
-	if c.Learners != nil {
-		fmt.Fprintf(&buf, " learners=%s", quorum.MajorityConfig(c.Learners).String())
-	}
-	if c.LearnersNext != nil {
-		fmt.Fprintf(&buf, " learners_next=%s", quorum.MajorityConfig(c.LearnersNext).String())
-	}
-	if c.AutoLeave {
-		fmt.Fprintf(&buf, " autoleave")
-	}
-	return buf.String()
-}
-
-// Clone returns a copy of the Config that shares no memory with the original.
-func (c *Config) Clone() Config {
-	clone := func(m map[uint64]struct{}) map[uint64]struct{} {
-		if m == nil {
-			return nil
-		}
-		mm := make(map[uint64]struct{}, len(m))
-		for k := range m {
-			mm[k] = struct{}{}
-		}
-		return mm
-	}
-	return Config{
-		Voters:       quorum.JointConfig{clone(c.Voters[0]), clone(c.Voters[1])},
-		Learners:     clone(c.Learners),
-		LearnersNext: clone(c.LearnersNext),
-	}
-}
 
 // ProgressTracker tracks the currently active configuration and the information
 // known about the nodes and learners in it. In particular, it tracks the match
 // index for each peer which in turn allows reasoning about the committed index.
 type ProgressTracker struct {
-	Config
+	Voters quorum.MajorityConfig
 
 	Progress ProgressMap
 
@@ -136,18 +46,14 @@ func MakeProgressTracker(maxInflight int) ProgressTracker {
 // ConfState returns a ConfState representing the active configuration.
 func (p *ProgressTracker) ConfState() pb.ConfState {
 	return pb.ConfState{
-		Voters:         p.Voters[0].Slice(),
-		VotersOutgoing: p.Voters[1].Slice(),
-		Learners:       quorum.MajorityConfig(p.Learners).Slice(),
-		LearnersNext:   quorum.MajorityConfig(p.LearnersNext).Slice(),
-		AutoLeave:      p.AutoLeave,
+		Voters: p.Voters.Slice(),
 	}
 }
 
 // IsSingleton returns true if (and only if) there is only one voting member
 // (i.e. the leader) in the current configuration.
 func (p *ProgressTracker) IsSingleton() bool {
-	return len(p.Voters[0]) == 1 && len(p.Voters[1]) == 0
+	return len(p.Voters) == 1
 }
 
 type matchAckIndexer map[uint64]*Progress
@@ -206,9 +112,6 @@ func (p *ProgressTracker) Visit(f func(id uint64, pr *Progress)) {
 func (p *ProgressTracker) QuorumActive() bool {
 	votes := map[uint64]bool{}
 	p.Visit(func(id uint64, pr *Progress) {
-		if pr.IsLearner {
-			return
-		}
 		votes[id] = pr.RecentActive
 	})
 
@@ -226,26 +129,12 @@ func (p *ProgressTracker) VoterNodes() []uint64 {
 	return nodes
 }
 
-// LearnerNodes returns a sorted slice of learners.
-func (p *ProgressTracker) LearnerNodes() []uint64 {
-	if len(p.Learners) == 0 {
-		return nil
-	}
-	nodes := make([]uint64, 0, len(p.Learners))
-	for id := range p.Learners {
-		nodes = append(nodes, id)
-	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i] < nodes[j] })
-	return nodes
-}
-
 // ResetVotes prepares for a new round of vote counting via recordVote.
 func (p *ProgressTracker) ResetVotes() {
 	p.Votes = map[uint64]bool{}
 }
 
 // RecordVote records that the node with the given id voted for this Raft
-// instance if v == true (and declined it otherwise).
 func (p *ProgressTracker) RecordVote(id uint64, v bool) {
 	_, ok := p.Votes[id]
 	if !ok {
@@ -253,17 +142,9 @@ func (p *ProgressTracker) RecordVote(id uint64, v bool) {
 	}
 }
 
-// TallyVotes returns the number of granted and rejected Votes, and whether the
-// election outcome is known.
+// TallyVotes returns the number of granted and rejected Votes, and whether the election outcome is known.
 func (p *ProgressTracker) TallyVotes() (granted int, rejected int, _ quorum.VoteResult) {
-	// Make sure to populate granted/rejected correctly even if the Votes slice
-	// contains members no longer part of the configuration. This doesn't really
-	// matter in the way the numbers are used (they're informational), but might
-	// as well get it right.
-	for id, pr := range p.Progress {
-		if pr.IsLearner {
-			continue
-		}
+	for id, _ := range p.Progress {
 		v, voted := p.Votes[id]
 		if !voted {
 			continue
