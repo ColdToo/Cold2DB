@@ -63,8 +63,6 @@ type Node interface {
 	// progress, it can call Advance before finishing applying the last ready.
 	Advance()
 
-	// Status returns the current status of the raft state machine.
-	Status() Status
 	// Stop performs any necessary termination of the Node.
 	Stop()
 }
@@ -98,7 +96,6 @@ type raftNode struct {
 	readyC      chan Ready
 	propC       chan msgWithResult
 	receiveC    chan pb.Message
-	statusC     chan chan Status
 
 	advanceC chan struct{}
 	tickC    chan struct{}
@@ -131,7 +128,6 @@ func StartRaftNode(raftConfig *config.RaftConfig, storage db.Storage) (Node, err
 		tickC:   make(chan struct{}, 128),
 		doneC:   make(chan struct{}),
 		stopC:   make(chan struct{}),
-		statusC: make(chan chan Status),
 		rawNode: rn,
 	}
 	rN.serveAppNode()
@@ -372,16 +368,6 @@ func MustSync(st, prevst pb.HardState, entsnum int) bool {
 	// votedFor
 	// log entries[]
 	return entsnum != 0 || st.Vote != prevst.Vote || st.Term != prevst.Term
-}
-
-func (rn *raftNode) Status() Status {
-	c := make(chan Status)
-	select {
-	case rn.statusC <- c:
-		return <-c
-	case <-rn.doneC:
-		return Status{}
-	}
 }
 
 func (rn *raftNode) Stop() {
