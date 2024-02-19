@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"io/ioutil"
 	"net/http"
 
@@ -78,14 +77,11 @@ func (h *HttpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		//更改节点配置相关
 	case r.Method == POST:
-		v, err := ioutil.ReadAll(r.Body)
+		_, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "Failed on PUT", http.StatusBadRequest)
 			return
 		}
-		json.Unmarshal(v, &ConfChangeInfo)
-
-		h.kvsService.ConfChangePropose()
 		w.WriteHeader(http.StatusNoContent)
 
 	default:

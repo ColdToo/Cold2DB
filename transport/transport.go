@@ -23,7 +23,7 @@ type Transporter interface {
 	ListenPeerAttachConn(localIp string)
 
 	// Send 应用层通过该接口发送消息给peer,如果在transport中没有找到该peer那么忽略该消息
-	Send(m []*pb.Message)
+	Send(m []pb.Message)
 
 	AddPeer(id types.ID, url string)
 
@@ -112,7 +112,7 @@ func (t *Transport) Get(id types.ID) Peer {
 	return t.Peers[id]
 }
 
-func (t *Transport) Send(msgs []*pb.Message) {
+func (t *Transport) Send(msgs []pb.Message) {
 	for _, m := range msgs {
 		if m.To == 0 {
 			continue

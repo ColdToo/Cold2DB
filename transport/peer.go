@@ -27,7 +27,7 @@ const (
 
 //go:generate mockgen -source=./peer.go -destination=./mocks/peer.go -package=mock
 type Peer interface {
-	Send(m *pb.Message)
+	Send(m pb.Message)
 
 	AttachConn(conn io.WriteCloser)
 
@@ -67,7 +67,7 @@ func (p *peer) handleReceiveC() {
 	}
 }
 
-func (p *peer) Send(m *pb.Message) {
+func (p *peer) Send(m pb.Message) {
 	p.mu.Lock()
 	paused := p.paused
 	p.mu.Unlock()

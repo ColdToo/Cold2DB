@@ -337,21 +337,6 @@ func (r *raft) becomeCandidate() {
 	log.Infof("%x became candidate at term %d", r.id, r.Term)
 }
 
-func (r *raft) becomePreCandidate() {
-	if r.state == StateLeader {
-		panic("invalid transition [leader -> pre-candidate]")
-	}
-	// Becoming a pre-candidate changes our step functions and state,
-	// but doesn't change anything else. In particular it does not increase
-	// r.Term or change r.Vote.
-	r.stepFunc = stepCandidate
-	r.trk.ResetVotes()
-	r.tick = r.tickElection
-	r.lead = None
-	r.state = StatePreCandidate
-	log.Infof("%x became pre-candidate at term %d", r.id, r.Term)
-}
-
 func (r *raft) tickElection() {
 	r.electionElapsed++
 	if r.promotable() && r.electionElapsed >= r.randomizedElectionTimeout {
@@ -366,10 +351,6 @@ func (r *raft) tickHeartbeat() {
 
 	if r.electionElapsed >= r.raftOpts.electionTimeout {
 		r.electionElapsed = 0
-		if r.raftOpts.CheckQuorum {
-			r.Step(pb.Message{From: r.id, Type: pb.MsgCheckQuorum})
-		}
-
 		// If current leader cannot transfer leadership in electionTimeout, it becomes leader again.
 		if r.state == StateLeader && r.leadTransferee != None {
 			r.abortLeaderTransfer()
@@ -441,16 +422,6 @@ func stepFollower(r *raft, m *pb.Message) error {
 }
 
 func stepCandidate(r *raft, m *pb.Message) error {
-	// Only handle vote responses corresponding to our candidacy (while in
-	// StateCandidate, we may get stale MsgPreVoteResp messages in this term from
-	// our pre-candidate state).
-	var myVoteRespType pb.MessageType
-	if r.state == StatePreCandidate {
-		myVoteRespType = pb.MsgPreVoteResp
-	} else {
-		myVoteRespType = pb.MsgVoteResp
-	}
-
 	switch m.Type {
 	case pb.MsgProp:
 		log.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
@@ -463,17 +434,13 @@ func stepCandidate(r *raft, m *pb.Message) error {
 		r.handleHeartbeat(m)
 	case pb.MsgSnap:
 		//todo
-	case myVoteRespType:
+	case pb.MsgVoteResp:
 		gr, rj, res := r.poll(m.From, m.Type, !m.Reject)
 		log.Infof("%x has received %d %s votes and %d vote rejections", r.id, gr, m.Type, rj)
 		switch res {
 		case quorum.VoteWon:
-			if r.state == StatePreCandidate {
-				r.campaign(campaignElection)
-			} else {
-				r.becomeLeader()
-				r.bcastAppend()
-			}
+			r.becomeLeader()
+			r.bcastAppend()
 		case quorum.VoteLost:
 			// pb.MsgPreVoteResp contains future term of pre-candidate
 			// m.Term > r.Term; reuse r.Term

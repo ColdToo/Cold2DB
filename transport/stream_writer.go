@@ -24,7 +24,7 @@ type streamWriter struct {
 	mu     sync.Mutex // guard field working and enc
 	paused bool
 
-	msgC   chan *pb.Message    //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
+	msgC   chan pb.Message     //Peer会将待发送的消息写入到该通道，streamWriter则从该通道中读取消息并发送出去
 	connC  chan io.WriteCloser //通过该通道获取当前streamWriter实例关联的底层网络连接
 	stopC  chan struct{}
 	done   chan struct{}
@@ -38,7 +38,7 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport, 
 		status:  status,
 		peerIp:  peerIp,
 		r:       r,
-		msgC:    make(chan *pb.Message, streamBufSize),
+		msgC:    make(chan pb.Message, streamBufSize),
 		connC:   make(chan io.WriteCloser),
 		stopC:   make(chan struct{}),
 		done:    make(chan struct{}),
@@ -49,13 +49,13 @@ func startStreamWriter(local, id types.ID, status *peerStatus, r RaftTransport, 
 }
 
 func (cw *streamWriter) run() {
-	var msgC chan *pb.Message
+	var msgC chan pb.Message
 	log.Info("started stream writer run").Str(code.LocalId, cw.localID.Str()).
 		Str(code.RemoteId, cw.peerID.Str()).Str(code.RemoteIp, cw.peerIp).Record()
 	for {
 		select {
 		case m := <-msgC:
-			err := cw.enc.encodeAndWrite(*m)
+			err := cw.enc.encodeAndWrite(m)
 			if err != nil {
 				cw.status.deactivate(failureType{source: cw.localID.Str(), action: "write"}, err.Error())
 				cw.close()
@@ -87,7 +87,7 @@ func (cw *streamWriter) run() {
 	}
 }
 
-func (cw *streamWriter) writeC() chan<- *pb.Message {
+func (cw *streamWriter) writeC() chan<- pb.Message {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
 	return cw.msgC

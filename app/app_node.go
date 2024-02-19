@@ -124,7 +124,6 @@ func (an *AppNode) serveRaftNode() {
 func (an *AppNode) servePropCAndConfC() {
 	confChangeCount := uint64(0)
 
-	//当proposeC和confChangeC关闭后退出该goroutine,并停止raft服务
 	for an.proposeC != nil && an.confChangeC != nil {
 		select {
 		case prop := <-an.proposeC:
@@ -143,8 +142,8 @@ func (an *AppNode) servePropCAndConfC() {
 	}
 }
 
-func (an *AppNode) applyCommittedEnts(ents []*pb.Entry) (err error) {
-	entries := make([]*pb.Entry, 0)
+func (an *AppNode) applyCommittedEnts(ents []pb.Entry) (err error) {
+	entries := make([]pb.Entry, 0)
 
 	//apply entries
 	for i, entry := range ents {

@@ -189,7 +189,6 @@ func (rn *raftNode) serveAppNode() {
 func (rn *raftNode) Tick() {
 	select {
 	case rn.tickC <- struct{}{}:
-	case <-rn.doneC:
 	default:
 		log.Warnf("%x A tick missed to fire. Node blocks too long!", rn.rawNode.raft.id)
 	}
