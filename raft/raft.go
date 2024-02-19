@@ -349,18 +349,18 @@ func (r *raft) tickHeartbeat() {
 	r.heartbeatElapsed++
 	r.electionElapsed++
 
+	//选举超时，开始选举
 	if r.electionElapsed >= r.raftOpts.electionTimeout {
 		r.electionElapsed = 0
-		// If current leader cannot transfer leadership in electionTimeout, it becomes leader again.
+		// If current leader cannot transfer leadership in electionTimeout, cancel leader transfer
 		if r.state == StateLeader && r.leadTransferee != None {
 			r.abortLeaderTransfer()
 		}
+		r.becomeCandidate()
+		r.sendAllRequestVote()
 	}
 
-	if r.state != StateLeader {
-		return
-	}
-
+	//心跳超时，发送心跳
 	if r.heartbeatElapsed >= r.raftOpts.heartbeatTimeout {
 		r.heartbeatElapsed = 0
 		r.Step(pb.Message{From: r.id, Type: pb.MsgBeat})
@@ -898,11 +898,20 @@ func (r *raft) campaign(t CampaignType) {
 		log.Infof("%x [logterm: %d, index: %d] sent %s request to %x at term %d",
 			r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), voteMsg, id, r.Term)
 
-		var ctx []byte
-		if t == campaignTransfer {
-			ctx = []byte(t)
+		r.send(pb.Message{Term: term, To: id, Type: voteMsg, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm()})
+	}
+}
+
+func (r *raft) sendAllRequestVote() {
+	for _, id := range r.trk.Voters.Slice() {
+		if id == r.id {
+			continue
 		}
-		r.send(pb.Message{Term: term, To: id, Type: voteMsg, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm(), Context: ctx})
+
+		log.Infof("%x [logterm: %d, index: %d] sent %s request to %x at term %d",
+			r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), pb.MsgVote, id, r.Term)
+
+		r.send(pb.Message{Term: r.Term, To: id, Type: pb.MsgVote, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm()})
 	}
 }
 
@@ -934,24 +943,24 @@ func (r *raft) reset(term uint64) {
 	r.abortLeaderTransfer()
 	r.trk.ResetVotes()
 	r.trk.Visit(func(id uint64, pr *tracker.Progress) {
+		//将除自己外的所有节点的match index置为0，而将自己的match index置为自己的last index。
+		if id == r.id {
+			pr.Match = r.raftLog.lastIndex()
+		}
 		*pr = tracker.Progress{
 			Match:     0,
 			Next:      r.raftLog.lastIndex() + 1,
 			Inflights: tracker.NewInflights(r.trk.MaxInflight),
 		}
-		//将除自己外的所有节点的match index置为0，而将自己的match index置为自己的last index。
-		if id == r.id {
-			pr.Match = r.raftLog.lastIndex()
-		}
 	})
-}
-
-func (r *raft) resetRandomizedElectionTimeout() {
-	r.randomizedElectionTimeout = r.raftOpts.electionTimeout + globalRand.Intn(r.raftOpts.electionTimeout)
 }
 
 func (r *raft) abortLeaderTransfer() {
 	r.leadTransferee = None
+}
+
+func (r *raft) resetRandomizedElectionTimeout() {
+	r.randomizedElectionTimeout = r.raftOpts.electionTimeout + globalRand.Intn(r.raftOpts.electionTimeout)
 }
 
 // send schedules persisting state to a stable storage and AFTER that
@@ -959,34 +968,6 @@ func (r *raft) abortLeaderTransfer() {
 func (r *raft) send(m pb.Message) {
 	if m.From == None {
 		m.From = r.id
-	}
-	if m.Type == pb.MsgVote || m.Type == pb.MsgVoteResp || m.Type == pb.MsgPreVote || m.Type == pb.MsgPreVoteResp {
-		if m.Term == 0 {
-			// All {pre-,}campaign messages need to have the term set when
-			// sending.
-			// - MsgVote: m.Term is the term the node is campaigning for,
-			//   non-zero as we increment the term when campaigning.
-			// - MsgVoteResp: m.Term is the new r.Term if the MsgVote was
-			//   granted, non-zero for the same reason MsgVote is
-			// - MsgPreVote: m.Term is the term the node will campaign,
-			//   non-zero as we use m.Term to indicate the next term we'll be
-			//   campaigning for
-			// - MsgPreVoteResp: m.Term is the term received in the original
-			//   MsgPreVote if the pre-vote was granted, non-zero for the
-			//   same reasons MsgPreVote is
-			panic(fmt.Sprintf("term should be set when sending %s", m.Type))
-		}
-	} else {
-		if m.Term != 0 {
-			panic(fmt.Sprintf("term should not be set when sending %s (was %d)", m.Type, m.Term))
-		}
-		// do not attach term to MsgProp, MsgReadIndex
-		// proposals are a way to forward to the leader and
-		// should be treated as local message.
-		// MsgReadIndex is also forwarded to leader.
-		if m.Type != pb.MsgProp {
-			m.Term = r.Term
-		}
 	}
 	r.msgs = append(r.msgs, m)
 }
