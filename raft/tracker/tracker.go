@@ -17,11 +17,10 @@ package tracker
 import (
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/ColdToo/Cold2DB/raft/quorum"
-	"sort"
 )
 
 // ProgressTracker tracks the currently active configuration and the information
-// known about the nodes and learners in it. In particular, it tracks the match
+// known about the nodes in it. In particular, it tracks the match
 // index for each peer which in turn allows reasoning about the committed index.
 type ProgressTracker struct {
 	Voters quorum.MajorityConfig
@@ -33,9 +32,9 @@ type ProgressTracker struct {
 	MaxInflight int
 }
 
-// MakeProgressTracker initializes a ProgressTracker.
 func MakeProgressTracker(maxInflight int) ProgressTracker {
 	p := ProgressTracker{
+		Voters:      quorum.MajorityConfig{},
 		MaxInflight: maxInflight,
 		Votes:       map[uint64]bool{},
 		Progress:    map[uint64]*Progress{},
@@ -43,24 +42,18 @@ func MakeProgressTracker(maxInflight int) ProgressTracker {
 	return p
 }
 
-// ConfState returns a ConfState representing the active configuration.
 func (p *ProgressTracker) ConfState() pb.ConfState {
 	return pb.ConfState{
 		Voters: p.Voters.Slice(),
 	}
 }
 
-// IsSingleton returns true if (and only if) there is only one voting member
-// (i.e. the leader) in the current configuration.
 func (p *ProgressTracker) IsSingleton() bool {
 	return len(p.Voters) == 1
 }
 
 type matchAckIndexer map[uint64]*Progress
 
-var _ quorum.AckedIndexer = matchAckIndexer(nil)
-
-// AckedIndex implements IndexLookuper.
 func (l matchAckIndexer) AckedIndex(id uint64) (quorum.Index, bool) {
 	pr, ok := l[id]
 	if !ok {
@@ -73,15 +66,6 @@ func (l matchAckIndexer) AckedIndex(id uint64) (quorum.Index, bool) {
 // the voting members of the group have acknowledged.
 func (p *ProgressTracker) Committed() uint64 {
 	return uint64(p.Voters.CommittedIndex(matchAckIndexer(p.Progress)))
-}
-
-func insertionSort(sl []uint64) {
-	a, b := 0, len(sl)
-	for i := a + 1; i < b; i++ {
-		for j := i; j > a && sl[j] < sl[j-1]; j-- {
-			sl[j], sl[j-1] = sl[j-1], sl[j]
-		}
-	}
 }
 
 // Visit invokes the supplied closure for all tracked progresses in stable order.
@@ -107,6 +91,15 @@ func (p *ProgressTracker) Visit(f func(id uint64, pr *Progress)) {
 	}
 }
 
+func insertionSort(sl []uint64) {
+	a, b := 0, len(sl)
+	for i := a + 1; i < b; i++ {
+		for j := i; j > a && sl[j] < sl[j-1]; j-- {
+			sl[j], sl[j-1] = sl[j-1], sl[j]
+		}
+	}
+}
+
 // QuorumActive returns true if the quorum is active from the view of the local
 // raft state machine. Otherwise, it returns false.
 func (p *ProgressTracker) QuorumActive() bool {
@@ -118,23 +111,14 @@ func (p *ProgressTracker) QuorumActive() bool {
 	return p.Voters.VoteResult(votes) == quorum.VoteWon
 }
 
-// VoterNodes returns a sorted slice of voters.
 func (p *ProgressTracker) VoterNodes() []uint64 {
-	m := p.Voters.IDs()
-	nodes := make([]uint64, 0, len(m))
-	for id := range m {
-		nodes = append(nodes, id)
-	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i] < nodes[j] })
-	return nodes
+	return p.Voters.Slice()
 }
 
-// ResetVotes prepares for a new round of vote counting via recordVote.
 func (p *ProgressTracker) ResetVotes() {
 	p.Votes = map[uint64]bool{}
 }
 
-// RecordVote records that the node with the given id voted for this Raft
 func (p *ProgressTracker) RecordVote(id uint64, v bool) {
 	_, ok := p.Votes[id]
 	if !ok {

@@ -56,3 +56,15 @@ const (
 	// VoteWon indicates that the quorum has voted "yes".
 	VoteWon
 )
+
+const _VoteResult_name = "VotePendingVoteLostVoteWon"
+
+var _VoteResult_index = [...]uint8{0, 11, 19, 26}
+
+func (i VoteResult) String() string {
+	i -= 1
+	if i >= VoteResult(len(_VoteResult_index)-1) {
+		return "VoteResult(" + strconv.FormatInt(int64(i+1), 10) + ")"
+	}
+	return _VoteResult_name[_VoteResult_index[i]:_VoteResult_index[i+1]]
+}

@@ -42,66 +42,6 @@ func (c MajorityConfig) String() string {
 	return buf.String()
 }
 
-// Describe returns a (multi-line) representation of the commit indexes for the
-// given lookuper.
-func (c MajorityConfig) Describe(l AckedIndexer) string {
-	if len(c) == 0 {
-		return "<empty majority quorum>"
-	}
-	type tup struct {
-		id  uint64
-		idx Index
-		ok  bool // idx found?
-		bar int  // length of bar displayed for this tup
-	}
-
-	// Below, populate .bar so that the i-th largest commit index has bar i (we
-	// plot this as sort of a progress bar). The actual code is a bit more
-	// complicated and also makes sure that equal index => equal bar.
-
-	n := len(c)
-	info := make([]tup, 0, n)
-	for id := range c {
-		idx, ok := l.AckedIndex(id)
-		info = append(info, tup{id: id, idx: idx, ok: ok})
-	}
-
-	// Sort by index
-	sort.Slice(info, func(i, j int) bool {
-		if info[i].idx == info[j].idx {
-			return info[i].id < info[j].id
-		}
-		return info[i].idx < info[j].idx
-	})
-
-	// Populate .bar.
-	for i := range info {
-		if i > 0 && info[i-1].idx < info[i].idx {
-			info[i].bar = i
-		}
-	}
-
-	// Sort by ID.
-	sort.Slice(info, func(i, j int) bool {
-		return info[i].id < info[j].id
-	})
-
-	var buf strings.Builder
-
-	// Print.
-	fmt.Fprint(&buf, strings.Repeat(" ", n)+"    idx\n")
-	for i := range info {
-		bar := info[i].bar
-		if !info[i].ok {
-			fmt.Fprint(&buf, "?"+strings.Repeat(" ", n))
-		} else {
-			fmt.Fprint(&buf, strings.Repeat("x", bar)+">"+strings.Repeat(" ", n-bar))
-		}
-		fmt.Fprintf(&buf, " %5d    (id=%d)\n", info[i].idx, info[i].id)
-	}
-	return buf.String()
-}
-
 // Slice returns the MajorityConfig as a sorted slice.
 func (c MajorityConfig) Slice() []uint64 {
 	var sl []uint64
@@ -110,15 +50,6 @@ func (c MajorityConfig) Slice() []uint64 {
 	}
 	sort.Slice(sl, func(i, j int) bool { return sl[i] < sl[j] })
 	return sl
-}
-
-func insertionSort(sl []uint64) {
-	a, b := 0, len(sl)
-	for i := a + 1; i < b; i++ {
-		for j := i; j > a && sl[j] < sl[j-1]; j-- {
-			sl[j], sl[j-1] = sl[j-1], sl[j]
-		}
-	}
 }
 
 // CommittedIndex computes the committed index from those supplied via the
@@ -169,6 +100,15 @@ func (c MajorityConfig) CommittedIndex(l AckedIndexer) Index {
 	// left (accounting for zero-indexing).
 	pos := n - (n/2 + 1)
 	return Index(srt[pos])
+}
+
+func insertionSort(sl []uint64) {
+	a, b := 0, len(sl)
+	for i := a + 1; i < b; i++ {
+		for j := i; j > a && sl[j] < sl[j-1]; j-- {
+			sl[j], sl[j-1] = sl[j-1], sl[j]
+		}
+	}
 }
 
 // VoteResult takes a mapping of voters to yes/no (true/false) votes and returns

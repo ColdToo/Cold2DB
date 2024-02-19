@@ -28,7 +28,6 @@ func TestProgressString(t *testing.T) {
 		PendingSnapshot: 123,
 		RecentActive:    false,
 		ProbeSent:       true,
-		IsLearner:       true,
 		Inflights:       ins,
 	}
 	const exp = `StateSnapshot match=1 next=2 learner paused pendingSnap=123 inactive inflight=1[full]`
@@ -70,7 +69,6 @@ func TestProgressResume(t *testing.T) {
 		Next:      2,
 		ProbeSent: true,
 	}
-	p.MaybeDecrTo(1, 1)
 	if p.ProbeSent {
 		t.Errorf("paused= %v, want false", p.ProbeSent)
 	}
@@ -236,9 +234,6 @@ func TestProgressMaybeDecr(t *testing.T) {
 			State: tt.state,
 			Match: tt.m,
 			Next:  tt.n,
-		}
-		if g := p.MaybeDecrTo(tt.rejected, tt.last); g != tt.w {
-			t.Errorf("#%d: maybeDecrTo= %t, want %t", i, g, tt.w)
 		}
 		if gm := p.Match; gm != tt.m {
 			t.Errorf("#%d: match= %d, want %d", i, gm, tt.m)

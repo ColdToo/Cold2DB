@@ -25,7 +25,6 @@ import (
 	"github.com/ColdToo/Cold2DB/raft/tracker"
 	"math"
 	"math/rand"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -925,16 +924,7 @@ func (r *raft) campaign(t CampaignType) {
 		return
 	}
 
-	var ids []uint64
-	{
-		idMap := r.trk.Voters.IDs()
-		ids = make([]uint64, 0, len(idMap))
-		for id := range idMap {
-			ids = append(ids, id)
-		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	}
-	for _, id := range ids {
+	for _, id := range r.trk.Voters.Slice() {
 		if id == r.id {
 			continue
 		}
