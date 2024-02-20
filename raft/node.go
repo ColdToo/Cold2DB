@@ -105,7 +105,7 @@ type raftNode struct {
 
 func StartRaftNode(raftConfig *config.RaftConfig, storage db.Storage) (Node, error) {
 	opts := &raftOpts{
-		ID:               raftConfig.Id,
+		Id:               raftConfig.Id,
 		electionTimeout:  raftConfig.ElectionTick,
 		heartbeatTimeout: raftConfig.HeartbeatTick,
 		storage:          storage,
