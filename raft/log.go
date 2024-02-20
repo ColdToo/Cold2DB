@@ -144,7 +144,7 @@ func (l *raftLog) slice(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 
 	var ents []pb.Entry
 	if lo < l.offset {
-		storedEnts, err := l.storage.Entries(lo, min(hi, l.offset), maxSize)
+		storedEnts, err := l.storage.Entries(lo, min(hi, l.offset))
 		if err == ErrCompacted {
 			return nil, err
 		}

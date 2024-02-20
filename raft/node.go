@@ -323,6 +323,8 @@ type Ready struct {
 
 	HardState pb.HardState
 
+	ConfState pb.ConfState
+
 	UnstableEntries []*pb.Entry //需要持久化的entries
 }
 

@@ -54,7 +54,6 @@ func (pr *Progress) ResetState(state StateType) {
 	pr.ProbeSent = false
 	pr.PendingSnapshot = 0
 	pr.State = state
-	pr.Inflights.reset()
 }
 
 func max(a, b uint64) uint64 {
@@ -170,8 +169,6 @@ func (pr *Progress) IsPaused() bool {
 	switch pr.State {
 	case StateProbe:
 		return pr.ProbeSent
-	case StateReplicate:
-		return pr.Inflights.Full()
 	case StateSnapshot:
 		return true
 	default:
@@ -190,12 +187,6 @@ func (pr *Progress) String() string {
 	}
 	if !pr.RecentActive {
 		fmt.Fprintf(&buf, " inactive")
-	}
-	if n := pr.Inflights.Count(); n > 0 {
-		fmt.Fprintf(&buf, " inflight=%d", n)
-		if pr.Inflights.Full() {
-			fmt.Fprint(&buf, "[full]")
-		}
 	}
 	return buf.String()
 }

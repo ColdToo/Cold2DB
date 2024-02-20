@@ -69,7 +69,7 @@ func (an *AppNode) servePeerRaft() {
 	go an.transport.ListenPeerAttachConn(an.localIp)
 
 	for _, peer := range an.peers {
-		an.transport.AddPeer(types.ID(peer.ID), peer.IAddr)
+		an.transport.AddPeer(types.ID(peer.Id), peer.IAddr)
 	}
 }
 
@@ -92,7 +92,7 @@ func (an *AppNode) serveRaftNode() {
 			}
 
 			if !raft.IsEmptyHardState(rd.HardState) {
-				err := an.kvStorage.PersistHardState(rd.HardState)
+				err := an.kvStorage.PersistHardState(rd.HardState, rd.ConfState)
 				if err != nil {
 					log.Errorf("", err)
 				}
@@ -112,11 +112,6 @@ func (an *AppNode) serveRaftNode() {
 			//通知raftNode本轮ready已经处理完可以进行下一轮处理
 			an.raftNode.Advance()
 			log.Infof("handle ready success %v", rd.HardState)
-
-		case err := <-an.transport.GetErrorC():
-			log.Panicf("transport get critical err", err)
-			an.stop()
-			return
 		}
 	}
 }
