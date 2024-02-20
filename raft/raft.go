@@ -44,8 +44,6 @@ const (
 	StateFollower StateType = iota
 	StateCandidate
 	StateLeader
-	StatePreCandidate
-	numStates
 )
 
 type ReadOnlyOption int
@@ -368,12 +366,49 @@ func (r *raft) tickHeartbeat() {
 }
 
 func (r *raft) Step(m pb.Message) error {
-	return r.stepFunc(r, &m)
+	switch {
+	case m.Term == 0:
+		// local message
+	case m.Term > r.Term:
+		log.Infof("%x [term: %d] received a %s message with higher term from %x [term: %d]",
+			r.id, r.Term, m.Type, m.From, m.Term)
+		if m.Type == pb.MsgApp || m.Type == pb.MsgHeartbeat || m.Type == pb.MsgSnap {
+			r.becomeFollower(m.Term, m.From)
+		} else {
+			r.becomeFollower(m.Term, None)
+		}
+	}
+
+	switch m.Type {
+	case pb.MsgHup:
+		r.hup()
+	case pb.MsgVote:
+		canVote := r.vote == m.From || (r.vote == None && r.lead == None)
+		if canVote && r.raftLog.isUpToDate(m.Index, m.LogTerm) {
+			log.Infof("%x [logterm: %d, index: %d, vote: %x] cast %s for %x [logterm: %d, index: %d] at term %d",
+				r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.vote, m.Type, m.From, m.LogTerm, m.Index, r.Term)
+			r.send(pb.Message{To: m.From, Term: m.Term, Type: voteRespMsgType(m.Type)})
+			if m.Type == pb.MsgVote {
+				r.electionElapsed = 0
+				r.vote = m.From
+			}
+		} else {
+			log.Infof("%x [logterm: %d, index: %d, vote: %x] rejected %s from %x [logterm: %d, index: %d] at term %d",
+				r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.vote, m.Type, m.From, m.LogTerm, m.Index, r.Term)
+			r.send(pb.Message{To: m.From, Term: r.Term, Type: voteRespMsgType(m.Type), Reject: true})
+		}
+	default:
+		err := r.stepFunc(r, m)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-type stepFunc func(r *raft, m *pb.Message) error
+type stepFunc func(r *raft, m pb.Message) error
 
-func stepLeader(r *raft, m *pb.Message) error {
+func stepLeader(r *raft, m pb.Message) error {
 	// These message types do not require any progress for m.From.
 	switch m.Type {
 	case pb.MsgBeat:
@@ -394,8 +429,6 @@ func stepLeader(r *raft, m *pb.Message) error {
 		r.handleAppendResponse(m, pr)
 	case pb.MsgHeartbeatResp:
 		r.handleHeartbeatResponse(m, pr)
-	case pb.MsgSnapStatus:
-		r.handleSnapStatus(m, pr)
 	case pb.MsgUnreachable:
 		r.handleMsgUnreachableStatus(m, pr)
 	case pb.MsgTransferLeader:
@@ -404,48 +437,27 @@ func stepLeader(r *raft, m *pb.Message) error {
 	return nil
 }
 
-func stepFollower(r *raft, m *pb.Message) error {
+func stepFollower(r *raft, m pb.Message) error {
 	switch m.Type {
-	case pb.MsgHup:
-		r.hup(campaignElection)
-	case pb.MsgApp:
-		r.handleAppendEntries(*m)
 	case pb.MsgHeartbeat:
 		r.handleHeartbeat(m)
-	case pb.MsgSnap:
-		//todo
+	case pb.MsgApp:
+		r.handleAppendEntries(m)
 	case pb.MsgTimeoutNow:
-		log.Infof("%x [term %d] received MsgTimeoutNow from %x and starts an election to get leadership.", r.id, r.Term, m.From)
-		r.hup(campaignTransfer)
 	}
 	return nil
 }
 
-func stepCandidate(r *raft, m *pb.Message) error {
+func stepCandidate(r *raft, m pb.Message) error {
 	switch m.Type {
-	case pb.MsgProp:
-		log.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
-		return ErrProposalDropped
 	case pb.MsgApp:
 		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
-		r.handleAppendEntries(*m)
+		r.handleAppendEntries(m)
 	case pb.MsgHeartbeat:
 		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
 		r.handleHeartbeat(m)
-	case pb.MsgSnap:
-		//todo
 	case pb.MsgVoteResp:
-		gr, rj, res := r.poll(m.From, m.Type, !m.Reject)
-		log.Infof("%x has received %d %s votes and %d vote rejections", r.id, gr, m.Type, rj)
-		switch res {
-		case quorum.VoteWon:
-			r.becomeLeader()
-			r.bcastAppend()
-		case quorum.VoteLost:
-			// pb.MsgPreVoteResp contains future term of pre-candidate
-			// m.Term > r.Term; reuse r.Term
-			r.becomeFollower(r.Term, None)
-		}
+		r.handleRequestVoteResponse(m)
 	case pb.MsgTimeoutNow:
 		log.Debugf("%x [term %d state %v] ignored MsgTimeoutNow from %x", r.id, r.Term, r.state, m.From)
 	}
@@ -459,12 +471,11 @@ func (r *raft) bcastHeartbeat() {
 }
 
 func (r *raft) bcastHeartbeatWithCtx(ctx []byte) {
-	r.trk.Visit(func(id uint64, _ *tracker.Progress) {
-		if id == r.id {
-			return
+	for _, id := range r.trk.Voters.Slice() {
+		if r.id != id {
+			r.sendHeartbeat(id, ctx)
 		}
-		r.sendHeartbeat(id, ctx)
-	})
+	}
 }
 
 func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
@@ -475,17 +486,22 @@ func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
 	// The leader MUST NOT forward the follower's commit to
 	// an unmatched index.
 	commit := min(r.trk.Progress[to].Match, r.raftLog.committed)
+	_, ok := r.trk.Progress[to]
+	if !ok {
+		log.Panic("peer not in the cluster")
+	}
 	m := pb.Message{
 		To:      to,
 		Type:    pb.MsgHeartbeat,
 		Commit:  commit,
+		Term:    r.Term,
 		Context: ctx,
 	}
 
 	r.send(m)
 }
 
-func (r *raft) handleHeartbeatResponse(m *pb.Message, pr *tracker.Progress) {
+func (r *raft) handleHeartbeatResponse(m pb.Message, pr *tracker.Progress) {
 	pr.RecentActive = true
 	pr.ProbeSent = false
 
@@ -499,47 +515,22 @@ func (r *raft) handleHeartbeatResponse(m *pb.Message, pr *tracker.Progress) {
 		r.sendAppend(m.From)
 	}
 
-	//ReadOnlyLeaseBased
-	//if r.readOnly.option != ReadOnlySafe || len(m.Context) == 0 {
-	//	return nil
-	//}
-
 	return
 }
 
-func (r *raft) handleSnapStatus(m *pb.Message, pr *tracker.Progress) (err error) {
-	if pr.State != tracker.StateSnapshot {
-		return nil
-	}
-	// TODO(tbg): this code is very similar to the snapshot handling in
-	// MsgAppResp above. In fact, the code there is more correct than the
-	// code here and should likely be updated to match (or even better, the
-	// logic pulled into a newly created Progress state machine handler).
-	if !m.Reject {
-		pr.BecomeProbe()
-		log.Debugf("%x snapshot succeeded, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
-	} else {
-		// NB: the order here matters or we'll be probing erroneously from
-		// the snapshot index, but the snapshot never applied.
-		pr.PendingSnapshot = 0
-		pr.BecomeProbe()
-		log.Debugf("%x snapshot failed, resumed sending replication messages to %x [%s]", r.id, m.From, pr)
-	}
-	// If snapshot finish, wait for the MsgAppResp from the remote node before sending
-	// out the next MsgApp.
-	// If snapshot failure, wait for a heartbeat interval before next try
-	pr.ProbeSent = true
+func (r *raft) handleSnapStatus(m pb.Message, pr *tracker.Progress) (err error) {
+	//todo
 	return err
 }
 
-func (r *raft) handleMsgUnreachableStatus(m *pb.Message, pr *tracker.Progress) {
+func (r *raft) handleMsgUnreachableStatus(m pb.Message, pr *tracker.Progress) {
 	if pr.State == tracker.StateReplicate {
 		pr.BecomeProbe()
 	}
 	log.Debugf("%x failed to send message to %x because it is unreachable [%s]", r.id, m.From, pr)
 }
 
-func (r *raft) handleTransferLeader(m *pb.Message, pr *tracker.Progress) {
+func (r *raft) handleTransferLeader(m pb.Message, pr *tracker.Progress) {
 	leadTransferee := m.From
 	lastLeadTransferee := r.leadTransferee
 	if lastLeadTransferee != None {
@@ -572,7 +563,7 @@ func (r *raft) sendTimeoutNow(to uint64) {
 	r.send(pb.Message{To: to, Type: pb.MsgTimeoutNow})
 }
 
-func (r *raft) handleAppendResponse(m *pb.Message, pr *tracker.Progress) {
+func (r *raft) handleAppendResponse(m pb.Message, pr *tracker.Progress) {
 	pr.RecentActive = true
 	if m.Reject {
 		log.Debugf("%x received MsgAppResp(rejected, hint: (index %d, term %d)) from %x for index %d", r.id, m.RejectHint, m.LogTerm, m.From, m.Index)
@@ -643,7 +634,7 @@ func (r *raft) handleAppendResponse(m *pb.Message, pr *tracker.Progress) {
 
 }
 
-func (r *raft) handlePropMsg(m *pb.Message) error {
+func (r *raft) handlePropMsg(m pb.Message) error {
 	if len(m.Entries) == 0 {
 		log.Panicf("%x stepped empty MsgProp", r.id)
 	}
@@ -689,11 +680,11 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 }
 
 func (r *raft) bcastAppend() {
-	r.trk.Visit(func(id uint64, _ *tracker.Progress) {
-		if id != r.id {
+	for _, id := range r.trk.Voters.Slice() {
+		if r.id != id {
 			r.sendAppend(id)
 		}
-	})
+	}
 }
 
 func (r *raft) sendAppend(to uint64) {
@@ -783,8 +774,6 @@ func (r *raft) increaseUncommittedSize(ents []pb.Entry) bool {
 	return true
 }
 
-// reduceUncommittedSize accounts for the newly committed entries by decreasing
-// the uncommitted entry size limit.
 func (r *raft) reduceUncommittedSize(ents []pb.Entry) {
 	if r.uncommittedSize == 0 {
 		// Fast-path for followers, who do not track or enforce the limit.
@@ -814,7 +803,7 @@ func (r *raft) maybeCommit() bool {
 
 // ------------------ follower behavior ------------------
 
-func (r *raft) handleHeartbeat(m *pb.Message) {
+func (r *raft) handleHeartbeat(m pb.Message) {
 	r.electionElapsed = 0
 	r.lead = m.From
 	r.raftLog.commitTo(m.Commit)
@@ -863,7 +852,7 @@ func (r *raft) promotable() bool {
 }
 
 // 选举可以由heartbeat timeout触发或者客户端主动发起选举触发
-func (r *raft) hup(t CampaignType) {
+func (r *raft) hup() {
 	if r.state == StateLeader {
 		log.Debugf("%x ignoring MsgHup because already leader", r.id)
 		return
@@ -875,10 +864,10 @@ func (r *raft) hup(t CampaignType) {
 	}
 
 	log.Infof("%x is starting a new election at term %d", r.id, r.Term)
-	r.campaign(t)
+	r.campaign()
 }
 
-func (r *raft) campaign(t CampaignType) {
+func (r *raft) campaign() {
 	var term uint64
 	var voteMsg pb.MessageType
 
@@ -899,6 +888,18 @@ func (r *raft) campaign(t CampaignType) {
 			r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), voteMsg, id, r.Term)
 
 		r.send(pb.Message{Term: term, To: id, Type: voteMsg, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm()})
+	}
+}
+
+func (r *raft) handleRequestVoteResponse(m pb.Message) {
+	gr, rj, res := r.poll(m.From, m.Type, !m.Reject)
+	log.Infof("%x has received %d %s votes and %d vote rejections", r.id, gr, m.Type, rj)
+	switch res {
+	case quorum.VoteWon:
+		r.becomeLeader()
+		r.bcastAppend()
+	case quorum.VoteLost:
+		r.becomeFollower(r.Term, None)
 	}
 }
 
@@ -942,17 +943,19 @@ func (r *raft) reset(term uint64) {
 	r.resetRandomizedElectionTimeout()
 	r.abortLeaderTransfer()
 	r.trk.ResetVotes()
-	r.trk.Visit(func(id uint64, pr *tracker.Progress) {
-		//将除自己外的所有节点的match index置为0，而将自己的match index置为自己的last index。
-		if id == r.id {
-			pr.Match = r.raftLog.lastIndex()
-		}
-		*pr = tracker.Progress{
-			Match:     0,
-			Next:      r.raftLog.lastIndex() + 1,
-			Inflights: tracker.NewInflights(r.trk.MaxInflight),
-		}
-	})
+	for _, id := range r.trk.Voters.Slice() {
+		func(id uint64, pr *tracker.Progress) {
+			//将除自己外的所有节点的match index置为0，而将自己的match index置为自己的last index。
+			if id == r.id {
+				pr.Match = r.raftLog.lastIndex()
+			}
+			*pr = tracker.Progress{
+				Match:     0,
+				Next:      r.raftLog.lastIndex() + 1,
+				Inflights: tracker.NewInflights(r.trk.MaxInflight),
+			}
+		}(id, r.trk.Progress[id])
+	}
 }
 
 func (r *raft) abortLeaderTransfer() {
@@ -963,22 +966,13 @@ func (r *raft) resetRandomizedElectionTimeout() {
 	r.randomizedElectionTimeout = r.raftOpts.electionTimeout + globalRand.Intn(r.raftOpts.electionTimeout)
 }
 
-// send schedules persisting state to a stable storage and AFTER that
-// sending the message (as part of next Ready message processing).
 func (r *raft) send(m pb.Message) {
-	if m.From == None {
-		m.From = r.id
-	}
 	r.msgs = append(r.msgs, m)
 }
 
 func (r *raft) advance(rd Ready) {
 	r.reduceUncommittedSize(rd.CommittedEntries)
 
-	// If entries were applied (or a snapshot), update our cursor for
-	// the next Ready. Note that if the current HardState contains a
-	// new Commit index, this does not mean that we're also applying
-	// all of the new entries due to commit pagination by size.
 	if newApplied := rd.appliedCursor(); newApplied > 0 {
 		r.raftLog.appliedTo(newApplied)
 	}
