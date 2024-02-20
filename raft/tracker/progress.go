@@ -46,8 +46,6 @@ type Progress struct {
 	// ProbeSent is reset. See ProbeAcked() and IsPaused().
 	// 是否要以probe的方式发送数据
 	ProbeSent bool
-
-	Inflights *Inflights
 }
 
 // ResetState moves the Progress into the specified State, resetting ProbeSent,

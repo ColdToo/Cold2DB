@@ -20,11 +20,11 @@ type Storage interface {
 	Apply(kvs []*marshal.KV) error
 
 	PersistUnstableEnts(entries []*pb.Entry) error
-	PersistHardState(st pb.HardState) error
+	PersistHardState(st pb.HardState, cs pb.ConfState) error
 	// Truncate truncate index 及其之后的日志
 	Truncate(index uint64) error
 	InitialState() (pb.HardState, pb.ConfState, error)
-	Entries(lo, hi, maxSize uint64) ([]pb.Entry, error)
+	Entries(lo, hi uint64) ([]pb.Entry, error)
 	Term(i uint64) (uint64, error)
 	FirstIndex() uint64
 	LastIndex() uint64
@@ -74,7 +74,8 @@ func dbCfgCheck(dbCfg *config.DBConfig) (err error) {
 	return nil
 }
 
-func OpenKVStorage(dbCfg *config.DBConfig) (C2 *C2KV, err error) {
+func OpenKVStorage(dbCfg *config.DBConfig) (C2 *C2KV) {
+	var err error
 	if err = dbCfgCheck(dbCfg); err != nil {
 		log.Panicf("db config check failed", err)
 	}
@@ -103,7 +104,7 @@ func OpenKVStorage(dbCfg *config.DBConfig) (C2 *C2KV, err error) {
 			C2.memTablePipe <- NewMemTable(dbCfg.MemConfig)
 		}
 	}()
-	return C2, nil
+	return C2
 }
 
 //persistIndex............AppliedIndex.....committedIndex.......stableIndex......
@@ -315,7 +316,7 @@ func (db *C2KV) PersistUnstableEnts(entries []*pb.Entry) error {
 	return nil
 }
 
-func (db *C2KV) PersistHardState(st pb.HardState) error {
+func (db *C2KV) PersistHardState(st pb.HardState, cs pb.ConfState) error {
 	db.wal.RaftStateSegment.RaftState = st
 	return db.wal.RaftStateSegment.Flush()
 }
@@ -326,7 +327,7 @@ func (db *C2KV) Truncate(index uint64) error {
 	return db.wal.Truncate(index)
 }
 
-func (db *C2KV) Entries(lo, hi, maxSize uint64) (entries []pb.Entry, err error) {
+func (db *C2KV) Entries(lo, hi uint64) (entries []pb.Entry, err error) {
 	if lo < db.firstIndex() || hi > db.lastIndex() {
 		return nil, errors.New("some entries is compacted")
 	}

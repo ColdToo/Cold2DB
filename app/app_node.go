@@ -46,7 +46,7 @@ func StartAppNode(localId uint64, peers []config.Peer, proposeC chan []byte, con
 	an.servePeerRaft()
 	// 启动Raft
 	if an.raftNode, err = raft.StartRaftNode(raftConfig, kvStorage); err != nil {
-		log.Fatalf("start raft node err", err)
+		log.Panicf("start raft node err", err)
 	}
 	// 启动一个goroutine,处理appNode与raftNode的交互
 	go an.serveRaftNode()

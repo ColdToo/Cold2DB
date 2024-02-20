@@ -92,54 +92,19 @@ func (st StateType) String() string {
 }
 
 type raftOpts struct {
-	ID uint64
+	Id uint64
+
+	peers []uint64
 
 	electionTimeout int
 
 	heartbeatTimeout int
 
-	maxNextEntSize uint64
-
-	maxUncommittedSize uint64
-	// MaxSizePerMsg limits the max byte size of each append message. Smaller
-	// value lowers the raft recovery cost(initial probing and message lost
-	// during normal operation). On the other side, it might affect the
-	// throughput during normal replication. Note: math.MaxUint64 for unlimited,
-	// 0 for at most one entry per message.
-	MaxSizePerMsg uint64
-	// MaxCommittedSizePerReady limits the size of the committed entries which
-	// can be applied.
-	MaxCommittedSizePerReady uint64
-	// MaxUncommittedEntriesSize limits the aggregate byte size of the
-	// uncommitted entries that may be appended to a leader's log. Once this
-	// limit is exceeded, proposals will begin to return ErrProposalDropped
-	// errors. Note: 0 for no limit.
-	MaxUncommittedEntriesSize uint64
-	// MaxInflightMsgs limits the max number of in-flight append messages during
-	// optimistic replication phase. The application transportation layer usually
-	// has its own sending buffer over TCP/UDP. Setting MaxInflightMsgs to avoid
-	// overflowing that sending buffer.
-	// limit the proposal rate?
-	MaxInflightMsgs int
-
-	// CheckQuorum specifies if the leader should check quorum activity. Leader
-	// steps follower when quorum is not active for an electionTimeout.
-	CheckQuorum bool
-	// This prevents disruption when a node that has been partitioned away
-	// rejoins the cluster.
-	PreVote bool
-
-	ReadOnlyOption ReadOnlyOption
-
-	// peers contains the IDs of all nodes (including self) in the raft cluster. It
-	// should only be set when starting a new raft cluster. Restarting raft from
-	// previous configuration will panic if peers is set. peer is private and only
-	// used for testing right now.
-	peers []uint64
+	storage db.Storage
 }
 
 func (c *raftOpts) validate() error {
-	if c.ID == None {
+	if c.Id == None {
 		return errors.New("cannot use none as id")
 	}
 
@@ -150,21 +115,6 @@ func (c *raftOpts) validate() error {
 	if c.electionTimeout <= c.heartbeatTimeout {
 		return errors.New("election tick must be greater than heartbeat tick")
 	}
-
-	if c.MaxUncommittedEntriesSize == 0 {
-		c.MaxUncommittedEntriesSize = noLimit
-	}
-
-	// default MaxCommittedSizePerReady to MaxSizePerMsg because they were
-	// previously the same parameter.
-	if c.MaxCommittedSizePerReady == 0 {
-		c.MaxCommittedSizePerReady = c.MaxSizePerMsg
-	}
-
-	if c.MaxInflightMsgs <= 0 {
-		return errors.New("max inflight messages must be greater than 0")
-	}
-
 	return nil
 }
 
@@ -190,18 +140,6 @@ type raft struct {
 	//不同角色指向不同的tick驱动函数
 	tick func()
 
-	// Only one conf change may be pending (in the log, but not yet
-	// applied) at a time. This is enforced via pendingConfIndex, which
-	// is set to a value >= the log index of the latest pending
-	// configuration change (if any). Config changes are only allowed to
-	// be proposed if the leader's applied index is greater than this
-	// value.
-	pendingConfIndex uint64
-	// an estimate of the size of the uncommitted tail of the Raft log. Used to
-	// prevent unbounded log growth. Only maintained by the leader. Reset on
-	// term changes.
-	uncommittedSize uint64
-
 	// randomizedElectionTimeout is a random number between
 	// [electiontimeout, 2 * electiontimeout - 1]. It gets reset
 	// when raft changes its state to follower or candidate.
@@ -216,11 +154,12 @@ type raft struct {
 	heartbeatElapsed int
 }
 
-func newRaft(opts *raftOpts, storage db.Storage) (r *raft, err error) {
+func newRaft(opts *raftOpts) (r *raft, err error) {
+	storage := opts.storage
 	if err = opts.validate(); err != nil {
 		log.Panicf("verify raft options failed", err)
 	}
-	rLog := newRaftLog(storage, opts.MaxCommittedSizePerReady)
+	rLog := newRaftLog(storage)
 	hs, cs, err := storage.InitialState()
 	if err != nil {
 		log.Panicf("get hard state  from storage failed", err)
@@ -243,11 +182,11 @@ func newRaft(opts *raftOpts, storage db.Storage) (r *raft, err error) {
 		}
 	}
 
-	trk := tracker.MakeProgressTracker(opts.MaxInflightMsgs)
+	trk := tracker.MakeProgressTracker()
 	trk.Progress = prs
 
 	r = &raft{
-		id:       opts.ID,
+		id:       opts.Id,
 		raftOpts: opts,
 		lead:     None,
 		raftLog:  rLog,
@@ -306,11 +245,6 @@ func (r *raft) becomeLeader() {
 		// This won't happen because we just called reset() above.
 		log.Panic("empty entry was dropped")
 	}
-	// As a special case, don't count the initial empty entry towards the
-	// uncommitted log quota. This is because we want to preserve the
-	// behavior of allowing one entry larger than quota if the current
-	// usage is zero.
-	r.reduceUncommittedSize([]pb.Entry{emptyEnt})
 	log.Infof("%x became leader at term %d", r.id, r.Term)
 }
 
@@ -505,11 +439,6 @@ func (r *raft) handleHeartbeatResponse(m pb.Message, pr *tracker.Progress) {
 	pr.RecentActive = true
 	pr.ProbeSent = false
 
-	// free one slot for the full inflights window to allow progress.
-	if pr.State == tracker.StateReplicate && pr.Inflights.Full() {
-		pr.Inflights.FreeFirstOne()
-	}
-
 	//如果该节点的match index小于leader当前最后一条日志，则为其调用sendAppend方法来复制新日志。
 	if pr.Match < r.raftLog.lastIndex() {
 		r.sendAppend(m.From)
@@ -613,7 +542,6 @@ func (r *raft) handleAppendResponse(m pb.Message, pr *tracker.Progress) {
 			pr.BecomeProbe()
 			pr.BecomeReplicate()
 		case pr.State == tracker.StateReplicate:
-			pr.Inflights.FreeLE(m.Index)
 		}
 
 		if r.maybeCommit() {
@@ -662,12 +590,6 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 	for i := range es {
 		es[i].Term = r.Term
 		es[i].Index = li + 1 + uint64(i)
-	}
-
-	// Track the size of this uncommitted proposal.
-	if !r.increaseUncommittedSize(es) {
-		log.Debugf("%x appending new entries to log would exceed uncommitted entry size limit; dropping proposal", r.id)
-		return false
 	}
 
 	// use latest "last" index after truncate/append
@@ -742,7 +664,6 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		case tracker.StateReplicate:
 			last := m.Entries[n-1].Index
 			pr.OptimisticUpdate(last)
-			pr.Inflights.Add(last)
 		case tracker.StateProbe:
 			pr.ProbeSent = true
 		default:
@@ -752,46 +673,6 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 
 	r.send(m)
 	return true
-}
-
-func (r *raft) increaseUncommittedSize(ents []pb.Entry) bool {
-	var s uint64
-	for _, e := range ents {
-		s += uint64(PayloadSize(e))
-	}
-
-	if r.uncommittedSize > 0 && s > 0 && r.uncommittedSize+s > r.raftOpts.maxUncommittedSize {
-		// If the uncommitted tail of the raft log is empty, allow any size
-		// proposal. Otherwise, limit the size of the uncommitted tail of the
-		// log and drop any proposal that would push the size over the limit.
-		// Note the added requirement s>0 which is used to make sure that
-		// appending single empty entries to the log always succeeds, used both
-		// for replicating a new leader's initial empty entry, and for
-		// auto-leaving joint configurations.
-		return false
-	}
-	r.uncommittedSize += s
-	return true
-}
-
-func (r *raft) reduceUncommittedSize(ents []pb.Entry) {
-	if r.uncommittedSize == 0 {
-		// Fast-path for followers, who do not track or enforce the limit.
-		return
-	}
-
-	var s uint64
-	for _, e := range ents {
-		s += uint64(PayloadSize(e))
-	}
-	if s > r.uncommittedSize {
-		// uncommittedSize may underestimate the size of the uncommitted raft
-		// log tail but will never overestimate it. Saturate at 0 instead of
-		// allowing overflow.
-		r.uncommittedSize = 0
-	} else {
-		r.uncommittedSize -= s
-	}
 }
 
 // maybeCommit attempts to advance the commit index. Returns true if
@@ -938,8 +819,6 @@ func (r *raft) reset(term uint64) {
 
 	r.electionElapsed = 0
 	r.heartbeatElapsed = 0
-	r.pendingConfIndex = 0
-	r.uncommittedSize = 0
 	r.resetRandomizedElectionTimeout()
 	r.abortLeaderTransfer()
 	r.trk.ResetVotes()
@@ -950,9 +829,8 @@ func (r *raft) reset(term uint64) {
 				pr.Match = r.raftLog.lastIndex()
 			}
 			*pr = tracker.Progress{
-				Match:     0,
-				Next:      r.raftLog.lastIndex() + 1,
-				Inflights: tracker.NewInflights(r.trk.MaxInflight),
+				Match: 0,
+				Next:  r.raftLog.lastIndex() + 1,
 			}
 		}(id, r.trk.Progress[id])
 	}
@@ -971,8 +849,6 @@ func (r *raft) send(m pb.Message) {
 }
 
 func (r *raft) advance(rd Ready) {
-	r.reduceUncommittedSize(rd.CommittedEntries)
-
 	if newApplied := rd.appliedCursor(); newApplied > 0 {
 		r.raftLog.appliedTo(newApplied)
 	}

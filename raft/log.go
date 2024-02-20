@@ -49,13 +49,12 @@ type raftLog struct {
 	storage db.Storage
 }
 
-func newRaftLog(storage db.Storage, maxNextEntsSize uint64) (r *raftLog) {
+func newRaftLog(storage db.Storage) (r *raftLog) {
 	if storage == nil {
 		log.Panicf("storage must not be nil")
 	}
 	r = &raftLog{
-		storage:         storage,
-		maxNextEntsSize: maxNextEntsSize,
+		storage: storage,
 	}
 	r.stabled = storage.LastIndex()
 	r.applied = storage.FirstIndex() - 1

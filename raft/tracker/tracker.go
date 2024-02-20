@@ -28,16 +28,13 @@ type ProgressTracker struct {
 	Progress ProgressMap
 
 	Votes map[uint64]bool
-
-	MaxInflight int
 }
 
-func MakeProgressTracker(maxInflight int) ProgressTracker {
+func MakeProgressTracker() ProgressTracker {
 	p := ProgressTracker{
-		Voters:      quorum.MajorityConfig{},
-		MaxInflight: maxInflight,
-		Votes:       map[uint64]bool{},
-		Progress:    map[uint64]*Progress{},
+		Voters:   quorum.MajorityConfig{},
+		Votes:    map[uint64]bool{},
+		Progress: map[uint64]*Progress{},
 	}
 	return p
 }

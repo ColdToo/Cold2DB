@@ -82,20 +82,5 @@ func (s *KvService) Scan(lowKey, highKey []byte) ([]*marshal.BytesKV, error) {
 }
 
 func (s *KvService) ConfChangePropose(nodeOp pb.ConfChangeType, nodeId uint64) (bool, error) {
-	var cc pb.ConfChange
-	switch UpdateNodeInfo.NodeOp {
-	case pb.ConfChangeAddNode:
-		cc = pb.ConfChange{
-			Type:    pb.ConfChangeAddNode,
-			NodeID:  updateInfo.NodeId,
-			Context: []byte(updateInfo.NodeIP),
-		}
-	case pb.ConfChangeRemoveNode:
-		cc = pb.ConfChange{
-			Type:   pb.ConfChangeRemoveNode,
-			NodeID: updateInfo.NodeId,
-		}
-	}
-	h.confChangeC <- cc
-	// todo 配置变更成功后才应该返回
+	return false, nil
 }

@@ -16,7 +16,6 @@ package raft
 
 import (
 	"errors"
-	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/pb"
 )
 
@@ -35,8 +34,8 @@ type rawNode struct {
 	prevHardSt pb.HardState
 }
 
-func NewRawNode(opts *raftOpts, storage db.Storage) (*rawNode, error) {
-	r, err := newRaft(opts, storage)
+func NewRawNode(opts *raftOpts) (*rawNode, error) {
+	r, err := newRaft(opts)
 	if err != nil {
 		return nil, err
 	}
