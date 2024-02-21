@@ -160,7 +160,7 @@ func newRaft(opts *raftOpts) (r *raft, err error) {
 		log.Panicf("verify raft options failed", err)
 	}
 	rLog := newRaftLog(storage)
-	hs, cs, err := storage.InitialState()
+	hs, _, err := storage.InitialState()
 	if err != nil {
 		log.Panicf("get hard state  from storage failed", err)
 	}
@@ -169,21 +169,7 @@ func newRaft(opts *raftOpts) (r *raft, err error) {
 		r.loadHardState(hs)
 	}
 
-	// Prs 必须从 confState 中取，不然根本不知道集群中有哪些 peer
-	if opts.peers == nil {
-		opts.peers = cs.Voters
-	}
-
-	prs := make(map[uint64]*tracker.Progress)
-	for _, pr := range opts.peers {
-		prs[pr] = &tracker.Progress{
-			Next:  0,
-			Match: 0,
-		}
-	}
-
-	trk := tracker.MakeProgressTracker()
-	trk.Progress = prs
+	trk := tracker.MakeProgressTracker(opts.peers)
 
 	r = &raft{
 		id:       opts.Id,
@@ -225,27 +211,37 @@ func (r *raft) hardState() pb.HardState {
 }
 
 func (r *raft) becomeLeader() {
-	if r.state == StateFollower {
-		log.Panicf("invalid transition [follower -> leader]")
+	if r.state == StateFollower && len(r.trk.Voters) != 1 {
+		log.Panic("invalid transition [follower -> leader]")
 	}
 	r.stepFunc = stepLeader
 	r.tick = r.tickHeartbeat
 	r.reset(r.Term)
 	r.lead = r.id
 	r.state = StateLeader
-	// Followers enter replicate mode when they've been successfully probed
-	// (perhaps after having received a snapshot as a result). The leader is
-	// trivially in this state. Note that r.reset() has initialized this
-	// progress with the last index already.
 	r.trk.Progress[r.id].BecomeReplicate()
 
-	//todo 在成为leader后需要插入一条空日志
-	emptyEnt := pb.Entry{Data: nil}
-	if !r.appendEntry(emptyEnt) {
-		// This won't happen because we just called reset() above.
-		log.Panic("empty entry was dropped")
+	// 刚成为 leader 后,每个 follower 的 match 为0, next为最后一条日志
+	lastIndex := r.raftLog.lastIndex()
+	for pr := range r.trk.Progress {
+		r.trk.Progress[pr].Next = lastIndex + 1
+		r.trk.Progress[pr].Match = 0
 	}
-	log.Infof("%x became leader at term %d", r.id, r.Term)
+	// 更新自己的 match 和 next
+	r.trk.Progress[r.id].Next = r.raftLog.lastIndex() + 1
+	r.trk.Progress[r.id].Match = r.trk.Progress[r.id].Next - 1
+
+	//在成为leader后需要插入一条空日志
+	emptyEnt := pb.Entry{Data: nil}
+	r.appendEntry(emptyEnt)
+
+	// 发送追加日志
+	for pr := range r.trk.Progress {
+		if pr != r.id {
+			r.sendAppend(pr)
+		}
+	}
+	log.Infof("peer:%x became leader at term %d", r.id, r.Term)
 }
 
 func (r *raft) becomeFollower(term uint64, lead uint64) {
@@ -254,19 +250,16 @@ func (r *raft) becomeFollower(term uint64, lead uint64) {
 	r.tick = r.tickElection
 	r.state = StateFollower
 	r.lead = lead
-	log.Infof("%x became follower at term %d", r.id, r.Term)
+	log.Infof("peer %x became follower at term %d", r.id, r.Term)
 }
 
 func (r *raft) becomeCandidate() {
-	if r.state == StateLeader {
-		panic("invalid transition [leader -> candidate]")
-	}
 	r.reset(r.Term + 1)
 	r.stepFunc = stepCandidate
 	r.tick = r.tickElection
 	r.vote = r.id
 	r.state = StateCandidate
-	log.Infof("%x became candidate at term %d", r.id, r.Term)
+	log.Infof("peer %x became candidate at term %d", r.id, r.Term)
 }
 
 func (r *raft) tickElection() {
@@ -304,7 +297,7 @@ func (r *raft) Step(m pb.Message) error {
 	case m.Term == 0:
 		// local message
 	case m.Term > r.Term:
-		log.Infof("%x [term: %d] received a %s message with higher term from %x [term: %d]",
+		log.Infof("peer: %x [term: %d] received a %s message with higher term from peer:%x [term: %d]",
 			r.id, r.Term, m.Type, m.From, m.Term)
 		if m.Type == pb.MsgApp || m.Type == pb.MsgHeartbeat || m.Type == pb.MsgSnap {
 			r.becomeFollower(m.Term, m.From)
@@ -377,7 +370,6 @@ func stepFollower(r *raft, m pb.Message) error {
 		r.handleHeartbeat(m)
 	case pb.MsgApp:
 		r.handleAppendEntries(m)
-	case pb.MsgTimeoutNow:
 	}
 	return nil
 }
@@ -594,10 +586,6 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 
 	// use latest "last" index after truncate/append
 	li = r.raftLog.append(es...)
-
-	r.trk.Progress[r.id].MaybeUpdate(li)
-	// Regardless of maybeCommit's return, our caller will call bcastAppend.
-	r.maybeCommit()
 	return true
 }
 
@@ -822,18 +810,6 @@ func (r *raft) reset(term uint64) {
 	r.resetRandomizedElectionTimeout()
 	r.abortLeaderTransfer()
 	r.trk.ResetVotes()
-	for _, id := range r.trk.Voters.Slice() {
-		func(id uint64, pr *tracker.Progress) {
-			//将除自己外的所有节点的match index置为0，而将自己的match index置为自己的last index。
-			if id == r.id {
-				pr.Match = r.raftLog.lastIndex()
-			}
-			*pr = tracker.Progress{
-				Match: 0,
-				Next:  r.raftLog.lastIndex() + 1,
-			}
-		}(id, r.trk.Progress[id])
-	}
 }
 
 func (r *raft) abortLeaderTransfer() {

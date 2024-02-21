@@ -57,7 +57,7 @@ func GetLocalInfo() (localIpAddr string, localId uint64, peers []Peer) {
 	raftConf := Conf.RaftConfig
 	for _, node := range raftConf.Peers {
 		if strings.Contains(node.EAddr, "127.0.0.1") && strings.Contains(node.IAddr, "127.0.0.1") {
-			localId = node.ID
+			localId = node.Id
 			localIpAddr = node.EAddr
 		}
 		peers = append(peers, node)

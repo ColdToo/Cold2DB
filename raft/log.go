@@ -25,11 +25,12 @@ var ErrSnapshotTemporarilyUnavailable = errors.New("snapshot is temporarily unav
 
 //  log structure
 //
-//		 persist................ applied/first.........committed......................last/stabled
-//	--------|--------mem-table----------|-------------memory entries-----------------------|
-//	--------|--------------------------wal-------------------------------------------------|
+//  ......persist................ applied/first.........committed.........................stabled..................last
+//	--------|--------mem-table----------|--------------------------memory slice-----------------------------------|
+//	--------|--------------------------wal(stable entry)-------------------------------------|
 
 type raftLog struct {
+	//已经应用到memtable中最后一条日志的index
 	applied uint64
 
 	committed uint64
@@ -50,19 +51,18 @@ type raftLog struct {
 }
 
 func newRaftLog(storage db.Storage) (r *raftLog) {
-	if storage == nil {
-		log.Panicf("storage must not be nil")
-	}
 	r = &raftLog{
 		storage: storage,
 	}
 	r.stabled = storage.LastIndex()
 	r.applied = storage.FirstIndex() - 1
+	if storage.FirstIndex() == 0 {
+		r.applied = 0
+	}
 	r.offset = r.stabled + 1
 	return
 }
 
-// FirstIndex 返回未压缩日志的索引
 func (l *raftLog) firstIndex() uint64 {
 	firstIndex := l.storage.FirstIndex()
 	if firstIndex == 0 {
@@ -91,9 +91,8 @@ func (l *raftLog) lastTerm() uint64 {
 }
 
 func (l *raftLog) term(i uint64) (uint64, error) {
-	// the valid term range is [index of dummy entry, last index]
 	if i < l.firstIndex() || i > l.lastIndex() {
-		return 0, nil
+		return 0, ErrUnavailable
 	}
 
 	if i > l.stabled {
@@ -101,13 +100,10 @@ func (l *raftLog) term(i uint64) (uint64, error) {
 	}
 
 	t, err := l.storage.Term(i)
-	if err == nil {
-		return t, nil
+	if err != nil {
+		return t, err
 	}
-	if err == ErrCompacted || err == ErrUnavailable {
-		return 0, err
-	}
-	panic("should not happen")
+	return 0, err
 }
 
 // allEntries returns all entries in the log.

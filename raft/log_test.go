@@ -26,7 +26,7 @@ import (
 	"testing"
 )
 
-func initLog() {
+func InitLog() {
 	cfg := &config.ZapConfig{
 		Level:         "debug",
 		Format:        "console",
@@ -42,7 +42,7 @@ func initLog() {
 
 // todo
 func TestFindConflict(t *testing.T) {
-	initLog()
+	InitLog()
 	previousEnts := []pb.Entry{{Index: 1, Term: 1}, {Index: 2, Term: 2}, {Index: 3, Term: 3}}
 	tests := []struct {
 		ents      []pb.Entry
@@ -71,7 +71,7 @@ func TestFindConflict(t *testing.T) {
 		storage.EXPECT().FirstIndex().Return(uint64(1))
 		storage.EXPECT().LastIndex().Return(uint64(3))
 		storage.EXPECT().Truncate(mock.AnythingOfType("uint64")).Return(nil)
-		raftLog := newRaftLog(storage, noLimit)
+		raftLog := newRaftLog(storage)
 		raftLog.append(previousEnts...)
 
 		gconflict := raftLog.findConflict(tt.ents)
@@ -83,7 +83,7 @@ func TestFindConflict(t *testing.T) {
 }
 
 func TestUnstableTruncateAndAppend(t *testing.T) {
-	initLog()
+	InitLog()
 	tests := []struct {
 		entries  []pb.Entry
 		offset   uint64
@@ -142,7 +142,7 @@ func TestUnstableTruncateAndAppend(t *testing.T) {
 
 // todo
 func TestTerm(t *testing.T) {
-	initLog()
+	InitLog()
 	num := uint64(100)
 	mockCtl := gomock.NewController(t)
 	storage := mocks.NewMockStorage(mockCtl)
@@ -196,7 +196,7 @@ func TestTerm(t *testing.T) {
 }
 
 func TestSlice(t *testing.T) {
-	initLog()
+	InitLog()
 	var i uint64
 	offset := uint64(100)
 	num := uint64(100)
@@ -209,7 +209,7 @@ func TestSlice(t *testing.T) {
 		persistEnts = append(persistEnts, pb.Entry{Term: offset + i, Index: offset + i})
 	}
 	storage := &db.C2KV{}
-	l := newRaftLog(storage, noLimit)
+	l := newRaftLog(storage)
 	for i = num / 2; i < num; i++ {
 		l.append(pb.Entry{Index: offset + i, Term: offset + i})
 	}

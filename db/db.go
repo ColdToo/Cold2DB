@@ -19,7 +19,7 @@ type Storage interface {
 	Scan(lowKey []byte, highKey []byte) (kvs []*marshal.KV, err error)
 	Apply(kvs []*marshal.KV) error
 
-	PersistUnstableEnts(entries []*pb.Entry) error
+	PersistUnstableEnts(entries []pb.Entry) error
 	PersistHardState(st pb.HardState, cs pb.ConfState) error
 	// Truncate truncate index 及其之后的日志
 	Truncate(index uint64) error
@@ -201,7 +201,7 @@ func (db *C2KV) restoreMemEntries() {
 
 ExitLoop:
 	for Node != nil {
-		ents := make([]*pb.Entry, 0)
+		ents := make([]pb.Entry, 0)
 		Seg := Node.Seg
 		reader := wal.NewSegmentReader(Seg)
 		for {
@@ -226,7 +226,7 @@ ExitLoop:
 				log.Panicf("read entry failed", err)
 			}
 
-			ents = append(ents, ent)
+			ents = append(ents, *ent)
 			reader.Next(header.EntrySize)
 		}
 
@@ -299,7 +299,7 @@ func (db *C2KV) maybeRotateMemTable(bytesCount int64) {
 	}
 }
 
-func (db *C2KV) PersistUnstableEnts(entries []*pb.Entry) error {
+func (db *C2KV) PersistUnstableEnts(entries []pb.Entry) error {
 	if len(entries) == 0 {
 		return nil
 	}

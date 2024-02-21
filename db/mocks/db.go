@@ -62,18 +62,18 @@ func (mr *MockStorageMockRecorder) Close() *gomock.Call {
 }
 
 // Entries mocks base method.
-func (m *MockStorage) Entries(lo, hi, maxSize uint64) ([]pb.Entry, error) {
+func (m *MockStorage) Entries(lo, hi uint64) ([]pb.Entry, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Entries", lo, hi, maxSize)
+	ret := m.ctrl.Call(m, "Entries", lo, hi)
 	ret0, _ := ret[0].([]pb.Entry)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Entries indicates an expected call of Entries.
-func (mr *MockStorageMockRecorder) Entries(lo, hi, maxSize interface{}) *gomock.Call {
+func (mr *MockStorageMockRecorder) Entries(lo, hi interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Entries", reflect.TypeOf((*MockStorage)(nil).Entries), lo, hi, maxSize)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Entries", reflect.TypeOf((*MockStorage)(nil).Entries), lo, hi)
 }
 
 // FirstIndex mocks base method.
@@ -136,21 +136,21 @@ func (mr *MockStorageMockRecorder) LastIndex() *gomock.Call {
 }
 
 // PersistHardState mocks base method.
-func (m *MockStorage) PersistHardState(st pb.HardState) error {
+func (m *MockStorage) PersistHardState(st pb.HardState, cs pb.ConfState) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PersistHardState", st)
+	ret := m.ctrl.Call(m, "PersistHardState", st, cs)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // PersistHardState indicates an expected call of PersistHardState.
-func (mr *MockStorageMockRecorder) PersistHardState(st interface{}) *gomock.Call {
+func (mr *MockStorageMockRecorder) PersistHardState(st, cs interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PersistHardState", reflect.TypeOf((*MockStorage)(nil).PersistHardState), st)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PersistHardState", reflect.TypeOf((*MockStorage)(nil).PersistHardState), st, cs)
 }
 
 // PersistUnstableEnts mocks base method.
-func (m *MockStorage) PersistUnstableEnts(entries []*pb.Entry) error {
+func (m *MockStorage) PersistUnstableEnts(entries []pb.Entry) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PersistUnstableEnts", entries)
 	ret0, _ := ret[0].(error)

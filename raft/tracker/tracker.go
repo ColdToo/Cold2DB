@@ -30,11 +30,22 @@ type ProgressTracker struct {
 	Votes map[uint64]bool
 }
 
-func MakeProgressTracker() ProgressTracker {
+func MakeProgressTracker(peers []uint64) ProgressTracker {
+	prs := make(map[uint64]*Progress)
+	for _, pr := range peers {
+		prs[pr] = &Progress{
+			Next:  0,
+			Match: 0,
+		}
+	}
+	voters := make(quorum.MajorityConfig)
+	for _, peer := range peers {
+		voters[peer] = struct{}{}
+	}
 	p := ProgressTracker{
-		Voters:   quorum.MajorityConfig{},
+		Voters:   voters,
 		Votes:    map[uint64]bool{},
-		Progress: map[uint64]*Progress{},
+		Progress: prs,
 	}
 	return p
 }

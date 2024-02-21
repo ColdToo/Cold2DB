@@ -95,7 +95,7 @@ func (h WalEntryHeader) IsEmpty() bool {
 	return h.Crc32 == 0 || h.EntrySize == 0 || h.Index == 0
 }
 
-func EncodeWALEntry(e *pb.Entry) ([]byte, int) {
+func EncodeWALEntry(e pb.Entry) ([]byte, int) {
 	eBytes, _ := e.Marshal()
 	eBytesSize := len(eBytes)
 	var size = ChunkHeaderSize + eBytesSize

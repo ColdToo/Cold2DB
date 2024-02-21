@@ -25,6 +25,10 @@ func IsEmptyHardState(st pb.HardState) bool {
 	return isHardStateEqual(st, pb.HardState{})
 }
 
+func IsEmptyConfState(cs pb.ConfState) bool {
+	return cs.Voters == nil
+}
+
 func isHardStateEqual(a, b pb.HardState) bool {
 	return a.Term == b.Term && a.Vote == b.Vote
 }
