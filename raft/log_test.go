@@ -21,16 +21,17 @@ import (
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
 	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/mock"
 	"reflect"
 	"testing"
 )
+
+const ignore = 0
 
 func InitLog() {
 	cfg := &config.ZapConfig{
 		Level:         "debug",
 		Format:        "console",
-		Prefix:        "[Cold2DB]",
+		Prefix:        "[C2KV]",
 		Director:      "./log",
 		ShowLine:      true,
 		EncodeLevel:   "LowercaseColorLevelEncoder",
@@ -40,224 +41,382 @@ func InitLog() {
 	log.InitLog(cfg)
 }
 
-// todo
-func TestFindConflict(t *testing.T) {
+func MockSpecStorage(t *testing.T, fistIndex, lastIndex, expIdx, expTerm uint64) db.Storage {
+	mockCtl := gomock.NewController(t)
+	storage := mocks.NewMockStorage(mockCtl)
+	storage.EXPECT().FirstIndex().Return(fistIndex).AnyTimes()
+	storage.EXPECT().LastIndex().Return(lastIndex).AnyTimes()
+	storage.EXPECT().Term(expIdx).Return(expTerm, nil).AnyTimes()
+	return storage
+}
+
+func MockEntriesStorage(t *testing.T, fistIndex, lastIndex, from, to uint64, entries []pb.Entry) db.Storage {
+	mockCtl := gomock.NewController(t)
+	storage := mocks.NewMockStorage(mockCtl)
+	storage.EXPECT().FirstIndex().Return(fistIndex).AnyTimes()
+	storage.EXPECT().LastIndex().Return(lastIndex).AnyTimes()
+	storage.EXPECT().Entries(from, to).Return(entries, nil).AnyTimes()
+	return storage
+}
+
+func MockTruncateStorage(t *testing.T, fistIndex, lastIndex, expIdx, expTerm, truncateIndex uint64) db.Storage {
+	mockCtl := gomock.NewController(t)
+	storage := mocks.NewMockStorage(mockCtl)
+	storage.EXPECT().Truncate(truncateIndex).Return(nil).AnyTimes()
+	storage.EXPECT().FirstIndex().Return(fistIndex).AnyTimes()
+	storage.EXPECT().LastIndex().Return(lastIndex).AnyTimes()
+	storage.EXPECT().Term(expIdx).Return(expTerm, nil).AnyTimes()
+	return storage
+}
+
+func MockEntries(from, to uint64) (ents []pb.Entry) {
+	for i := from; i < to; i++ {
+		ents = append(ents, pb.Entry{Index: i, Term: i})
+	}
+	return
+}
+
+func TestFirstIndex(t *testing.T) {
 	InitLog()
-	previousEnts := []pb.Entry{{Index: 1, Term: 1}, {Index: 2, Term: 2}, {Index: 3, Term: 3}}
 	tests := []struct {
-		ents      []pb.Entry
-		wconflict uint64
+		raftLog *raftLog
+		entries []pb.Entry
+		want    uint64
 	}{
-		// no conflict, empty ent
-		{[]pb.Entry{}, 0},
-		// no conflict
-		{[]pb.Entry{{Index: 1, Term: 1}, {Index: 2, Term: 2}, {Index: 3, Term: 3}}, 0},
-		{[]pb.Entry{{Index: 2, Term: 2}, {Index: 3, Term: 3}}, 0},
-		{[]pb.Entry{{Index: 3, Term: 3}}, 0},
-		// no conflict, but has new entries
-		{[]pb.Entry{{Index: 1, Term: 1}, {Index: 2, Term: 2}, {Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 4}}, 4},
-		{[]pb.Entry{{Index: 2, Term: 2}, {Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 4}}, 4},
-		{[]pb.Entry{{Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 4}}, 4},
-		{[]pb.Entry{{Index: 4, Term: 4}, {Index: 5, Term: 4}}, 4},
-		// conflicts with existing entries
-		{[]pb.Entry{{Index: 1, Term: 4}, {Index: 2, Term: 4}}, 1},
-		{[]pb.Entry{{Index: 2, Term: 1}, {Index: 3, Term: 4}, {Index: 4, Term: 4}}, 2},
-		{[]pb.Entry{{Index: 3, Term: 1}, {Index: 4, Term: 2}, {Index: 5, Term: 4}, {Index: 6, Term: 4}}, 3},
+		{
+			raftLog: newRaftLog(MockSpecStorage(t, 1, 10, 0, 0)),
+			entries: []pb.Entry{{Index: 11, Term: 1}, {Index: 12, Term: 1}, {Index: 13, Term: 1}},
+			want:    1,
+		},
+		{
+			raftLog: newRaftLog(MockSpecStorage(t, 0, 0, 0, 0)),
+			entries: []pb.Entry{{Index: 11, Term: 1}, {Index: 12, Term: 1}, {Index: 13, Term: 1}},
+			want:    11,
+		},
 	}
 
 	for i, tt := range tests {
-		mockCtl := gomock.NewController(t)
-		storage := mocks.NewMockStorage(mockCtl)
-		storage.EXPECT().FirstIndex().Return(uint64(1))
-		storage.EXPECT().LastIndex().Return(uint64(3))
-		storage.EXPECT().Truncate(mock.AnythingOfType("uint64")).Return(nil)
-		raftLog := newRaftLog(storage)
-		raftLog.append(previousEnts...)
-
-		gconflict := raftLog.findConflict(tt.ents)
-		if gconflict != tt.wconflict {
-			t.Errorf("#%d: conflict = %d, want %d", i, gconflict, tt.wconflict)
+		u := tt.raftLog
+		u.unstableEnts = tt.entries
+		index := u.firstIndex()
+		if index != tt.want {
+			t.Errorf("#%d: index = %d, want %d", i, index, tt.want)
 		}
-		mockCtl.Finish()
 	}
 }
 
-func TestUnstableTruncateAndAppend(t *testing.T) {
+func TestLastIndex(t *testing.T) {
 	InitLog()
 	tests := []struct {
-		entries  []pb.Entry
-		offset   uint64
-		snap     *pb.Snapshot
-		toappend []pb.Entry
-
-		woffset          uint64
-		wunstableentries []pb.Entry
-		willTruncStable  bool
+		raftLog *raftLog
+		entries []pb.Entry
+		want    uint64
 	}{
-		// append to the end
 		{
-			[]pb.Entry{{Index: 5, Term: 1}}, 5, nil,
-			[]pb.Entry{{Index: 6, Term: 1}, {Index: 7, Term: 1}},
-			5, []pb.Entry{{Index: 5, Term: 1}, {Index: 6, Term: 1}, {Index: 7, Term: 1}}, false,
-		},
-		// truncate the stable entries  and replace the unstable entries
-		{
-			[]pb.Entry{{Index: 5, Term: 1}}, 5, nil,
-			[]pb.Entry{{Index: 4, Term: 2}, {Index: 5, Term: 2}, {Index: 6, Term: 2}},
-			4, []pb.Entry{{Index: 4, Term: 2}, {Index: 5, Term: 2}, {Index: 6, Term: 2}}, true,
-		},
-		// truncate the unstable entries
-		{
-			[]pb.Entry{{Index: 5, Term: 1}, {Index: 6, Term: 1}, {Index: 7, Term: 1}}, 5, nil,
-			[]pb.Entry{{Index: 6, Term: 2}},
-			5, []pb.Entry{{Index: 5, Term: 1}, {Index: 6, Term: 2}}, false,
+			raftLog: newRaftLog(MockSpecStorage(t, 1, 10, 0, 0)),
+			entries: []pb.Entry{{Index: 11, Term: 1}, {Index: 12, Term: 1}, {Index: 13, Term: 1}},
+			want:    13,
 		},
 		{
-			[]pb.Entry{{Index: 5, Term: 1}, {Index: 6, Term: 1}, {Index: 7, Term: 1}}, 5, nil,
-			[]pb.Entry{{Index: 7, Term: 2}, {Index: 8, Term: 2}},
-			5, []pb.Entry{{Index: 5, Term: 1}, {Index: 6, Term: 1}, {Index: 7, Term: 2}, {Index: 8, Term: 2}}, false,
+			raftLog: newRaftLog(MockSpecStorage(t, 1, 10, 0, 0)),
+			entries: make([]pb.Entry, 0),
+			want:    10,
 		},
 	}
 
-	mockCtl := gomock.NewController(t)
-	storage := mocks.NewMockStorage(mockCtl)
 	for i, tt := range tests {
-		if tt.willTruncStable {
-			storage.EXPECT().Truncate(tt.toappend[0].Index).Return(nil).AnyTimes()
+		u := tt.raftLog
+		u.unstableEnts = tt.entries
+		index := u.lastIndex()
+		if index != tt.want {
+			t.Errorf("#%d: index = %d, want %d", i, index, tt.want)
 		}
+	}
+}
+
+func TestTerm(t *testing.T) {
+	InitLog()
+	tests := []struct {
+		raftLog *raftLog
+		entries []pb.Entry
+		exptidx uint64
+		want    uint64
+	}{
+		{
+			raftLog: newRaftLog(MockSpecStorage(t, 1, 10, 8, 8)),
+			entries: []pb.Entry{{Index: 11, Term: 11}, {Index: 12, Term: 12}, {Index: 13, Term: 13}},
+			exptidx: 8,
+			want:    8,
+		},
+		{
+			raftLog: newRaftLog(MockSpecStorage(t, 1, 10, 0, 0)),
+			entries: []pb.Entry{{Index: 11, Term: 11}, {Index: 12, Term: 12}, {Index: 13, Term: 13}},
+			exptidx: 12,
+			want:    12,
+		},
+	}
+
+	for i, tt := range tests {
+		u := tt.raftLog
+		u.unstableEnts = tt.entries
+		term, _ := u.term(tt.exptidx)
+		if term != tt.want {
+			t.Errorf("#%d: term = %d, want %d", i, term, tt.want)
+		}
+	}
+}
+
+func TestStableTo(t *testing.T) {
+	tests := []struct {
+		entries     []pb.Entry
+		offset      uint64
+		index, term uint64
+
+		woffset uint64
+		wlen    int
+	}{
+		{
+			[]pb.Entry{{Index: 5, Term: 1}}, 5,
+			5, 1, // stable to the first entry
+			6, 0,
+		},
+		{
+			[]pb.Entry{{Index: 5, Term: 1}, {Index: 6, Term: 1}}, 5,
+			5, 1, // stable to the first entry
+			6, 1,
+		},
+		{
+			[]pb.Entry{{Index: 5, Term: 1}}, 5,
+			4, 1, // stable to old entry
+			5, 1,
+		},
+		{
+			[]pb.Entry{{Index: 5, Term: 1}}, 5,
+			4, 2, // stable to old entry
+			5, 1,
+		},
+	}
+
+	for i, tt := range tests {
 		u := raftLog{
 			unstableEnts: tt.entries,
 			offset:       tt.offset,
-			storage:      storage,
 		}
-		u.truncateAndAppend(tt.toappend)
+		u.stableTo(tt.index)
 		if u.offset != tt.woffset {
 			t.Errorf("#%d: offset = %d, want %d", i, u.offset, tt.woffset)
 		}
-		if !reflect.DeepEqual(u.unstableEnts, tt.wunstableentries) {
-			t.Errorf("#%d: entries = %v, want %v", i, u.unstableEnts, tt.wunstableentries)
-		}
-	}
-}
-
-// todo
-func TestTerm(t *testing.T) {
-	InitLog()
-	num := uint64(100)
-	mockCtl := gomock.NewController(t)
-	storage := mocks.NewMockStorage(mockCtl)
-	u := raftLog{
-		stabled: num,
-		offset:  num + 1,
-		storage: storage,
-	}
-
-	var i uint64
-	for i = 1; i < num; i++ {
-		u.append(pb.Entry{Index: num + i, Term: i})
-	}
-
-	tests := []struct {
-		index         uint64
-		w             uint64
-		stableStorage bool
-	}{
-		//访问稳定存储
-		{1, 0, true},
-		{u.stabled, 999, true},
-		//unstable entries
-		{u.offset, 1, false},
-		{u.offset + num/2, num/2 + 1, false},
-		{u.offset + num - 2, num, false},
-		//invalid index
-		{u.offset + num - 1, 0, false},
-	}
-
-	storage.EXPECT().FirstIndex().Return(uint64(1)).AnyTimes()
-	storage.EXPECT().LastIndex().Return(num + num).AnyTimes()
-	for j, tt := range tests {
-		if tt.stableStorage {
-			switch tt.index {
-			case 1:
-				storage.EXPECT().Term(uint64(1)).Return(uint64(0), ErrCompacted).AnyTimes()
-				if _, err := u.term(tt.index); err != ErrCompacted {
-					t.Log("can not get compacted index")
-				}
-				continue
-			case u.stabled:
-				storage.EXPECT().Term(u.stabled).Return(uint64(999), nil).AnyTimes()
-			}
-		}
-		term, _ := u.term(tt.index)
-		if term != tt.w {
-			t.Errorf("#%d: at = %d, want %d", j, term, tt.w)
+		if len(u.unstableEnts) != tt.wlen {
+			t.Errorf("#%d: len = %d, want %d", i, len(u.unstableEnts), tt.wlen)
 		}
 	}
 }
 
 func TestSlice(t *testing.T) {
-	InitLog()
 	var i uint64
+	InitLog()
+	firstIndex := uint64(1)
 	offset := uint64(100)
 	num := uint64(100)
-	last := offset + num
-	half := offset + num/2
-	halfe := pb.Entry{Index: half, Term: half}
-
-	persistEnts := make([]pb.Entry, 0)
-	for i = 1; i < num/2; i++ {
-		persistEnts = append(persistEnts, pb.Entry{Term: offset + i, Index: offset + i})
-	}
-	storage := &db.C2KV{}
-	l := newRaftLog(storage)
-	for i = num / 2; i < num; i++ {
-		l.append(pb.Entry{Index: offset + i, Term: offset + i})
-	}
 
 	tests := []struct {
-		from  uint64
-		to    uint64
-		limit uint64
+		name    string
+		raftLog *raftLog
+		from    uint64
+		to      uint64
 
 		w      []pb.Entry
 		wpanic bool
 	}{
-		// test no limit
-		{offset - 1, offset + 1, noLimit, nil, false},
-		{offset, offset + 1, noLimit, nil, false},
-		{half - 1, half + 1, noLimit, []pb.Entry{{Index: half - 1, Term: half - 1}, {Index: half, Term: half}}, false},
-		{half, half + 1, noLimit, []pb.Entry{{Index: half, Term: half}}, false},
-		{last - 1, last, noLimit, []pb.Entry{{Index: last - 1, Term: last - 1}}, false},
-		{last, last + 1, noLimit, nil, true},
+		// only storage
+		{"only storage",
+			newRaftLog(MockEntriesStorage(t, firstIndex, offset-1, 50, offset, MockEntries(50, offset))),
+			50, offset, MockEntries(50, offset), false},
 
-		// test limit
-		{half - 1, half + 1, 0, []pb.Entry{{Index: half - 1, Term: half - 1}}, false},
-		{half - 1, half + 1, uint64(halfe.Size() + 1), []pb.Entry{{Index: half - 1, Term: half - 1}}, false},
-		{half - 2, half + 1, uint64(halfe.Size() + 1), []pb.Entry{{Index: half - 2, Term: half - 2}}, false},
-		{half - 1, half + 1, uint64(halfe.Size() * 2), []pb.Entry{{Index: half - 1, Term: half - 1}, {Index: half, Term: half}}, false},
-		{half - 1, half + 2, uint64(halfe.Size() * 3), []pb.Entry{{Index: half - 1, Term: half - 1}, {Index: half, Term: half}, {Index: half + 1, Term: half + 1}}, false},
-		{half, half + 2, uint64(halfe.Size()), []pb.Entry{{Index: half, Term: half}}, false},
-		{half, half + 2, uint64(halfe.Size() * 2), []pb.Entry{{Index: half, Term: half}, {Index: half + 1, Term: half + 1}}, false},
+		// cross storage and raft log
+		{"cross storage and raft log",
+			newRaftLog(MockEntriesStorage(t, firstIndex, offset-1, 60, offset, MockEntries(60, offset))),
+			60, 120, MockEntries(60, 120), false},
+
+		// only raft log
+		{"only raft log",
+			newRaftLog(MockSpecStorage(t, firstIndex, offset-1, ignore, ignore)),
+			offset, 110, MockEntries(offset, 110), false},
+		{"only raft log",
+			newRaftLog(MockSpecStorage(t, firstIndex, offset-1, ignore, ignore)),
+			110, 130, MockEntries(110, 130), false},
+
+		// err compacted
+		{"err compacted",
+			newRaftLog(MockSpecStorage(t, firstIndex, offset-1, ignore, ignore)),
+			0, 100, nil, false},
+
+		// panic out bounds
+		{"panic out bounds",
+			newRaftLog(MockSpecStorage(t, firstIndex, offset-1, ignore, ignore)),
+			1, 200, nil, true},
 	}
 
 	for j, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						if !tt.wpanic {
+							t.Errorf("%d: panic = %v, want %v: %v", j, true, false, r)
+						}
+					}
+				}()
+
+				for i = 0; i < num/2; i++ {
+					tt.raftLog.truncateAndAppend([]pb.Entry{{Index: offset + i, Term: offset + i}})
+				}
+				g, err := tt.raftLog.slice(tt.from, tt.to)
+				if tt.from < firstIndex && err != ErrCompacted {
+					t.Fatalf("#%d: err = %v, want %v", j, err, ErrCompacted)
+				}
+				if !reflect.DeepEqual(g, tt.w) {
+					t.Errorf("#%d: from %d to %d = %v, want %v", j, tt.from, tt.to, g, tt.w)
+				}
+			}()
+		})
+	}
+}
+
+func TestTruncateAndAppend(t *testing.T) {
+	InitLog()
+	tests := []struct {
+		raftLog *raftLog
+		entries []pb.Entry
+
+		toappend         []pb.Entry
+		woffset          uint64
+		wunstableentries []pb.Entry
+	}{
+		// append to the end
+		{
+			newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)),
+			[]pb.Entry{},
+			[]pb.Entry{{Index: 1, Term: 1}, {Index: 2, Term: 1}},
+			1, []pb.Entry{{Index: 1, Term: 1}, {Index: 2, Term: 1}},
+		},
+		{
+			newRaftLog(MockSpecStorage(t, 1, 4, ignore, ignore)),
+			[]pb.Entry{{Index: 5, Term: 1}},
+			[]pb.Entry{{Index: 6, Term: 1}, {Index: 7, Term: 1}},
+			5, []pb.Entry{{Index: 5, Term: 1}, {Index: 6, Term: 1}, {Index: 7, Term: 1}},
+		},
+		// truncate the stable entries  and replace the unstable entries
+		{
+			newRaftLog(MockTruncateStorage(t, 1, 4, ignore, ignore, 4)),
+			[]pb.Entry{{Index: 5, Term: 1}},
+			[]pb.Entry{{Index: 4, Term: 2}, {Index: 5, Term: 2}, {Index: 6, Term: 2}},
+			4, []pb.Entry{{Index: 4, Term: 2}, {Index: 5, Term: 2}, {Index: 6, Term: 2}},
+		},
+		// truncate the unstable entries
+		{
+			newRaftLog(MockSpecStorage(t, 1, 4, ignore, ignore)),
+			[]pb.Entry{{Index: 5, Term: 1}, {Index: 6, Term: 1}, {Index: 7, Term: 1}},
+			[]pb.Entry{{Index: 6, Term: 2}},
+			5, []pb.Entry{{Index: 5, Term: 1}, {Index: 6, Term: 2}},
+		},
+		{
+			newRaftLog(MockSpecStorage(t, 1, 4, ignore, ignore)),
+			[]pb.Entry{{Index: 5, Term: 1}, {Index: 6, Term: 1}, {Index: 7, Term: 1}},
+			[]pb.Entry{{Index: 7, Term: 2}, {Index: 8, Term: 2}},
+			5, []pb.Entry{{Index: 5, Term: 1}, {Index: 6, Term: 1}, {Index: 7, Term: 2}, {Index: 8, Term: 2}},
+		},
+	}
+
+	for i, tt := range tests {
+		tt.raftLog.committed = 0
+		tt.raftLog.unstableEnts = tt.entries
+		tt.raftLog.truncateAndAppend(tt.toappend)
+		if tt.raftLog.offset != tt.woffset {
+			t.Errorf("#%d: offset = %d, want %d", i, tt.raftLog.offset, tt.woffset)
+		}
+		if !reflect.DeepEqual(tt.raftLog.unstableEnts, tt.wunstableentries) {
+			t.Errorf("#%d: entries = %v, want %v", i, tt.raftLog.unstableEnts, tt.wunstableentries)
+		}
+	}
+}
+
+// TestLogMaybeAppend ensures:
+// If the given (index, term) matches with the existing log:
+//  1. If an existing entry conflicts with a new one (same index
+//     but different terms), delete the existing entry and all that
+//     follow it
+//  2. Append any new entries not already in the log
+//
+// If the given (index, term) does not match with the existing log:
+//
+//	return false
+func TestLogMaybeAppend(t *testing.T) {
+	previousEnts := []pb.Entry{{Index: 1, Term: 1}, {Index: 2, Term: 2}, {Index: 3, Term: 3}}
+	lastindex := uint64(3)
+	lastterm := uint64(3)
+	commit := uint64(1)
+
+	tests := []struct {
+		logTerm   uint64
+		index     uint64
+		committed uint64
+		ents      []pb.Entry
+
+		wlasti  uint64
+		wappend bool
+		wcommit uint64
+		wpanic  bool
+	}{
+		// not match: term is different
+		{
+			lastterm - 1, lastindex, lastindex, []pb.Entry{{Index: lastindex + 1, Term: 4}},
+			0, false, commit, false,
+		},
+		// not match: index out of bound
+		{
+			lastterm, lastindex + 1, lastindex, []pb.Entry{{Index: lastindex + 2, Term: 4}},
+			0, false, commit, false,
+		},
+		// match with the last existing entry
+		{
+			lastterm, lastindex, lastindex, nil,
+			lastindex, true, lastindex, false,
+		},
+	}
+
+	for i, tt := range tests {
+		raftLog := newRaftLog(MockSpecStorage(t, 1, 4, ignore, ignore))
+		raftLog.truncateAndAppend(previousEnts)
+		raftLog.committed = commit
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
 					if !tt.wpanic {
-						t.Errorf("%d: panic = %v, want %v: %v", j, true, false, r)
+						t.Errorf("%d: panic = %v, want %v", i, true, tt.wpanic)
 					}
 				}
 			}()
-			g, err := l.slice(tt.from, tt.to, tt.limit)
-			if tt.from <= offset && err != ErrCompacted {
-				t.Fatalf("#%d: err = %v, want %v", j, err, ErrCompacted)
+			glasti, gappend := raftLog.maybeAppend(tt.index, tt.logTerm, tt.committed, tt.ents...)
+			gcommit := raftLog.committed
+
+			if glasti != tt.wlasti {
+				t.Errorf("#%d: lastindex = %d, want %d", i, glasti, tt.wlasti)
 			}
-			if tt.from > offset && err != nil {
-				t.Fatalf("#%d: unexpected error %v", j, err)
+			if gappend != tt.wappend {
+				t.Errorf("#%d: append = %v, want %v", i, gappend, tt.wappend)
 			}
-			if !reflect.DeepEqual(g, tt.w) {
-				t.Errorf("#%d: from %d to %d = %v, want %v", j, tt.from, tt.to, g, tt.w)
+			if gcommit != tt.wcommit {
+				t.Errorf("#%d: committed = %d, want %d", i, gcommit, tt.wcommit)
+			}
+			if gappend && len(tt.ents) != 0 {
+				gents, err := raftLog.slice(raftLog.lastIndex()-uint64(len(tt.ents))+1, raftLog.lastIndex()+1)
+				if err != nil {
+					t.Fatalf("unexpected error %v", err)
+				}
+				if !reflect.DeepEqual(tt.ents, gents) {
+					t.Errorf("#%d: appended entries = %v, want %v", i, gents, tt.ents)
+				}
 			}
 		}()
 	}

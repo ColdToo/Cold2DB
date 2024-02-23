@@ -2,6 +2,7 @@ package raft
 
 import (
 	"errors"
+	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -10,10 +11,6 @@ import (
 // ErrCompacted is returned by Storage.Entries/Compact when a requested
 // index is unavailable because it predates the last snapshot.
 var ErrCompacted = errors.New("requested index is unavailable due to compaction")
-
-// ErrSnapOutOfDate is returned by Storage.CreateSnapshot when a requested
-// index is older than the existing snapshot.
-var ErrSnapOutOfDate = errors.New("requested index is older than the existing snapshot")
 
 // ErrUnavailable is returned by Storage interface when the requested log entries
 // are unavailable.
@@ -42,9 +39,6 @@ type raftLog struct {
 	// raftLog在创建时，会将unstable的offset置为storage的last index + 1，
 	offset uint64
 
-	// maxNextEntsSize is the maximum number aggregate byte size for per ready
-	maxNextEntsSize uint64
-
 	unstableEnts []pb.Entry
 
 	storage db.Storage
@@ -56,6 +50,7 @@ func newRaftLog(storage db.Storage) (r *raftLog) {
 	}
 	r.stabled = storage.LastIndex()
 	r.applied = storage.FirstIndex() - 1
+	r.unstableEnts = make([]pb.Entry, 0)
 	if storage.FirstIndex() == 0 {
 		r.applied = 0
 	}
@@ -70,9 +65,8 @@ func (l *raftLog) firstIndex() uint64 {
 			return l.unstableEnts[0].Index
 		}
 		return 0
-	} else {
-		return firstIndex
 	}
+	return firstIndex
 }
 
 func (l *raftLog) lastIndex() uint64 {
@@ -101,56 +95,43 @@ func (l *raftLog) term(i uint64) (uint64, error) {
 
 	t, err := l.storage.Term(i)
 	if err != nil {
-		return t, err
+		return 0, err
 	}
-	return 0, err
+	return t, nil
 }
 
-// allEntries returns all entries in the log.
-func (l *raftLog) allEntries() []pb.Entry {
-	ents, err := l.entries(l.firstIndex(), noLimit)
-	if err == nil {
-		return ents
-	}
-	if err == ErrCompacted {
-		// try again if there was a racing compaction
-		return l.allEntries()
-	}
-	panic(err)
-}
-
-// Entries 获取指定范围内的日志切片
-func (l *raftLog) entries(i, maxSize uint64) (ents []pb.Entry, err error) {
+// Entries 获取指定index之后的日志切片
+func (l *raftLog) entries(i uint64) (ents []pb.Entry, err error) {
 	if i > l.lastIndex() {
-		return nil, nil
+		return nil, code.ErrUnavailable
 	}
-	return l.slice(i, l.lastIndex()+1, maxSize)
+	return l.slice(i, l.lastIndex()+1)
 }
 
-// slice returns a slice of log entries from lo through hi-1, inclusive.
-// (lo,hi]
-func (l *raftLog) slice(lo, hi, maxSize uint64) ([]pb.Entry, error) {
-	err := l.mustCheckOutOfBounds(lo, hi)
-	if err != nil {
-		return nil, err
-	}
+// slice returns a slice of log entries from lo through hi-1, [lo,hi)
+func (l *raftLog) slice(lo, hi uint64) ([]pb.Entry, error) {
 	if lo == hi {
 		return nil, nil
 	}
 
+	if err := l.mustCheckOutOfBounds(lo, hi); err != nil {
+		return nil, err
+	}
+
 	var ents []pb.Entry
 	if lo < l.offset {
-		storedEnts, err := l.storage.Entries(lo, min(hi, l.offset))
+		persistEnts, err := l.storage.Entries(lo, min(hi, l.offset))
 		if err == ErrCompacted {
 			return nil, err
 		}
 
-		if uint64(len(storedEnts)) < min(hi, l.offset)-lo {
-			return storedEnts, nil
+		if uint64(len(persistEnts)) < min(hi, l.offset)-lo {
+			return persistEnts, nil
 		}
 
-		ents = storedEnts
+		ents = persistEnts
 	}
+
 	if hi > l.offset {
 		unstableEnts := l.unstableEnts[lo-l.offset : hi-l.offset]
 		if len(ents) > 0 {
@@ -162,24 +143,24 @@ func (l *raftLog) slice(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 			ents = unstableEnts
 		}
 	}
-	return limitSize(ents, maxSize), nil
+	return ents, nil
 }
 
-// 是否满足lo < hi。（slice获取的是左闭右开区间$[lo,hi)$的日志切片。）
-// 是否满足lo > firstIndex，否则该范围中部分日志已被压缩，无法获取。
-// 是否满足hi > lastIndex+1，否则该范围中部分日志还没被追加到当前节点的日志中，无法获取。
+// 是否满足lo < hi (slice获取的是左闭右开区间[lo,hi)的日志切片)
+// 是否满足lo < firstIndex，否则该范围中部分日志已被压缩，无法获取。
+// 是否满足hi > lastIndex，否则该范围中部分日志还没被追加到当前节点的日志中，无法获取。
 // l.firstIndex <= lo <= hi <= l.firstIndex + len(l.entries)
 func (l *raftLog) mustCheckOutOfBounds(lo, hi uint64) error {
 	if lo > hi {
 		log.Panicf("invalid slice %d > %d", lo, hi)
 	}
 	fi := l.firstIndex()
+	li := l.lastIndex()
 	if lo < fi {
 		return ErrCompacted
 	}
-
-	if hi > l.lastIndex() {
-		log.Panicf("slice[%d,%d) out of bound [%d,%d]", lo, hi, fi, l.lastIndex())
+	if hi > li {
+		log.Panicf("slice[%d,%d) out of bound [%d,%d]", lo, hi, fi, li)
 	}
 	return nil
 }
@@ -196,7 +177,7 @@ func (l *raftLog) unstableEntries() []pb.Entry {
 func (l *raftLog) nextCommittedEnts() (ents []pb.Entry) {
 	off := max(l.applied+1, l.firstIndex())
 	if l.committed+1 > off {
-		ents, err := l.slice(off, l.committed+1, l.maxNextEntsSize)
+		ents, err := l.slice(off, l.committed+1)
 		if err != nil {
 			log.Panicf("unexpected error when getting unapplied entries (%v)", err)
 		}
@@ -227,7 +208,7 @@ func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry
 			//但二者的处理方式都是相同的，即从将从冲突处或新日志处开始的日志覆盖或追加到当前日志中即可。
 		default:
 			offset := index + 1
-			l.append(ents[ci-offset:]...)
+			l.truncateAndAppend(ents[ci-offset:])
 		}
 		//1、leader给follower复制日志时，如果复制的日志条目超过了单个消息的上限，
 		//则可能出现leader传给follower的committed值大于该follower复制完这条消息中的日志后的最大index。
@@ -264,36 +245,29 @@ func (l *raftLog) findConflict(ents []pb.Entry) uint64 {
 	return 0
 }
 
-func (l *raftLog) append(ents ...pb.Entry) uint64 {
-	if len(ents) == 0 {
-		return l.lastIndex()
-	}
-	//检查给定的日志起点是否在committed索引位置之前，如果在其之前，这违背了Raft算法的Log Matching性质
-	if after := ents[0].Index - 1; after < l.committed {
-		log.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
-	}
-	l.truncateAndAppend(ents)
-	return l.lastIndex()
-}
-
 func (l *raftLog) truncateAndAppend(ents []pb.Entry) {
 	after := ents[0].Index
+	//检查给定的日志起点是否在committed索引位置之前，如果在其之前，这违背了Raft算法的Log Matching性质
+	if after <= l.committed {
+		log.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
+	}
 	switch {
-	// after is the next index in the u.unstableEnts directly append
+	// after is the next index in the unstable Entries directly append
 	case after == l.offset+uint64(len(l.unstableEnts)):
 		l.unstableEnts = append(l.unstableEnts, ents...)
 	case after < l.offset:
 		log.Infof("replace the unstable entries from index %d", after)
 		if err := l.storage.Truncate(after); err != nil {
-			log.Panicf("failed to truncate the unstable entries before index %d,err:%v", after, err)
+			log.Panicf("failed to truncate the stable entries before index %d,err:%v", after, err)
 		}
 		l.offset = after
 		l.unstableEnts = ents
-	default:
-		// after >= l.offset
-		log.Infof("truncate the unstable entries before index %d", after)
+	case after >= l.offset:
+		log.Debugf("truncate the unstable entries before index %d", after)
 		l.unstableEnts = append([]pb.Entry{}, l.unstableEnts[:after-l.offset]...)
 		l.unstableEnts = append(l.unstableEnts, ents...)
+	default:
+		log.Panicf("unexpected truncateAndAppend case")
 	}
 }
 

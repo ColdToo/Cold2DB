@@ -17,7 +17,6 @@ package raft
 import (
 	"errors"
 	"fmt"
-	"github.com/ColdToo/Cold2DB/code"
 	"github.com/ColdToo/Cold2DB/db"
 	"github.com/ColdToo/Cold2DB/log"
 	"github.com/ColdToo/Cold2DB/pb"
@@ -566,9 +565,7 @@ func (r *raft) handlePropMsg(m pb.Message) error {
 		return ErrProposalDropped
 	}
 	r.handleConfigEntry(m.Entries)
-	if !r.appendEntry(m.Entries...) {
-		return code.ErrProposalDropped
-	}
+	r.appendEntry(m.Entries...)
 	r.bcastAppend()
 	return nil
 }
@@ -577,16 +574,14 @@ func (r *raft) handleConfigEntry(ents []pb.Entry) {
 	return
 }
 
-func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
+func (r *raft) appendEntry(es ...pb.Entry) {
 	li := r.raftLog.lastIndex()
 	for i := range es {
 		es[i].Term = r.Term
 		es[i].Index = li + 1 + uint64(i)
 	}
-
-	// use latest "last" index after truncate/append
-	li = r.raftLog.append(es...)
-	return true
+	r.raftLog.truncateAndAppend(es)
+	return
 }
 
 func (r *raft) bcastAppend() {
@@ -610,7 +605,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 	m.To = to
 
 	term, errt := r.raftLog.term(pr.Next - 1)
-	ents, erre := r.raftLog.entries(pr.Next, noLimit)
+	ents, erre := r.raftLog.entries(pr.Next)
 	if len(ents) == 0 && !sendIfEmpty {
 		return false
 	}

@@ -54,7 +54,7 @@ func DecodeData(v []byte) *Data {
 
 type KV struct {
 	ApplySig int64 //该条记录是否被应用
-	KeySize  int   //主要用于kv的序列化
+	KeySize  int   //用于kv的序列化
 	Key      []byte
 	Data     *Data
 }
