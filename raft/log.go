@@ -133,7 +133,7 @@ func (l *raftLog) slice(lo, hi uint64) ([]pb.Entry, error) {
 	}
 
 	if hi > l.offset {
-		unstableEnts := l.unstableEnts[lo-l.offset : hi-l.offset]
+		unstableEnts := l.unstableEnts[max(lo, l.offset)-l.offset : hi-l.offset]
 		if len(ents) > 0 {
 			combined := make([]pb.Entry, len(ents)+len(unstableEnts))
 			n := copy(combined, ents)
@@ -159,7 +159,7 @@ func (l *raftLog) mustCheckOutOfBounds(lo, hi uint64) error {
 	if lo < fi {
 		return ErrCompacted
 	}
-	if hi > li {
+	if hi > li+1 {
 		log.Panicf("slice[%d,%d) out of bound [%d,%d]", lo, hi, fi, li)
 	}
 	return nil
@@ -191,9 +191,9 @@ func (l *raftLog) hasNextCommittedEnts() bool {
 	return l.committed+1 > off
 }
 
-// append与maybeAppend是向raftLog写入日志的方法。
-// 二者的区别在于append不会检查给定的日志切片是否与已有日志有冲突，leader会直接调用该方法
-// 因此leader向raftLog中追加日志时会调用该函数；
+// truncate append与maybeAppend是向raftLog写入日志的方法。
+// 二者的区别在于truncate append不会检查给定的日志切片是否与已有日志有冲突，leader会直接调用该方法
+// 因此leader向raftLog中追加日志时会调用truncate append；
 func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry) (lastnewi uint64, ok bool) {
 	if l.matchTerm(index, logTerm) {
 		lastnewi = index + uint64(len(ents))
@@ -201,7 +201,7 @@ func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry
 		switch {
 		//说明既没有冲突又没有新日志，直接进行下一步处理
 		case ci == 0:
-			//检查给定的日志起点是否在committed索引位置之前，如果在其之前，这违背了Raft算法的Log Matching性质
+			//检查冲突日志起点是否在committed索引位置或之前，如果是这违背了Raft算法的Log Matching性质
 		case ci <= l.committed:
 			log.Panicf("entry %d conflict with committed entry [committed(%d)]", ci, l.committed)
 			//如果返回值大于committed，既可能是冲突发生在committed之后，也可能是有新日志，
@@ -210,11 +210,6 @@ func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry
 			offset := index + 1
 			l.truncateAndAppend(ents[ci-offset:])
 		}
-		//1、leader给follower复制日志时，如果复制的日志条目超过了单个消息的上限，
-		//则可能出现leader传给follower的committed值大于该follower复制完这条消息中的日志后的最大index。
-		//此时，该follower的新committed值为lastnewi。
-		//2、follower能够跟上leader，leader传给follower的日志中有未确认被法定数量节点稳定存储的日志，
-		//此时传入的committed比lastnewi小，该follower的新committed值为传入的committed值。
 		l.commitTo(min(committed, lastnewi))
 		return lastnewi, true
 	}
@@ -236,8 +231,7 @@ func (l *raftLog) findConflict(ents []pb.Entry) uint64 {
 	for _, ne := range ents {
 		if !l.matchTerm(ne.Index, ne.Term) {
 			if ne.Index <= l.lastIndex() {
-				log.Infof("found conflict at index %d [existing term: %d, conflicting term: %d]",
-					ne.Index, l.zeroTermOnErrCompacted(l.term(ne.Index)), ne.Term)
+				log.Infof("found conflict at index %d [existing term: %d, conflicting term: %d]", ne.Index, l.zeroTermOnErrCompacted(l.term(ne.Index)), ne.Term)
 			}
 			return ne.Index
 		}

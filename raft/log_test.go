@@ -239,10 +239,10 @@ func TestSlice(t *testing.T) {
 			60, 120, MockEntries(60, 120), false},
 
 		// only raft log
-		{"only raft log",
+		{"only raft log 01 ",
 			newRaftLog(MockSpecStorage(t, firstIndex, offset-1, ignore, ignore)),
 			offset, 110, MockEntries(offset, 110), false},
-		{"only raft log",
+		{"only raft log 02",
 			newRaftLog(MockSpecStorage(t, firstIndex, offset-1, ignore, ignore)),
 			110, 130, MockEntries(110, 130), false},
 
@@ -272,7 +272,7 @@ func TestSlice(t *testing.T) {
 					tt.raftLog.truncateAndAppend([]pb.Entry{{Index: offset + i, Term: offset + i}})
 				}
 				g, err := tt.raftLog.slice(tt.from, tt.to)
-				if tt.from < firstIndex && err != ErrCompacted {
+				if int(tt.from) < int(tt.raftLog.firstIndex()) && err != ErrCompacted {
 					t.Fatalf("#%d: err = %v, want %v", j, err, ErrCompacted)
 				}
 				if !reflect.DeepEqual(g, tt.w) {
@@ -341,23 +341,16 @@ func TestTruncateAndAppend(t *testing.T) {
 	}
 }
 
-// TestLogMaybeAppend ensures:
-// If the given (index, term) matches with the existing log:
-//  1. If an existing entry conflicts with a new one (same index
-//     but different terms), delete the existing entry and all that
-//     follow it
-//  2. Append any new entries not already in the log
-//
-// If the given (index, term) does not match with the existing log:
-//
-//	return false
 func TestLogMaybeAppend(t *testing.T) {
+	InitLog()
 	previousEnts := []pb.Entry{{Index: 1, Term: 1}, {Index: 2, Term: 2}, {Index: 3, Term: 3}}
 	lastindex := uint64(3)
 	lastterm := uint64(3)
 	commit := uint64(1)
 
 	tests := []struct {
+		name      string
+		raftLog   *raftLog
 		logTerm   uint64
 		index     uint64
 		committed uint64
@@ -368,56 +361,97 @@ func TestLogMaybeAppend(t *testing.T) {
 		wcommit uint64
 		wpanic  bool
 	}{
+		// relate unstable entries
 		// not match: term is different
 		{
-			lastterm - 1, lastindex, lastindex, []pb.Entry{{Index: lastindex + 1, Term: 4}},
+			"not match: term is different", newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)), lastterm - 1, lastindex, lastindex, []pb.Entry{{Index: lastindex + 1, Term: 4}},
 			0, false, commit, false,
 		},
 		// not match: index out of bound
 		{
-			lastterm, lastindex + 1, lastindex, []pb.Entry{{Index: lastindex + 2, Term: 4}},
+			"not match: index out of bound", newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)), lastterm, lastindex + 1, lastindex, []pb.Entry{{Index: lastindex + 2, Term: 4}},
 			0, false, commit, false,
 		},
 		// match with the last existing entry
 		{
-			lastterm, lastindex, lastindex, nil,
+			"match with the last existing entry", newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)), lastterm, lastindex, lastindex, nil,
 			lastindex, true, lastindex, false,
 		},
+		{
+			"match with the last existing entry", newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)), lastterm, lastindex, lastindex - 1, nil,
+			lastindex, true, lastindex - 1, false, // commit up to the commit in the message
+		},
+		{
+			"match with the last existing entry", newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)), lastterm, lastindex, 0, nil,
+			lastindex, true, commit, false, // commit do not decrease
+		},
+		{
+			"match with the last existing entry", newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)), lastterm, lastindex, lastindex, []pb.Entry{{Index: lastindex + 1, Term: 4}},
+			lastindex + 1, true, lastindex, false,
+		},
+		{
+			"match with the last existing entry", newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)), lastterm, lastindex, lastindex + 1, []pb.Entry{{Index: lastindex + 1, Term: 4}},
+			lastindex + 1, true, lastindex + 1, false,
+		},
+		{
+			"match with the last existing entry", newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)), lastterm, lastindex, lastindex + 2, []pb.Entry{{Index: lastindex + 1, Term: 4}},
+			lastindex + 1, true, lastindex + 1, false, // do not increase commit higher than lastnewi
+		},
+		{
+			"match with the last existing entry", newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)), lastterm, lastindex, lastindex + 2, []pb.Entry{{Index: lastindex + 1, Term: 4}, {Index: lastindex + 2, Term: 4}},
+			lastindex + 2, true, lastindex + 2, false,
+		},
+		// match with the the entry in the middle
+		{
+			"match with the last existing entry", newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)), lastterm - 1, lastindex - 1, lastindex, []pb.Entry{{Index: lastindex, Term: 4}},
+			lastindex, true, lastindex, false,
+		},
+		{
+			"match with the last existing entry", newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)), lastterm - 2, lastindex - 2, lastindex, []pb.Entry{{Index: lastindex - 1, Term: 4}},
+			lastindex - 1, true, lastindex - 1, false,
+		},
+		{
+			"match with the last existing entry", newRaftLog(MockSpecStorage(t, 0, 0, ignore, ignore)), lastterm - 2, lastindex - 2, lastindex, []pb.Entry{{Index: lastindex - 1, Term: 4}, {Index: lastindex, Term: 4}},
+			lastindex, true, lastindex, false,
+		},
+		//todo relate stable storage
 	}
 
 	for i, tt := range tests {
-		raftLog := newRaftLog(MockSpecStorage(t, 1, 4, ignore, ignore))
-		raftLog.truncateAndAppend(previousEnts)
-		raftLog.committed = commit
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					if !tt.wpanic {
-						t.Errorf("%d: panic = %v, want %v", i, true, tt.wpanic)
+		t.Run(tt.name, func(t *testing.T) {
+			raftLog := tt.raftLog
+			raftLog.truncateAndAppend(previousEnts)
+			raftLog.committed = commit
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						if !tt.wpanic {
+							t.Errorf("%d: panic = %v, want %v", i, true, tt.wpanic)
+						}
+					}
+				}()
+				glasti, gappend := raftLog.maybeAppend(tt.index, tt.logTerm, tt.committed, tt.ents...)
+				gcommit := raftLog.committed
+
+				if glasti != tt.wlasti {
+					t.Errorf("#%d: lastindex = %d, want %d", i, glasti, tt.wlasti)
+				}
+				if gappend != tt.wappend {
+					t.Errorf("#%d: append = %v, want %v", i, gappend, tt.wappend)
+				}
+				if gcommit != tt.wcommit {
+					t.Errorf("#%d: committed = %d, want %d", i, gcommit, tt.wcommit)
+				}
+				if gappend && len(tt.ents) != 0 {
+					gents, err := raftLog.slice(raftLog.lastIndex()-uint64(len(tt.ents))+1, raftLog.lastIndex()+1)
+					if err != nil {
+						t.Fatalf("unexpected error %v", err)
+					}
+					if !reflect.DeepEqual(tt.ents, gents) {
+						t.Errorf("#%d: appended entries = %v, want %v", i, gents, tt.ents)
 					}
 				}
 			}()
-			glasti, gappend := raftLog.maybeAppend(tt.index, tt.logTerm, tt.committed, tt.ents...)
-			gcommit := raftLog.committed
-
-			if glasti != tt.wlasti {
-				t.Errorf("#%d: lastindex = %d, want %d", i, glasti, tt.wlasti)
-			}
-			if gappend != tt.wappend {
-				t.Errorf("#%d: append = %v, want %v", i, gappend, tt.wappend)
-			}
-			if gcommit != tt.wcommit {
-				t.Errorf("#%d: committed = %d, want %d", i, gcommit, tt.wcommit)
-			}
-			if gappend && len(tt.ents) != 0 {
-				gents, err := raftLog.slice(raftLog.lastIndex()-uint64(len(tt.ents))+1, raftLog.lastIndex()+1)
-				if err != nil {
-					t.Fatalf("unexpected error %v", err)
-				}
-				if !reflect.DeepEqual(tt.ents, gents) {
-					t.Errorf("#%d: appended entries = %v, want %v", i, gents, tt.ents)
-				}
-			}
-		}()
+		})
 	}
 }

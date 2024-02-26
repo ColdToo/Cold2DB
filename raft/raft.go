@@ -605,7 +605,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 	m.To = to
 
 	term, errt := r.raftLog.term(pr.Next - 1)
-	ents, erre := r.raftLog.entries(pr.Next)
+	ents, erre := r.raftLog.slice(pr.Next, r.raftLog.lastIndex()+1)
 	if len(ents) == 0 && !sendIfEmpty {
 		return false
 	}
