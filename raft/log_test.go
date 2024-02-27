@@ -212,6 +212,38 @@ func TestStableTo(t *testing.T) {
 	}
 }
 
+func TestCommitTo(t *testing.T) {
+	previousEnts := []pb.Entry{{Term: 1, Index: 1}, {Term: 2, Index: 2}, {Term: 3, Index: 3}}
+	commit := uint64(2)
+	tests := []struct {
+		commit  uint64
+		wcommit uint64
+		wpanic  bool
+	}{
+		{3, 3, false},
+		{1, 2, false}, // never decrease
+		{4, 0, true},  // commit out of range -> panic
+	}
+	for i, tt := range tests {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					if !tt.wpanic {
+						t.Errorf("%d: panic = %v, want %v", i, true, tt.wpanic)
+					}
+				}
+			}()
+			raftLog := newRaftLog(MockSpecStorage(t, 0, 0, 0, 0))
+			raftLog.truncateAndAppend(previousEnts)
+			raftLog.committed = commit
+			raftLog.commitTo(tt.commit)
+			if raftLog.committed != tt.wcommit {
+				t.Errorf("#%d: committed = %d, want %d", i, raftLog.committed, tt.wcommit)
+			}
+		}()
+	}
+}
+
 func TestSlice(t *testing.T) {
 	var i uint64
 	InitLog()
@@ -452,6 +484,68 @@ func TestLogMaybeAppend(t *testing.T) {
 					}
 				}
 			}()
+		})
+	}
+}
+
+func TestHasNextCommittedEnts(t *testing.T) {
+	InitLog()
+	ents := []pb.Entry{
+		{Term: 1, Index: 4},
+		{Term: 1, Index: 5},
+		{Term: 1, Index: 6},
+	}
+	tests := []struct {
+		applied uint64
+		hasNext bool
+	}{
+		{0, true},
+		{3, true},
+		{4, true},
+		{5, false},
+	}
+	for i, tt := range tests {
+		raftLog := newRaftLog(MockSpecStorage(t, 1, 3, 0, 0))
+		raftLog.committed = 3
+		raftLog.truncateAndAppend(ents)
+		raftLog.maybeCommit(5, 1)
+		raftLog.appliedTo(tt.applied)
+
+		hasNext := raftLog.hasNextCommittedEnts()
+		if hasNext != tt.hasNext {
+			t.Errorf("#%d: hasNext = %v, want %v", i, hasNext, tt.hasNext)
+		}
+	}
+}
+
+func TestNextCommittedEnts(t *testing.T) {
+	InitLog()
+	ents := []pb.Entry{
+		{Term: 1, Index: 4},
+		{Term: 1, Index: 5},
+		{Term: 1, Index: 6},
+	}
+	tests := []struct {
+		name    string
+		applied uint64
+		wents   []pb.Entry
+	}{
+		{"has next committed ents", 3, ents[:2]},
+		{"has next committed ents", 4, ents[1:2]},
+		{"has no next committed ents", 5, nil},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raftLog := newRaftLog(MockSpecStorage(t, 1, 3, 0, 0))
+			raftLog.committed = 3
+			raftLog.truncateAndAppend(ents)
+			raftLog.maybeCommit(5, 1)
+			raftLog.appliedTo(tt.applied)
+
+			nents := raftLog.nextCommittedEnts()
+			if !reflect.DeepEqual(nents, tt.wents) {
+				t.Errorf("#%d: nents = %+v, want %+v", i, nents, tt.wents)
+			}
 		})
 	}
 }

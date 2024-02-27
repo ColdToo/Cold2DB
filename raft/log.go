@@ -175,6 +175,8 @@ func (l *raftLog) unstableEntries() []pb.Entry {
 }
 
 func (l *raftLog) nextCommittedEnts() (ents []pb.Entry) {
+	//由于日志清理等原因，一些已应用的日志条目已被删除，实际下一条要应用的条目应该从 l.firstIndex() 开始计数。
+	//所以这里取applied和firstindex的最大值
 	off := max(l.applied+1, l.firstIndex())
 	if l.committed+1 > off {
 		ents, err := l.slice(off, l.committed+1)
@@ -301,6 +303,14 @@ func (l *raftLog) zeroTermOnErrCompacted(t uint64, err error) uint64 {
 	}
 	log.Panicf("unexpected error (%v)", err)
 	return 0
+}
+
+func (l *raftLog) maybeCommit(maxIndex, term uint64) bool {
+	if maxIndex > l.committed && l.zeroTermOnErrCompacted(l.term(maxIndex)) == term {
+		l.commitTo(maxIndex)
+		return true
+	}
+	return false
 }
 
 func (l *raftLog) commitTo(tocommit uint64) {
