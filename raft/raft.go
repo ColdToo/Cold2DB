@@ -220,26 +220,22 @@ func (r *raft) becomeLeader() {
 	r.state = StateLeader
 	r.trk.Progress[r.id].BecomeReplicate()
 
-	// 刚成为 leader 后,每个 follower 的 match 为0, next为最后一条日志
+	// 成为 leader 后,每个 follower 的 match 为0, next为最后一条日志的下一条日志
 	lastIndex := r.raftLog.lastIndex()
 	for pr := range r.trk.Progress {
 		r.trk.Progress[pr].Next = lastIndex + 1
 		r.trk.Progress[pr].Match = 0
 	}
+
 	// 更新自己的 match 和 next
-	r.trk.Progress[r.id].Next = r.raftLog.lastIndex() + 1
-	r.trk.Progress[r.id].Match = r.trk.Progress[r.id].Next - 1
+	r.trk.Progress[r.id].Next = lastIndex + 1
+	r.trk.Progress[r.id].Match = lastIndex
 
 	//在成为leader后需要插入一条空日志
 	emptyEnt := pb.Entry{Data: nil}
 	r.appendEntry(emptyEnt)
-
 	// 发送追加日志
-	for pr := range r.trk.Progress {
-		if pr != r.id {
-			r.sendAppend(pr)
-		}
-	}
+	r.bcastAppend()
 	log.Infof("peer:%x became leader at term %d", r.id, r.Term)
 }
 
@@ -416,6 +412,7 @@ func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
 		log.Panic("peer not in the cluster")
 	}
 	m := pb.Message{
+		From:    r.id,
 		To:      to,
 		Type:    pb.MsgHeartbeat,
 		Commit:  commit,
@@ -571,6 +568,7 @@ func (r *raft) handlePropMsg(m pb.Message) error {
 }
 
 func (r *raft) handleConfigEntry(ents []pb.Entry) {
+	//todo
 	return
 }
 
@@ -593,67 +591,34 @@ func (r *raft) bcastAppend() {
 }
 
 func (r *raft) sendAppend(to uint64) {
-	r.maybeSendAppend(to, true)
+	r.maybeSendAppend(to)
 }
 
-func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
+func (r *raft) maybeSendAppend(to uint64) bool {
 	pr := r.trk.Progress[to]
 	if pr.IsPaused() {
 		return false
 	}
+
 	m := pb.Message{}
 	m.To = to
 
-	term, errt := r.raftLog.term(pr.Next - 1)
+	prevLogIndex := pr.Next - 1
+	prevLogTerm, errt := r.raftLog.term(prevLogIndex)
 	ents, erre := r.raftLog.slice(pr.Next, r.raftLog.lastIndex()+1)
-	if len(ents) == 0 && !sendIfEmpty {
-		return false
-	}
 
-	// send snapshot if we failed to get term or entries
+	// todo send snapshot if we failed to get term or entries
 	if errt != nil || erre != nil {
-		if !pr.RecentActive {
-			log.Debugf("ignore sending snapshot to %x since it is not recently active", to)
-			return false
-		}
-		m.Type = pb.MsgSnap
-		snapshot, err := r.raftLog.storage.Snapshot()
-		if err != nil {
-			if err == ErrSnapshotTemporarilyUnavailable {
-				log.Debugf("%x failed to send snapshot to %x because snapshot is temporarily unavailable", r.id, to)
-				return false
-			}
-			panic(err)
-		}
-		if IsEmptySnap(snapshot) {
-			panic("need non-empty snapshot")
-		}
-		m.Snapshot = snapshot
-		sindex, sterm := snapshot.Metadata.Index, snapshot.Metadata.Term
-		log.Debugf("%x [firstindex: %d, commit: %d] sent snapshot[index: %d, term: %d] to %x [%s]",
-			r.id, r.raftLog.firstIndex(), r.raftLog.committed, sindex, sterm, to, pr)
-		pr.BecomeSnapshot(sindex)
-		log.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pr)
 	}
 
 	m.Type = pb.MsgApp
-	m.Index = pr.Next - 1
-	m.LogTerm = term
+	m.From = r.id
+	m.Term = r.Term
+	m.To = to
+	m.Index = prevLogIndex
+	m.LogTerm = prevLogTerm
 	m.Entries = ents
 	m.Commit = r.raftLog.committed
-	if n := len(m.Entries); n != 0 {
-		switch pr.State {
-		// optimistically increase the next when in StateReplicate
-		case tracker.StateReplicate:
-			last := m.Entries[n-1].Index
-			pr.OptimisticUpdate(last)
-		case tracker.StateProbe:
-			pr.ProbeSent = true
-		default:
-			log.Panicf("%x is sending append in unhandled state %s", r.id, pr.State)
-		}
-	}
-
 	r.send(m)
 	return true
 }
@@ -799,7 +764,6 @@ func (r *raft) reset(term uint64) {
 		r.vote = None
 	}
 	r.lead = None
-
 	r.electionElapsed = 0
 	r.heartbeatElapsed = 0
 	r.resetRandomizedElectionTimeout()

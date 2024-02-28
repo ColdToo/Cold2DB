@@ -86,7 +86,7 @@ func (l *raftLog) lastTerm() uint64 {
 
 func (l *raftLog) term(i uint64) (uint64, error) {
 	if i < l.firstIndex() || i > l.lastIndex() {
-		return 0, ErrUnavailable
+		return 0, nil
 	}
 
 	if i > l.stabled {

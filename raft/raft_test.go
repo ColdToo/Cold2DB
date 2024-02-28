@@ -35,13 +35,13 @@ func newTestRaft(id uint64, peers []uint64, election, heartbeat int, storage db.
 	return r
 }
 
-func MockNewStorage(t *testing.T) db.Storage {
+func MockNewStorage(t *testing.T, fistIndex, lastIndex, expIdx, expTerm uint64, hs pb.HardState, cs pb.ConfState) db.Storage {
 	mockCtl := gomock.NewController(t)
 	storage := mocks.NewMockStorage(mockCtl)
-	storage.EXPECT().FirstIndex().Return(uint64(0)).AnyTimes()
-	storage.EXPECT().LastIndex().Return(uint64(0)).AnyTimes()
-	storage.EXPECT().Term(uint64(0)).Return(uint64(0), nil).AnyTimes()
-	storage.EXPECT().InitialState().Return(pb.HardState{}, pb.ConfState{}, nil)
+	storage.EXPECT().FirstIndex().Return(fistIndex).AnyTimes()
+	storage.EXPECT().LastIndex().Return(lastIndex).AnyTimes()
+	storage.EXPECT().Term(expIdx).Return(expTerm, nil).AnyTimes()
+	storage.EXPECT().InitialState().Return(hs, cs, nil)
 	return storage
 }
 
@@ -49,7 +49,7 @@ func MockNewStorage(t *testing.T) db.Storage {
 // Reference: section 5.2
 func TestStartAsFollower2AA(t *testing.T) {
 	InitLog()
-	r := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, MockNewStorage(t))
+	r := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, MockNewStorage(t, 0, 0, ignore, ignore, pb.HardState{}, pb.ConfState{}))
 	if r.state != StateFollower {
 		t.Errorf("state = %s, want %s", r.state, StateFollower)
 	}
@@ -70,7 +70,7 @@ func TestCandidateUpdateTermFromMessage2AA(t *testing.T) {
 // it immediately reverts to follower state.
 // Reference: section 5.1
 func testUpdateTermFromMessage(t *testing.T, state StateType) {
-	r := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, MockNewStorage(t))
+	r := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, MockNewStorage(t, 0, 0, ignore, ignore, pb.HardState{}, pb.ConfState{}))
 	switch state {
 	case StateFollower:
 		r.becomeFollower(1, 2)
@@ -95,15 +95,11 @@ func TestLeaderBcastBeat2AA(t *testing.T) {
 	InitLog()
 	// heartbeat interval
 	hi := 1
-	r := newTestRaft(1, []uint64{1, 2, 3}, 10, hi, MockNewStorage(t))
+	r := newTestRaft(1, []uint64{1, 2, 3}, 10, hi, MockNewStorage(t, 0, 0, ignore, ignore, pb.HardState{}, pb.ConfState{}))
 	r.becomeCandidate()
 	r.becomeLeader()
 	r.readMessages() // clear message
-
-	for i := 0; i < hi; i++ {
-		r.tick()
-	}
-
+	r.tick()
 	msgs := r.readMessages()
 	sort.Sort(messageSlice(msgs))
 	wmsgs := []pb.Message{
@@ -118,6 +114,5 @@ func TestLeaderBcastBeat2AA(t *testing.T) {
 func (r *raft) readMessages() []pb.Message {
 	msgs := r.msgs
 	r.msgs = make([]pb.Message, 0)
-
 	return msgs
 }
