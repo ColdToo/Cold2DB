@@ -184,8 +184,7 @@ func newRaft(opts *raftOpts) (r *raft, err error) {
 	for _, n := range r.trk.VoterNodes() {
 		nodesStrs = append(nodesStrs, fmt.Sprintf("%x", n))
 	}
-
-	log.Infof("newraft %x [peers: [%s], term: %d, commit: %d, applied: %d, lastindex: %d, lastterm: %d]",
+	log.Infof("new raft node  %x [ peers: [%s], term: %d, commit: %d, applied: %d, lastindex: %d, lastterm: %d ]",
 		r.id, strings.Join(nodesStrs, ","), r.Term, r.raftLog.committed, r.raftLog.applied, r.raftLog.lastIndex(), r.raftLog.lastTerm())
 	return
 }
@@ -245,7 +244,7 @@ func (r *raft) becomeFollower(term uint64, lead uint64) {
 	r.tick = r.tickElection
 	r.state = StateFollower
 	r.lead = lead
-	log.Infof("peer %x became follower at term %d", r.id, r.Term)
+	log.Infof("peer %x became follower at term %d leader is %d", r.id, r.Term, lead)
 }
 
 func (r *raft) becomeCandidate() {
@@ -289,11 +288,10 @@ func (r *raft) tickHeartbeat() {
 
 func (r *raft) Step(m pb.Message) error {
 	switch {
+	// local message
 	case m.Term == 0:
-		// local message
 	case m.Term > r.Term:
-		log.Infof("peer: %x [term: %d] received a %s message with higher term from peer:%x [term: %d]",
-			r.id, r.Term, m.Type, m.From, m.Term)
+		log.Infof("peer: %x [term: %d] received a %s message with higher term from peer:%x [term: %d]", r.id, r.Term, m.Type, m.From, m.Term)
 		if m.Type == pb.MsgApp || m.Type == pb.MsgHeartbeat || m.Type == pb.MsgSnap {
 			r.becomeFollower(m.Term, m.From)
 		} else {
@@ -309,21 +307,16 @@ func (r *raft) Step(m pb.Message) error {
 		if canVote && r.raftLog.isUpToDate(m.Index, m.LogTerm) {
 			log.Infof("%x [logterm: %d, index: %d, vote: %x] cast %s for %x [logterm: %d, index: %d] at term %d",
 				r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.vote, m.Type, m.From, m.LogTerm, m.Index, r.Term)
-			r.send(pb.Message{To: m.From, Term: m.Term, Type: voteRespMsgType(m.Type)})
-			if m.Type == pb.MsgVote {
-				r.electionElapsed = 0
-				r.vote = m.From
-			}
+			r.send(pb.Message{From: r.id, To: m.From, Term: m.Term, Type: voteRespMsgType(m.Type), Reject: false})
+			r.electionElapsed = 0
+			r.vote = m.From
 		} else {
 			log.Infof("%x [logterm: %d, index: %d, vote: %x] rejected %s from %x [logterm: %d, index: %d] at term %d",
 				r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.vote, m.Type, m.From, m.LogTerm, m.Index, r.Term)
-			r.send(pb.Message{To: m.From, Term: r.Term, Type: voteRespMsgType(m.Type), Reject: true})
+			r.send(pb.Message{From: r.id, To: m.From, Term: r.Term, Type: voteRespMsgType(m.Type), Reject: true})
 		}
 	default:
-		err := r.stepFunc(r, m)
-		if err != nil {
-			return err
-		}
+		return r.stepFunc(r, m)
 	}
 	return nil
 }
@@ -697,14 +690,8 @@ func (r *raft) hup() {
 }
 
 func (r *raft) campaign() {
-	var term uint64
-	var voteMsg pb.MessageType
-
 	r.becomeCandidate()
-	voteMsg = pb.MsgVote
-	term = r.Term
-
-	if _, _, res := r.poll(r.id, voteRespMsgType(voteMsg), true); res == quorum.VoteWon {
+	if _, _, res := r.poll(r.id, voteRespMsgType(pb.MsgVote), true); res == quorum.VoteWon {
 		r.becomeLeader()
 		return
 	}
@@ -714,9 +701,8 @@ func (r *raft) campaign() {
 			continue
 		}
 		log.Infof("%x [logterm: %d, index: %d] sent %s request to %x at term %d",
-			r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), voteMsg, id, r.Term)
-
-		r.send(pb.Message{Term: term, To: id, Type: voteMsg, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm()})
+			r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), pb.MsgVote, id, r.Term)
+		r.send(pb.Message{Term: r.Term, From: r.id, To: id, Type: pb.MsgVote, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm()})
 	}
 }
 
